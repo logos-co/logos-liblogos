@@ -1,7 +1,17 @@
 set(CMAKE_AUTOMOC ON)
 
+set(_default_sdk_root "${CMAKE_CURRENT_SOURCE_DIR}/../vendor/logos-cpp-sdk")
+if(NOT DEFINED LOGOS_CPP_SDK_ROOT OR LOGOS_CPP_SDK_ROOT STREQUAL "")
+  set(LOGOS_CPP_SDK_ROOT "${_default_sdk_root}")
+endif()
+
+get_filename_component(LOGOS_CPP_SDK_ROOT "${LOGOS_CPP_SDK_ROOT}" ABSOLUTE)
+if(NOT EXISTS "${LOGOS_CPP_SDK_ROOT}/cpp/CMakeLists.txt")
+  message(FATAL_ERROR "logos-cpp-sdk not found at ${LOGOS_CPP_SDK_ROOT}")
+endif()
+
 # Add SDK subdirectory to build the logos_sdk library
-add_subdirectory(../../logos-cpp-sdk/cpp ${CMAKE_BINARY_DIR}/sdk)
+add_subdirectory(${LOGOS_CPP_SDK_ROOT}/cpp ${CMAKE_BINARY_DIR}/sdk)
 
 # Define the library sources
 set(LOGOS_CORE_SOURCES
@@ -41,14 +51,21 @@ target_link_libraries(logos_core PRIVATE
 target_include_directories(logos_core PRIVATE
     ${CMAKE_CURRENT_SOURCE_DIR}
     ${CMAKE_CURRENT_SOURCE_DIR}/..
-    ${CMAKE_CURRENT_SOURCE_DIR}/../../logos-cpp-sdk/cpp
+    ${LOGOS_CPP_SDK_ROOT}/cpp
     ${Qt${QT_VERSION_MAJOR}_INCLUDE_DIRS}
 )
 
 # Set RPATH settings for the library
 if(APPLE)
+    set(_qt_runtime_paths "@loader_path")
+    if(DEFINED Qt${QT_VERSION_MAJOR}_DIR)
+        get_filename_component(_qt_lib_dir "${Qt${QT_VERSION_MAJOR}_DIR}/../.." REALPATH)
+        list(APPEND _qt_runtime_paths "${_qt_lib_dir}")
+    endif()
+    list(REMOVE_DUPLICATES _qt_runtime_paths)
+
     set_target_properties(logos_core PROPERTIES
-        INSTALL_RPATH "@loader_path"
+        INSTALL_RPATH "${_qt_runtime_paths}"
         INSTALL_NAME_DIR "@rpath"
         BUILD_WITH_INSTALL_NAME_DIR TRUE
         BUILD_WITH_INSTALL_RPATH TRUE)
@@ -85,14 +102,21 @@ target_link_libraries(logos_host PRIVATE
 target_include_directories(logos_host PRIVATE
     ${CMAKE_CURRENT_SOURCE_DIR}
     ${CMAKE_CURRENT_SOURCE_DIR}/..
-    ${CMAKE_CURRENT_SOURCE_DIR}/../../logos-cpp-sdk/cpp
+    ${LOGOS_CPP_SDK_ROOT}/cpp
     ${Qt${QT_VERSION_MAJOR}_INCLUDE_DIRS}
 )
 
 # Set RPATH settings for the executable
 if(APPLE)
+    set(_qt_exec_runtime_paths "@loader_path/../lib")
+    if(DEFINED Qt${QT_VERSION_MAJOR}_DIR)
+        get_filename_component(_qt_exec_lib_dir "${Qt${QT_VERSION_MAJOR}_DIR}/../.." REALPATH)
+        list(APPEND _qt_exec_runtime_paths "${_qt_exec_lib_dir}")
+    endif()
+    list(REMOVE_DUPLICATES _qt_exec_runtime_paths)
+
     set_target_properties(logoscore PROPERTIES
-        INSTALL_RPATH "@loader_path/../lib"
+        INSTALL_RPATH "${_qt_exec_runtime_paths}"
         BUILD_WITH_INSTALL_RPATH TRUE)
 else()
     set_target_properties(logoscore PROPERTIES
@@ -102,8 +126,15 @@ endif()
 
 # Set RPATH settings for the logos host executable
 if(APPLE)
+    set(_qt_host_runtime_paths "@loader_path/../lib")
+    if(DEFINED Qt${QT_VERSION_MAJOR}_DIR)
+        get_filename_component(_qt_host_lib_dir "${Qt${QT_VERSION_MAJOR}_DIR}/../.." REALPATH)
+        list(APPEND _qt_host_runtime_paths "${_qt_host_lib_dir}")
+    endif()
+    list(REMOVE_DUPLICATES _qt_host_runtime_paths)
+
     set_target_properties(logos_host PROPERTIES
-        INSTALL_RPATH "@loader_path/../lib"
+        INSTALL_RPATH "${_qt_host_runtime_paths}"
         BUILD_WITH_INSTALL_RPATH TRUE)
 else()
     set_target_properties(logos_host PROPERTIES

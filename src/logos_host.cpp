@@ -7,9 +7,9 @@
 #include <QLocalSocket>
 #include <QLocalServer>
 #include "../interface.h"
-#include "../../logos-cpp-sdk/cpp/logos_api.h"
-#include "../../logos-cpp-sdk/cpp/logos_api_provider.h"
-#include "../../logos-cpp-sdk/cpp/token_manager.h"
+#include "logos_api.h"
+#include "logos_api_provider.h"
+#include "token_manager.h"
 
 int main(int argc, char *argv[])
 {
