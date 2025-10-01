@@ -1,0 +1,25 @@
+# Build artifacts
+build/
+cmake-build*/
+CMakeFiles/
+CMakeCache.txt
+/Makefile
+*.o
+*.obj
+*.a
+*.lib
+*.so
+*.dylib
+*.dll
+*.exe
+*.out
+compile_commands.json
+
+# IDE configuration
+.vscode/
+.idea/
+.vs/
+
+# OS metadata
+.DS_Store
+Thumbs.db
