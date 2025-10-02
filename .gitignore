@@ -23,3 +23,5 @@ compile_commands.json
 # OS metadata
 .DS_Store
 Thumbs.db
+
+result

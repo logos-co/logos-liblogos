@@ -6,12 +6,37 @@ if(NOT DEFINED LOGOS_CPP_SDK_ROOT OR LOGOS_CPP_SDK_ROOT STREQUAL "")
 endif()
 
 get_filename_component(LOGOS_CPP_SDK_ROOT "${LOGOS_CPP_SDK_ROOT}" ABSOLUTE)
-if(NOT EXISTS "${LOGOS_CPP_SDK_ROOT}/cpp/CMakeLists.txt")
+
+# Check if we have a built SDK package (with lib and include directories)
+if(EXISTS "${LOGOS_CPP_SDK_ROOT}/lib" AND EXISTS "${LOGOS_CPP_SDK_ROOT}/include")
+  # Use the built SDK package
+  message(STATUS "Using built logos-cpp-sdk at ${LOGOS_CPP_SDK_ROOT}")
+  
+  # Find the logos_sdk library
+  find_library(LOGOS_SDK_LIBRARY
+    NAMES logos_sdk
+    PATHS "${LOGOS_CPP_SDK_ROOT}/lib"
+    NO_DEFAULT_PATH
+  )
+  
+  if(NOT LOGOS_SDK_LIBRARY)
+    message(FATAL_ERROR "logos_sdk library not found in ${LOGOS_CPP_SDK_ROOT}/lib")
+  endif()
+  
+  # Create an imported target for the SDK
+  add_library(logos_sdk STATIC IMPORTED)
+  set_target_properties(logos_sdk PROPERTIES
+    IMPORTED_LOCATION "${LOGOS_SDK_LIBRARY}"
+    INTERFACE_INCLUDE_DIRECTORIES "${LOGOS_CPP_SDK_ROOT}/include"
+  )
+  
+elseif(EXISTS "${LOGOS_CPP_SDK_ROOT}/cpp/CMakeLists.txt")
+  # Use the source SDK (original behavior)
+  message(STATUS "Using logos-cpp-sdk source at ${LOGOS_CPP_SDK_ROOT}")
+  add_subdirectory(${LOGOS_CPP_SDK_ROOT}/cpp ${CMAKE_BINARY_DIR}/sdk)
+else()
   message(FATAL_ERROR "logos-cpp-sdk not found at ${LOGOS_CPP_SDK_ROOT}")
 endif()
-
-# Add SDK subdirectory to build the logos_sdk library
-add_subdirectory(${LOGOS_CPP_SDK_ROOT}/cpp ${CMAKE_BINARY_DIR}/sdk)
 
 # Define the library sources
 set(LOGOS_CORE_SOURCES
@@ -51,9 +76,15 @@ target_link_libraries(logos_core PRIVATE
 target_include_directories(logos_core PRIVATE
     ${CMAKE_CURRENT_SOURCE_DIR}
     ${CMAKE_CURRENT_SOURCE_DIR}/..
-    ${LOGOS_CPP_SDK_ROOT}/cpp
     ${Qt${QT_VERSION_MAJOR}_INCLUDE_DIRS}
 )
+
+# Add SDK include directory if using built SDK
+if(EXISTS "${LOGOS_CPP_SDK_ROOT}/lib" AND EXISTS "${LOGOS_CPP_SDK_ROOT}/include")
+  target_include_directories(logos_core PRIVATE ${LOGOS_CPP_SDK_ROOT}/include)
+else()
+  target_include_directories(logos_core PRIVATE ${LOGOS_CPP_SDK_ROOT}/cpp)
+endif()
 
 # Set RPATH settings for the library
 if(APPLE)
@@ -102,9 +133,15 @@ target_link_libraries(logos_host PRIVATE
 target_include_directories(logos_host PRIVATE
     ${CMAKE_CURRENT_SOURCE_DIR}
     ${CMAKE_CURRENT_SOURCE_DIR}/..
-    ${LOGOS_CPP_SDK_ROOT}/cpp
     ${Qt${QT_VERSION_MAJOR}_INCLUDE_DIRS}
 )
+
+# Add SDK include directory if using built SDK
+if(EXISTS "${LOGOS_CPP_SDK_ROOT}/lib" AND EXISTS "${LOGOS_CPP_SDK_ROOT}/include")
+  target_include_directories(logos_host PRIVATE ${LOGOS_CPP_SDK_ROOT}/include)
+else()
+  target_include_directories(logos_host PRIVATE ${LOGOS_CPP_SDK_ROOT}/cpp)
+endif()
 
 # Set RPATH settings for the executable
 if(APPLE)

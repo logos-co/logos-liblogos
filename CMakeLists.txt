@@ -15,3 +15,15 @@ set(CMAKE_RUNTIME_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR}/bin)
 
 # Build src first to ensure logos_core is built before modules
 add_subdirectory(src)
+
+# Install rules
+install(TARGETS logos_core logoscore logos_host
+    LIBRARY DESTINATION lib
+    RUNTIME DESTINATION bin
+    ARCHIVE DESTINATION lib
+)
+
+# Install headers
+install(FILES interface.h
+    DESTINATION include
+)
