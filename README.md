@@ -26,6 +26,14 @@ The compiled library can be found at `result/`
 
 The core binary can be found at `./result/bin/logoscore`
 
+#### Local Development
+
+To use a local `logos-cpp-sdk` repo:
+
+```bash
+nix build --override-input logos-cpp-sdk path:../logos-cpp-sdk
+```
+
 ### Manual Build
 
 First, initialize the git submodules:
