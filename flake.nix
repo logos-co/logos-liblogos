@@ -3,7 +3,7 @@
 
   inputs = {
     nixpkgs.url = "github:NixOS/nixpkgs/nixos-unstable";
-    logos-cpp-sdk.url = "path:/Users/iurimatias/Projects/Logos/LogosCore/logos-cpp-sdk";
+    logos-cpp-sdk.url = "github:logos-co/logos-cpp-sdk";
   };
 
   outputs = { self, nixpkgs, logos-cpp-sdk }:
