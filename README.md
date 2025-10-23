@@ -4,12 +4,40 @@
 
 ### Using Nix (Recommended)
 
-The project includes a Nix flake for reproducible builds:
+The project includes a Nix flake for reproducible builds with a modular structure:
+
+#### Build Complete Library (Binaries + Libraries + Headers)
 
 ```bash
-# Build the library
+# Build everything (default)
 nix build
 
+# Or explicitly
+nix build '.#logos-liblogos'
+nix build '.#default'
+```
+
+The result will include:
+- `/bin/` - Core binaries (logoscore, logos_host)
+- `/lib/` - Core libraries (liblogos_core, liblogoscore, liblogos_host)
+- `/include/` - Headers (interface.h)
+
+#### Build Individual Components
+
+```bash
+# Build only the binaries (outputs to /bin)
+nix build '.#logos-liblogos-bin'
+
+# Build only the libraries (outputs to /lib)
+nix build '.#logos-liblogos-lib'
+
+# Build only the headers (outputs to /include)
+nix build '.#logos-liblogos-include'
+```
+
+#### Development Shell
+
+```bash
 # Enter development shell with all dependencies
 nix develop
 ```
@@ -19,12 +47,18 @@ nix develop
 If you don't have flakes enabled globally, add experimental flags:
 
 ```bash
-nix build --extra-experimental-features 'nix-command flakes'
+nix build '.#logos-liblogos' --extra-experimental-features 'nix-command flakes'
 ```
 
-The compiled library can be found at `result/`
+The compiled artifacts can be found at `result/`
 
-The core binary can be found at `./result/bin/logoscore`
+#### Modular Architecture
+
+The nix build system is organized into modular files in the `/nix` directory:
+- `nix/default.nix` - Common configuration (dependencies, flags, metadata)
+- `nix/bin.nix` - Binary compilation
+- `nix/lib.nix` - Library compilation
+- `nix/include.nix` - Header installation
 
 #### Local Development
 

@@ -15,40 +15,36 @@
       });
     in
     {
-      packages = forAllSystems ({ pkgs, logosSdk }: {
-        default = pkgs.stdenv.mkDerivation rec {
-          pname = "logos-liblogos";
-          version = "0.1.0";
-          
+      packages = forAllSystems ({ pkgs, logosSdk }: 
+        let
+          # Common configuration
+          common = import ./nix/default.nix { inherit pkgs logosSdk; };
           src = ./.;
           
+          # Individual package components
+          bin = import ./nix/bin.nix { inherit pkgs common src; };
+          lib = import ./nix/lib.nix { inherit pkgs common src; };
+          include = import ./nix/include.nix { inherit pkgs common src; };
           
-          nativeBuildInputs = [ 
-            pkgs.cmake 
-            pkgs.ninja 
-            pkgs.pkg-config
-            pkgs.qt6.wrapQtAppsNoGuiHook
-          ];
-          buildInputs = [ 
-            pkgs.qt6.qtbase 
-            pkgs.qt6.qtremoteobjects 
-            logosSdk
-          ];
-          
-          cmakeFlags = [ 
-            "-GNinja"
-            "-DLOGOS_CPP_SDK_ROOT=${logosSdk}"
-          ];
-          
-          # Set environment variables for CMake to find the SDK
-          LOGOS_CPP_SDK_ROOT = "${logosSdk}";
-          
-          meta = with pkgs.lib; {
-            description = "Logos liblogos core library";
-            platforms = platforms.unix;
+          # Combined package
+          liblogos = pkgs.symlinkJoin {
+            name = "logos-liblogos";
+            paths = [ bin lib include ];
           };
-        };
-      });
+        in
+        {
+          # Individual outputs
+          logos-liblogos-bin = bin;
+          logos-liblogos-lib = lib;
+          logos-liblogos-include = include;
+          
+          # Combined output
+          logos-liblogos = liblogos;
+          
+          # Default package
+          default = liblogos;
+        }
+      );
 
       devShells = forAllSystems ({ pkgs }: {
         default = pkgs.mkShell {
@@ -60,6 +56,7 @@
           buildInputs = [
             pkgs.qt6.qtbase
             pkgs.qt6.qtremoteobjects
+            pkgs.zstd
           ];
         };
       });
