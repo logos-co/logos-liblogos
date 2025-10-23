@@ -2,7 +2,8 @@
   description = "Logos liblogos core library";
 
   inputs = {
-    nixpkgs.url = "github:NixOS/nixpkgs/nixos-unstable";
+    # Follow the same nixpkgs as logos-cpp-sdk to ensure compatibility
+    nixpkgs.follows = "logos-cpp-sdk/nixpkgs";
     logos-cpp-sdk.url = "github:logos-co/logos-cpp-sdk";
   };
 

@@ -81,7 +81,11 @@ target_include_directories(logos_core PRIVATE
 
 # Add SDK include directory if using built SDK
 if(EXISTS "${LOGOS_CPP_SDK_ROOT}/lib" AND EXISTS "${LOGOS_CPP_SDK_ROOT}/include")
-  target_include_directories(logos_core PRIVATE ${LOGOS_CPP_SDK_ROOT}/include)
+  target_include_directories(logos_core PRIVATE 
+    ${LOGOS_CPP_SDK_ROOT}/include
+    ${LOGOS_CPP_SDK_ROOT}/include/cpp
+    ${LOGOS_CPP_SDK_ROOT}/include/core
+  )
 else()
   target_include_directories(logos_core PRIVATE ${LOGOS_CPP_SDK_ROOT}/cpp)
 endif()
@@ -138,7 +142,11 @@ target_include_directories(logos_host PRIVATE
 
 # Add SDK include directory if using built SDK
 if(EXISTS "${LOGOS_CPP_SDK_ROOT}/lib" AND EXISTS "${LOGOS_CPP_SDK_ROOT}/include")
-  target_include_directories(logos_host PRIVATE ${LOGOS_CPP_SDK_ROOT}/include)
+  target_include_directories(logos_host PRIVATE 
+    ${LOGOS_CPP_SDK_ROOT}/include
+    ${LOGOS_CPP_SDK_ROOT}/include/cpp
+    ${LOGOS_CPP_SDK_ROOT}/include/core
+  )
 else()
   target_include_directories(logos_host PRIVATE ${LOGOS_CPP_SDK_ROOT}/cpp)
 endif()
