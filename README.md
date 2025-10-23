@@ -56,9 +56,12 @@ The compiled artifacts can be found at `result/`
 
 The nix build system is organized into modular files in the `/nix` directory:
 - `nix/default.nix` - Common configuration (dependencies, flags, metadata)
-- `nix/bin.nix` - Binary compilation
-- `nix/lib.nix` - Library compilation
+- `nix/build.nix` - Shared build that compiles everything once
+- `nix/bin.nix` - Extracts binaries (includes libraries for runtime linking)
+- `nix/lib.nix` - Extracts libraries only
 - `nix/include.nix` - Header installation
+
+**Note:** The `logos-liblogos-bin` package includes both binaries and their required libraries to ensure proper runtime linking. This is necessary because the binaries dynamically link against the logos libraries.
 
 #### Local Development
 

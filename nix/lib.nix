@@ -1,23 +1,15 @@
-# Builds the logos-liblogos libraries
-{ pkgs, common, src }:
+# Extracts libraries from the shared build
+{ pkgs, common, build }:
 
-pkgs.stdenv.mkDerivation {
-  pname = "${common.pname}-lib";
-  version = common.version;
-  
-  inherit src;
-  inherit (common) nativeBuildInputs buildInputs cmakeFlags meta env;
-  
-  installPhase = ''
-    runHook preInstall
-    
-    # Install libraries
+pkgs.runCommand "${common.pname}-lib-${common.version}" 
+  { 
+    inherit (common) meta;
+  } 
+  ''
+    # Copy libraries from the shared build
     mkdir -p $out/lib
-    if [ -d lib ]; then
-      cp -r lib/* $out/lib/ || true
+    if [ -d ${build}/lib ]; then
+      cp -r ${build}/lib/* $out/lib/
     fi
-    
-    runHook postInstall
-  '';
-}
+  ''
 

@@ -21,9 +21,12 @@
           common = import ./nix/default.nix { inherit pkgs logosSdk; };
           src = ./.;
           
-          # Individual package components
-          bin = import ./nix/bin.nix { inherit pkgs common src; };
-          lib = import ./nix/lib.nix { inherit pkgs common src; };
+          # Shared build that compiles everything
+          build = import ./nix/build.nix { inherit pkgs common src; };
+          
+          # Individual package components (reference the shared build)
+          lib = import ./nix/lib.nix { inherit pkgs common build; };
+          bin = import ./nix/bin.nix { inherit pkgs common build lib; };
           include = import ./nix/include.nix { inherit pkgs common src; };
           
           # Combined package
