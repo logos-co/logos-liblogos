@@ -589,8 +589,16 @@ void logos_core_start()
         
         // Process each plugin to add to known plugins list
         for (const QString &pluginPath : pluginPaths) {
-            processPlugin(pluginPath);
+            QString pluginName = processPlugin(pluginPath);
+            if (pluginName.isEmpty()) {
+                qWarning() << "Failed to process plugin (no metadata or invalid):" << pluginPath;
+            } else {
+                qDebug() << "Successfully processed plugin:" << pluginName;
+            }
         }
+        
+        qDebug() << "Total known plugins after processing:" << g_known_plugins.size();
+        qDebug() << "Known plugin names:" << g_known_plugins.keys();
 
         // Initialize capability module if available (after plugin discovery)
         initializeCapabilityModule();
@@ -669,16 +677,23 @@ char** logos_core_get_loaded_plugins()
 // Implementation of the function to get known plugins
 char** logos_core_get_known_plugins()
 {
+    qDebug() << "logos_core_get_known_plugins() called";
+    qDebug() << "g_known_plugins size:" << g_known_plugins.size();
+    qDebug() << "g_known_plugins keys:" << g_known_plugins.keys();
+    
     // Get the keys from the hash (plugin names)
     QStringList knownPlugins = g_known_plugins.keys();
     int count = knownPlugins.size();
     
     if (count == 0) {
+        qWarning() << "No known plugins to return";
         // Return an array with just a NULL terminator
         char** result = new char*[1];
         result[0] = nullptr;
         return result;
     }
+    
+    qDebug() << "Returning" << count << "known plugins";
     
     // Allocate memory for the array of strings
     char** result = new char*[count + 1];  // +1 for null terminator
@@ -688,6 +703,7 @@ char** logos_core_get_known_plugins()
         QByteArray utf8Data = knownPlugins[i].toUtf8();
         result[i] = new char[utf8Data.size() + 1];
         strcpy(result[i], utf8Data.constData());
+        qDebug() << "  -" << knownPlugins[i];
     }
     
     // Null-terminate the array
