@@ -22,6 +22,7 @@ pkgs.runCommand "${common.pname}-bin-${common.version}"
     # Fix rpaths for all binaries to find the libraries
     for binary in $out/bin/*; do
       if [ -f "$binary" ] && [ -x "$binary" ]; then
+        :
         ${pkgs.lib.optionalString pkgs.stdenv.isDarwin ''
           # On macOS, use install_name_tool to fix the library paths
           for dylib in $out/lib/*.dylib; do
