@@ -52,6 +52,12 @@ LOGOS_CORE_EXPORT char* logos_core_process_plugin(const char* plugin_path);
 // The returned string must be freed by the caller
 LOGOS_CORE_EXPORT char* logos_core_get_token(const char* key);
 
+// Get module statistics (CPU and memory usage) for all loaded modules
+// Returns a JSON string containing array of module stats, NULL on error
+// The returned string must be freed by the caller
+// Excludes core_manager as it runs in-process
+LOGOS_CORE_EXPORT char* logos_core_get_module_stats();
+
 // === Async Callback API ===
 
 // Define the callback function type for async operations
