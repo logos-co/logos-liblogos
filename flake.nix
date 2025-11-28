@@ -28,7 +28,7 @@
           # Individual package components (reference the shared build)
           lib = import ./nix/lib.nix { inherit pkgs common build; };
           bin = import ./nix/bin.nix { inherit pkgs common build lib; };
-          include = import ./nix/include.nix { inherit pkgs common src; };
+          include = import ./nix/include.nix { inherit pkgs common src logosSdk; };
           
           # Combined package
           liblogos = pkgs.symlinkJoin {
