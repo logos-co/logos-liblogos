@@ -15,6 +15,14 @@ extern "C" {
 // Initialize the logos core library
 LOGOS_CORE_EXPORT void logos_core_init(int argc, char *argv[]);
 
+// Set the SDK communication mode
+// mode: 0 = Remote (default, uses separate processes via logos_host)
+//       1 = Local (in-process, for mobile apps)
+// Must be called before logos_core_start()
+#define LOGOS_MODE_REMOTE 0
+#define LOGOS_MODE_LOCAL 1
+LOGOS_CORE_EXPORT void logos_core_set_mode(int mode);
+
 // Set a custom plugins directory
 LOGOS_CORE_EXPORT void logos_core_set_plugins_dir(const char* plugins_dir);
 
@@ -46,6 +54,19 @@ LOGOS_CORE_EXPORT int logos_core_unload_plugin(const char* plugin_name);
 // Process a plugin file and add it to known plugins
 // Returns the plugin name if successful, NULL if failed
 LOGOS_CORE_EXPORT char* logos_core_process_plugin(const char* plugin_path);
+
+// Load all statically linked plugins (for iOS/mobile where dynamic loading is unavailable)
+// Uses Qt's static plugin mechanism via Q_IMPORT_PLUGIN
+// Must be called after logos_core_start() in Local mode
+// Returns the number of plugins successfully loaded
+LOGOS_CORE_EXPORT int logos_core_load_static_plugins();
+
+// Register a plugin instance directly (for iOS/mobile where the app creates plugin instances)
+// plugin_name: The name of the plugin (e.g., "package_manager")
+// plugin_instance: Pointer to the plugin QObject instance (must implement PluginInterface)
+// Must be called after logos_core_start() in Local mode
+// Returns 1 if successful, 0 if failed
+LOGOS_CORE_EXPORT int logos_core_register_plugin_instance(const char* plugin_name, void* plugin_instance);
 
 // Get a token by key from the core token manager
 // Returns the token value if found, NULL if not found

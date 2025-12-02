@@ -13,8 +13,11 @@
 #include <QJsonArray>
 #include <QHash>
 #include <QRemoteObjectRegistryHost>
+// QProcess is not available on iOS
+#ifndef Q_OS_IOS
 #include <QProcess>
 #include <QLocalSocket>
+#endif
 #include <QLocalServer>
 #include <QUuid>
 #include <QThread>
@@ -28,9 +31,10 @@
 #include "logos_api_provider.h"
 #include "logos_api_client.h"
 #include "token_manager.h"
+#include "logos_mode.h"
 
 // Platform-specific includes for process monitoring
-#if defined(Q_OS_MACOS) || defined(Q_OS_MAC)
+#if (defined(Q_OS_MACOS) || defined(Q_OS_MAC)) && !defined(Q_OS_IOS)
 #include <libproc.h>
 #include <mach/mach.h>
 #include <mach/task_info.h>
@@ -49,6 +53,9 @@ Q_DECLARE_METATYPE(QObject*)
 // Global application pointer
 static QCoreApplication* g_app = nullptr;
 
+// Flag to track if we created the app or are using an existing one
+static bool g_app_created_by_us = false;
+
 // Custom plugins directory
 static QString g_plugins_dir = "";
 
@@ -59,7 +66,12 @@ static QStringList g_loaded_plugins;
 static QHash<QString, QString> g_known_plugins;
 
 // Global hash to store plugin processes
+#ifndef Q_OS_IOS
 static QHash<QString, QProcess*> g_plugin_processes;
+#endif
+
+// Global hash to store LogosAPI instances for Local mode plugins
+static QHash<QString, LogosAPI*> g_local_plugin_apis;
 
 // Global Qt Remote Object registry host
 static QRemoteObjectRegistryHost* g_registry_host = nullptr;
@@ -75,15 +87,12 @@ struct EventListener {
 // Global list to store registered event listeners
 static QList<EventListener> g_event_listeners;
 
-// Structure to store process statistics
 struct ProcessStats {
     double cpuPercent;
-    double cpuTimeSeconds;  // Raw CPU time in seconds
+    double cpuTimeSeconds;
     double memoryMB;
 };
 
-// Hash to store previous CPU time measurements for percentage calculation
-// Key: PID, Value: {previous CPU time, previous timestamp}
 static QHash<qint64, QPair<double, qint64>> g_previous_cpu_times;
 
 // Helper function to process a plugin and extract its metadata
@@ -151,7 +160,7 @@ static QString processPlugin(const QString &pluginPath)
     return pluginName;
 }
 
-// Helper function to load a plugin by name using logos_host in a separate process
+// Helper function to load a plugin by name
 static bool loadPlugin(const QString &pluginName)
 {
     if (!g_known_plugins.contains(pluginName)) {
@@ -160,6 +169,88 @@ static bool loadPlugin(const QString &pluginName)
     }
 
     QString pluginPath = g_known_plugins.value(pluginName);
+
+    if (LogosModeConfig::isLocal()) {
+        qDebug() << "Loading plugin:" << pluginName << "from path:" << pluginPath << "in-process (Local mode)";
+
+        // Check if plugin is already loaded
+        if (g_local_plugin_apis.contains(pluginName)) {
+            qWarning() << "Plugin already loaded (Local mode):" << pluginName;
+            return false;
+        }
+
+        // Load the plugin using QPluginLoader
+        QPluginLoader loader(pluginPath);
+        QObject* plugin = loader.instance();
+
+        if (!plugin) {
+            qCritical() << "Failed to load plugin (Local mode):" << loader.errorString();
+            return false;
+        }
+
+        qDebug() << "Plugin loaded successfully (Local mode)";
+
+        // Cast to the base PluginInterface
+        PluginInterface* basePlugin = qobject_cast<PluginInterface*>(plugin);
+        if (!basePlugin) {
+            qCritical() << "Plugin does not implement the PluginInterface (Local mode)";
+            return false;
+        }
+
+        // Verify that the plugin name matches
+        if (pluginName != basePlugin->name()) {
+            qWarning() << "Plugin name mismatch! Expected:" << pluginName << "Actual:" << basePlugin->name();
+        }
+
+        qDebug() << "Plugin name:" << basePlugin->name();
+        qDebug() << "Plugin version:" << basePlugin->version();
+
+        // Initialize LogosAPI for this plugin
+        LogosAPI* logos_api = new LogosAPI(pluginName, plugin);
+        qDebug() << "LogosAPI initialized for plugin (Local mode):" << pluginName;
+
+        // Register the plugin for access using LogosAPI Provider
+        // In Local mode, this uses PluginRegistry instead of QRemoteObjects
+        bool success = logos_api->getProvider()->registerObject(basePlugin->name(), plugin);
+        if (!success) {
+            qCritical() << "Failed to register plugin (Local mode):" << basePlugin->name();
+            delete logos_api;
+            return false;
+        }
+
+        qDebug() << "Plugin registered with PluginRegistry (Local mode):" << basePlugin->name();
+
+        // Generate and save auth token
+        QUuid authToken = QUuid::createUuid();
+        QString authTokenString = authToken.toString(QUuid::WithoutBraces);
+        qDebug() << "Generated auth token (Local mode):" << authTokenString;
+
+        // Save auth tokens for core access
+        logos_api->getTokenManager()->saveToken("core", authTokenString);
+        logos_api->getTokenManager()->saveToken("core_manager", authTokenString);
+        logos_api->getTokenManager()->saveToken("capability_module", authTokenString);
+        qDebug() << "Auth tokens saved for core access (Local mode)";
+
+        // Also save the plugin token in the global TokenManager
+        TokenManager& tokenManager = TokenManager::instance();
+        tokenManager.saveToken(pluginName, authTokenString);
+
+        // Store the LogosAPI instance for cleanup
+        g_local_plugin_apis.insert(pluginName, logos_api);
+
+        // Add the plugin name to our loaded plugins list
+        g_loaded_plugins.append(pluginName);
+
+        qDebug() << "Plugin" << pluginName << "is now running in-process (Local mode)";
+        return true;
+    }
+
+#ifdef Q_OS_IOS
+    // iOS doesn't support spawning child processes
+    qWarning() << "Plugin loading via separate processes not supported on iOS:" << pluginName;
+    qWarning() << "Consider using Local mode with LogosModeConfig::setMode(LogosMode::Local)";
+    return false;
+#else
     qDebug() << "Loading plugin:" << pluginName << "from path:" << pluginPath << "in separate process";
 
     // Check if plugin is already loaded
@@ -394,6 +485,7 @@ static bool loadPlugin(const QString &pluginName)
     qDebug() << "Remote registry URL for this plugin: local:logos_" << pluginName;
     
     return true;
+#endif // Q_OS_IOS
 }
 
 // Helper function to load and process a plugin
@@ -563,11 +655,32 @@ static bool initializeCoreManager()
 
 void logos_core_init(int argc, char *argv[])
 {
-    // Create the application instance
-    g_app = new QCoreApplication(argc, argv);
+    // Check if an application instance already exists (e.g., when used in a Qt Quick app)
+    if (QCoreApplication::instance()) {
+        // Use the existing application instance
+        g_app = QCoreApplication::instance();
+        g_app_created_by_us = false;
+        qDebug() << "Using existing QCoreApplication instance";
+    } else {
+        // Create a new application instance (standalone mode)
+        g_app = new QCoreApplication(argc, argv);
+        g_app_created_by_us = true;
+        qDebug() << "Created new QCoreApplication instance";
+    }
     
     // Register QObject* as a metatype
     qRegisterMetaType<QObject*>("QObject*");
+}
+
+void logos_core_set_mode(int mode)
+{
+    if (mode == 1) {
+        LogosModeConfig::setMode(LogosMode::Local);
+        qDebug() << "Logos mode set to: Local (in-process)";
+    } else {
+        LogosModeConfig::setMode(LogosMode::Remote);
+        qDebug() << "Logos mode set to: Remote (separate processes)";
+    }
 }
 
 void logos_core_set_plugins_dir(const char* plugins_dir)
@@ -644,24 +757,42 @@ int logos_core_exec()
 
 void logos_core_cleanup()
 {
-    // Terminate all plugin processes
-    qDebug() << "Terminating all plugin processes...";
-    for (auto it = g_plugin_processes.begin(); it != g_plugin_processes.end(); ++it) {
-        QProcess* process = it.value();
-        QString pluginName = it.key();
-        
-        qDebug() << "Terminating plugin process:" << pluginName;
-        process->terminate();
-        
-        if (!process->waitForFinished(3000)) {
-            qWarning() << "Process did not terminate gracefully, killing it:" << pluginName;
-            process->kill();
-            process->waitForFinished(1000);
+    // Clean up Local mode plugins
+    if (!g_local_plugin_apis.isEmpty()) {
+        qDebug() << "Cleaning up Local mode plugins...";
+        for (auto it = g_local_plugin_apis.begin(); it != g_local_plugin_apis.end(); ++it) {
+            QString pluginName = it.key();
+            LogosAPI* logos_api = it.value();
+            
+            qDebug() << "Cleaning up Local mode plugin:" << pluginName;
+            delete logos_api;
         }
-        
-        delete process;
+        g_local_plugin_apis.clear();
+        qDebug() << "Local mode plugins cleaned up";
     }
-    g_plugin_processes.clear();
+
+#ifndef Q_OS_IOS
+    // Terminate all plugin processes (Remote mode)
+    if (!g_plugin_processes.isEmpty()) {
+        qDebug() << "Terminating all plugin processes...";
+        for (auto it = g_plugin_processes.begin(); it != g_plugin_processes.end(); ++it) {
+            QProcess* process = it.value();
+            QString pluginName = it.key();
+            
+            qDebug() << "Terminating plugin process:" << pluginName;
+            process->terminate();
+            
+            if (!process->waitForFinished(3000)) {
+                qWarning() << "Process did not terminate gracefully, killing it:" << pluginName;
+                process->kill();
+                process->waitForFinished(1000);
+            }
+            
+            delete process;
+        }
+        g_plugin_processes.clear();
+    }
+#endif
     g_loaded_plugins.clear();
     
     // Clean up Qt Remote Object registry host
@@ -671,8 +802,12 @@ void logos_core_cleanup()
         qDebug() << "Qt Remote Object registry host cleaned up";
     }
     
-    delete g_app;
+    // Only delete the app if we created it
+    if (g_app_created_by_us) {
+        delete g_app;
+    }
     g_app = nullptr;
+    g_app_created_by_us = false;
 }
 
 // Implementation of the function to get loaded plugins
@@ -763,9 +898,173 @@ int logos_core_load_plugin(const char* plugin_name)
     return success ? 1 : 0;
 }
 
+int logos_core_load_static_plugins()
+{
+    if (!LogosModeConfig::isLocal()) {
+        qWarning() << "logos_core_load_static_plugins() requires Local mode. Call logos_core_set_mode(LOGOS_MODE_LOCAL) first.";
+        return 0;
+    }
+
+    int loadedCount = 0;
+    
+    // Get all statically registered plugin instances
+    // These are registered via Q_IMPORT_PLUGIN() in the application
+    const QObjectList staticPlugins = QPluginLoader::staticInstances();
+    
+    qDebug() << "Found" << staticPlugins.size() << "static plugin instances";
+    
+    for (QObject* pluginObject : staticPlugins) {
+        if (!pluginObject) {
+            qWarning() << "Null static plugin instance, skipping";
+            continue;
+        }
+        
+        // Cast to PluginInterface
+        PluginInterface* basePlugin = qobject_cast<PluginInterface*>(pluginObject);
+        if (!basePlugin) {
+            qDebug() << "Static plugin" << pluginObject->metaObject()->className() 
+                     << "does not implement PluginInterface, skipping";
+            continue;
+        }
+        
+        QString pluginName = basePlugin->name();
+        
+        // Skip core_manager as it's handled separately
+        if (pluginName == "core_manager") {
+            qDebug() << "Skipping core_manager (already loaded)";
+            continue;
+        }
+        
+        // Check if already loaded
+        if (g_loaded_plugins.contains(pluginName)) {
+            qDebug() << "Static plugin already loaded:" << pluginName;
+            continue;
+        }
+        
+        qDebug() << "Loading static plugin:" << pluginName << "version:" << basePlugin->version();
+        
+        // Initialize LogosAPI for this plugin
+        LogosAPI* logos_api = new LogosAPI(pluginName, pluginObject);
+        
+        // Register the plugin with the provider
+        bool success = logos_api->getProvider()->registerObject(pluginName, pluginObject);
+        if (success) {
+            qDebug() << "Static plugin registered:" << pluginName;
+            
+            // Generate and save auth token
+            QUuid authToken = QUuid::createUuid();
+            QString authTokenString = authToken.toString(QUuid::WithoutBraces);
+            
+            logos_api->getTokenManager()->saveToken("core", authTokenString);
+            logos_api->getTokenManager()->saveToken("core_manager", authTokenString);
+            logos_api->getTokenManager()->saveToken("capability_module", authTokenString);
+            
+            // Save in global TokenManager
+            TokenManager& tokenManager = TokenManager::instance();
+            tokenManager.saveToken(pluginName, authTokenString);
+            
+            // Store for cleanup
+            g_local_plugin_apis.insert(pluginName, logos_api);
+            
+            // Add to loaded plugins list
+            g_loaded_plugins.append(pluginName);
+            
+            // Add to known plugins (with empty path since it's static)
+            g_known_plugins.insert(pluginName, QString("static:%1").arg(pluginName));
+            
+            loadedCount++;
+            qDebug() << "Static plugin" << pluginName << "loaded successfully";
+        } else {
+            qCritical() << "Failed to register static plugin:" << pluginName;
+            delete logos_api;
+        }
+    }
+    
+    qDebug() << "Loaded" << loadedCount << "static plugins";
+    return loadedCount;
+}
+
+int logos_core_register_plugin_instance(const char* plugin_name, void* plugin_instance)
+{
+    if (!plugin_name || !plugin_instance) {
+        qWarning() << "logos_core_register_plugin_instance: Invalid arguments (name or instance is null)";
+        return 0;
+    }
+    
+    if (!LogosModeConfig::isLocal()) {
+        qWarning() << "logos_core_register_plugin_instance() requires Local mode. Call logos_core_set_mode(LOGOS_MODE_LOCAL) first.";
+        return 0;
+    }
+    
+    QString pluginName = QString::fromUtf8(plugin_name);
+    QObject* pluginObject = static_cast<QObject*>(plugin_instance);
+    
+    qDebug() << "logos_core_register_plugin_instance: Registering plugin:" << pluginName;
+    
+    PluginInterface* basePlugin = qobject_cast<PluginInterface*>(pluginObject);
+    if (!basePlugin) {
+        qCritical() << "Plugin" << pluginName << "does not implement PluginInterface";
+        return 0;
+    }
+    
+    QString actualName = basePlugin->name();
+    if (actualName != pluginName) {
+        qWarning() << "Plugin name mismatch: expected" << pluginName << "but got" << actualName;
+        // Use the actual name from the plugin
+        pluginName = actualName;
+    }
+    
+    // Check if already loaded
+    if (g_loaded_plugins.contains(pluginName)) {
+        qDebug() << "Plugin already registered:" << pluginName;
+        return 1; // Already registered, consider success
+    }
+    
+    qDebug() << "Registering plugin:" << pluginName << "version:" << basePlugin->version();
+    
+    // Initialize LogosAPI for this plugin
+    LogosAPI* logos_api = new LogosAPI(pluginName, pluginObject);
+    
+    // Register the plugin with the provider
+    bool success = logos_api->getProvider()->registerObject(pluginName, pluginObject);
+    if (!success) {
+        qCritical() << "Failed to register plugin with provider:" << pluginName;
+        delete logos_api;
+        return 0;
+    }
+
+    qDebug() << "Plugin registered with provider:" << pluginName;
+
+    // Generate and save auth token
+    QUuid authToken = QUuid::createUuid();
+    QString authTokenString = authToken.toString(QUuid::WithoutBraces);
+
+    logos_api->getTokenManager()->saveToken("core", authTokenString);
+    logos_api->getTokenManager()->saveToken("core_manager", authTokenString);
+    logos_api->getTokenManager()->saveToken("capability_module", authTokenString);
+    logos_api->getTokenManager()->saveToken("package_manager", authTokenString);
+
+    // Save in global TokenManager
+    TokenManager& tokenManager = TokenManager::instance();
+    tokenManager.saveToken(pluginName, authTokenString);
+
+    g_local_plugin_apis.insert(pluginName, logos_api);
+    g_loaded_plugins.append(pluginName);
+    g_known_plugins.insert(pluginName, QString("app:%1").arg(pluginName));
+
+    qDebug() << "Plugin" << pluginName << "registered successfully";
+    return 1;
+}
+
 // Implementation of the function to unload a plugin by name
 int logos_core_unload_plugin(const char* plugin_name)
 {
+#ifdef Q_OS_IOS
+    // iOS doesn't support process-based plugins
+    qWarning() << "Plugin unloading not supported on iOS";
+    Q_UNUSED(plugin_name);
+    return 0;
+#else
     if (!plugin_name) {
         qWarning() << "Cannot unload plugin: name is null";
         return 0;
@@ -809,6 +1108,7 @@ int logos_core_unload_plugin(const char* plugin_name)
     // The process will be cleaned up by the signal handler
     qDebug() << "Successfully unloaded plugin:" << name;
     return 1;
+#endif // Q_OS_IOS
 }
 
 // TODO: this function can probably go to the core manager instead
@@ -1222,7 +1522,6 @@ void logos_core_register_event_listener(
     qDebug() << "Event listener setup timer started for:" << pluginNameStr << "::" << eventNameStr;
 }
 
-// Helper function to get process statistics (platform-specific)
 static ProcessStats getProcessStats(qint64 pid)
 {
     ProcessStats stats = {0.0, 0.0, 0.0};
@@ -1231,7 +1530,7 @@ static ProcessStats getProcessStats(qint64 pid)
         return stats;
     }
     
-#if defined(Q_OS_MACOS) || defined(Q_OS_MAC)
+#if (defined(Q_OS_MACOS) || defined(Q_OS_MAC)) && !defined(Q_OS_IOS)
     // macOS implementation using libproc
     struct proc_taskinfo taskInfo;
     int ret = proc_pidinfo(pid, PROC_PIDTASKINFO, 0, &taskInfo, sizeof(taskInfo));
@@ -1331,13 +1630,13 @@ static ProcessStats getProcessStats(qint64 pid)
     return stats;
 }
 
-// Implementation of the function to get module statistics
 char* logos_core_get_module_stats()
 {
     qDebug() << "logos_core_get_module_stats() called";
     
     QJsonArray modulesArray;
     
+#ifndef Q_OS_IOS
     // Iterate through plugin processes
     for (auto it = g_plugin_processes.begin(); it != g_plugin_processes.end(); ++it) {
         QString pluginName = it.key();
@@ -1372,6 +1671,7 @@ char* logos_core_get_module_stats()
                  << "(" << stats.cpuTimeSeconds << "s),"
                  << "Memory:" << stats.memoryMB << "MB";
     }
+#endif // Q_OS_IOS
     
     // Convert to JSON string
     QJsonDocument doc(modulesArray);

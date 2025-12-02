@@ -17,13 +17,21 @@ set(CMAKE_RUNTIME_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR}/bin)
 add_subdirectory(src)
 
 # Install rules
-install(TARGETS logos_core logoscore logos_host
-    LIBRARY DESTINATION lib
-    RUNTIME DESTINATION bin
-    ARCHIVE DESTINATION lib
-)
+if(CMAKE_SYSTEM_NAME STREQUAL "iOS")
+    # iOS: only install the static library
+    install(TARGETS logos_core
+        ARCHIVE DESTINATION lib
+    )
+else()
+    # Desktop: install library and executables
+    install(TARGETS logos_core logoscore logos_host
+        LIBRARY DESTINATION lib
+        RUNTIME DESTINATION bin
+        ARCHIVE DESTINATION lib
+    )
+endif()
 
 # Install headers
-install(FILES interface.h
+install(FILES interface.h src/logos_core.h
     DESTINATION include
 )
