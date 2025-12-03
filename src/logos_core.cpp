@@ -1032,7 +1032,6 @@ int logos_core_register_plugin_instance(const char* plugin_name, void* plugin_in
         delete logos_api;
         return 0;
     }
-
     qDebug() << "Plugin registered with provider:" << pluginName;
 
     // Generate and save auth token
@@ -1054,6 +1053,49 @@ int logos_core_register_plugin_instance(const char* plugin_name, void* plugin_in
 
     qDebug() << "Plugin" << pluginName << "registered successfully";
     return 1;
+}
+
+int logos_core_register_plugin_by_name(const char* plugin_name)
+{
+    if (!plugin_name) {
+        qWarning() << "logos_core_register_plugin_by_name: plugin_name is null";
+        return 0;
+    }
+    
+    if (!LogosModeConfig::isLocal()) {
+        qWarning() << "logos_core_register_plugin_by_name() requires Local mode. Call logos_core_set_mode(LOGOS_MODE_LOCAL) first.";
+        return 0;
+    }
+    
+    QString name = QString::fromUtf8(plugin_name);
+    qDebug() << "logos_core_register_plugin_by_name: Looking for plugin:" << name;
+    
+    const QObjectList staticPlugins = QPluginLoader::staticInstances();
+    qDebug() << "Found" << staticPlugins.size() << "static plugin instances";
+    
+    for (QObject* obj : staticPlugins) {
+        if (!obj) continue;
+        
+        PluginInterface* plugin = qobject_cast<PluginInterface*>(obj);
+        if (plugin && plugin->name() == name) {
+            qDebug() << "Found matching static plugin:" << name;
+            return logos_core_register_plugin_instance(plugin_name, obj);
+        }
+    }
+    
+    qWarning() << "Static plugin not found:" << name;
+    qWarning() << "Available static plugins:";
+    for (QObject* obj : staticPlugins) {
+        if (!obj) continue;
+        PluginInterface* plugin = qobject_cast<PluginInterface*>(obj);
+        if (plugin) {
+            qWarning() << "  -" << plugin->name();
+        } else {
+            qWarning() << "  - (non-PluginInterface)" << obj->metaObject()->className();
+        }
+    }
+    
+    return 0;
 }
 
 // Implementation of the function to unload a plugin by name
@@ -1324,11 +1366,15 @@ void logos_core_call_plugin_method_async(
         return;
     }
     
+    // TODO: this delay might not longer be necessary, needs review
+    int initialDelay = LogosModeConfig::isLocal() ? 0 : 500;
+    int connectionDelay = LogosModeConfig::isLocal() ? 0 : 2000;
+    
     // Create a timer to simulate async method call
     // Create timer with QCoreApplication as parent to ensure it's in the main thread
     QTimer* timer = new QTimer(QCoreApplication::instance());
     timer->setSingleShot(true);
-    timer->setInterval(500); // 0.5 second delay to simulate async work
+    timer->setInterval(initialDelay);
         
         // Connect the timer to execute the actual method call
         QObject::connect(timer, &QTimer::timeout, [=]() {
@@ -1372,10 +1418,9 @@ void logos_core_call_plugin_method_async(
             // Create LogosAPI instance to make the remote call
             LogosAPI* logosAPI = new LogosAPI("core");
             
-            // Use a longer delay to ensure connection is established
             QTimer* connectionTimer = new QTimer();
             connectionTimer->setSingleShot(true);
-            connectionTimer->setInterval(2000); // 2 second delay
+            connectionTimer->setInterval(connectionDelay);
             
             QObject::connect(connectionTimer, &QTimer::timeout, [=]() {
                 if (logosAPI->getClient(pluginNameStr)->isConnected()) {
