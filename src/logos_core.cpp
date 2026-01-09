@@ -32,6 +32,7 @@
 #include "logos_api_client.h"
 #include "token_manager.h"
 #include "logos_mode.h"
+#include "signal.h"
 
 // Platform-specific includes for process monitoring
 #if (defined(Q_OS_MACOS) || defined(Q_OS_MAC)) && !defined(Q_OS_IOS)
@@ -68,6 +69,7 @@ static QHash<QString, QString> g_known_plugins;
 // Global hash to store plugin processes
 #ifndef Q_OS_IOS
 static QHash<QString, QProcess*> g_plugin_processes;
+static bool is_shutting_down = false;
 #endif
 
 // Global hash to store LogosAPI instances for Local mode plugins
@@ -419,14 +421,34 @@ static bool loadPlugin(const QString &pluginName)
                          qDebug() << "Plugin process finished:" << pluginName 
                                   << "Exit code:" << exitCode 
                                   << "Exit status:" << exitStatus;
-                         
+                        if (exitStatus == QProcess::NormalExit) {
+                            qInfo() << "Plugin process finished normally for" << pluginName << "exitCode=" << exitCode;
+                            return;
+                        }
+#ifdef Q_OS_WIN
+                        // Windows does not have POSIX signals like SIGTERM/SIGINT.
+                        // So we are not able to distinguish between graceful and crash exits easily.
+                        // If it is during shutdown, we should not exit in order to clean up the process.
+                        if (is_shutting_down) {
+                            qInfo() << "Plugin process terminated during shutdown for" << pluginName;
                          // TODO: This is temporary and later needs a mechanism to restart the process
-                         if (exitStatus == QProcess::CrashExit) {
-                             qCritical() << "Plugin process crashed:" << pluginName << "- terminating core with error";
-                             exit(1);
+                        } else if (exitStatus == QProcess::CrashExit) {
+                            qCritical() << "Plugin process crashed:" << pluginName << "- terminating core with error";
+                            exit(1);
                          }
-                         
-                         // Remove from our tracking lists
+
+#else
+                        if (exitStatus == QProcess::CrashExit &&
+                            (exitCode == SIGTERM || exitCode == SIGINT)) {
+                            qInfo() << "Plugin process terminated gracefully for" << pluginName;
+                         // TODO: This is temporary and later needs a mechanism to restart the process
+                        } else if (exitStatus == QProcess::CrashExit) {
+                            qCritical() << "Plugin process crashed:" << pluginName << "- terminating core with error";
+                            exit(1);
+                         }
+#endif
+
+                        // Remove from our tracking lists
                          g_plugin_processes.remove(pluginName);
                          g_loaded_plugins.removeAll(pluginName);
                          
@@ -437,7 +459,10 @@ static bool loadPlugin(const QString &pluginName)
     // Connect to error signal
     QObject::connect(process, &QProcess::errorOccurred,
                      [pluginName](QProcess::ProcessError error) {
-                         qCritical() << "Plugin process error for" << pluginName << ":" << error;
+                         if (is_shutting_down) {
+                            qInfo() << "Plugin process error during shutdown for" << pluginName << ":" << error;
+                            return;
+                         }
                          
                          // TODO: This is temporary and later needs a mechanism to restart the process
                          if (error == QProcess::Crashed) {
@@ -772,6 +797,8 @@ void logos_core_cleanup()
     }
 
 #ifndef Q_OS_IOS
+    is_shutting_down = true;
+
     // Terminate all plugin processes (Remote mode)
     if (!g_plugin_processes.isEmpty()) {
         qDebug() << "Terminating all plugin processes...";
@@ -780,6 +807,7 @@ void logos_core_cleanup()
             QString pluginName = it.key();
             
             qDebug() << "Terminating plugin process:" << pluginName;
+
             process->terminate();
             
             if (!process->waitForFinished(3000)) {
@@ -792,6 +820,8 @@ void logos_core_cleanup()
         }
         g_plugin_processes.clear();
     }
+
+    is_shutting_down = false;
 #endif
     g_loaded_plugins.clear();
     
