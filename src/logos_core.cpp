@@ -56,8 +56,8 @@ static QCoreApplication* g_app = nullptr;
 // Flag to track if we created the app or are using an existing one
 static bool g_app_created_by_us = false;
 
-// Custom plugins directory
-static QString g_plugins_dir = "";
+// Custom plugins directories (supports multiple directories)
+static QStringList g_plugins_dirs;
 
 // Global list to store loaded plugin names
 static QStringList g_loaded_plugins;
@@ -278,8 +278,8 @@ static bool loadPlugin(const QString &pluginName)
 
     // 3) Fallback relative to plugins directory (../../logos-liblogos/build/bin/logos_host)
     if (!QFile::exists(logosHostPath)) {
-        if (!g_plugins_dir.isEmpty()) {
-            QDir pluginsDirCandidate(g_plugins_dir);
+        if (!g_plugins_dirs.isEmpty()) {
+            QDir pluginsDirCandidate(g_plugins_dirs.first());
             QString candidate = QDir::cleanPath(pluginsDirCandidate.absoluteFilePath("../bin/logos_host"));
 #ifdef Q_OS_WIN
             if (!candidate.endsWith(".exe")) candidate += ".exe";
@@ -685,9 +685,21 @@ void logos_core_set_mode(int mode)
 
 void logos_core_set_plugins_dir(const char* plugins_dir)
 {
+    g_plugins_dirs.clear();
     if (plugins_dir) {
-        g_plugins_dir = QString(plugins_dir);
-        qDebug() << "Custom plugins directory set to:" << g_plugins_dir;
+        g_plugins_dirs.append(QString(plugins_dir));
+        qDebug() << "Custom plugins directory set to:" << g_plugins_dirs.first();
+    }
+}
+
+void logos_core_add_plugins_dir(const char* plugins_dir)
+{
+    if (plugins_dir) {
+        QString dir = QString(plugins_dir);
+        if (!g_plugins_dirs.contains(dir)) {
+            g_plugins_dirs.append(dir);
+            qDebug() << "Added plugins directory:" << dir;
+        }
     }
 }
 
@@ -710,41 +722,45 @@ void logos_core_start()
         qWarning() << "Failed to initialize core manager, continuing with other modules...";
     }
     
-    // Define the plugins directory path
-    QString pluginsDir;
-    if (!g_plugins_dir.isEmpty()) {
-        // Use the custom plugins directory if set
-        pluginsDir = g_plugins_dir;
+    // Define the plugins directories to scan
+    QStringList pluginsDirs;
+    if (!g_plugins_dirs.isEmpty()) {
+        // Use the custom plugins directories if set
+        pluginsDirs = g_plugins_dirs;
     } else {
         // Use the default plugins directory
-        pluginsDir = QDir::cleanPath(QCoreApplication::applicationDirPath() + "/../modules");
+        pluginsDirs << QDir::cleanPath(QCoreApplication::applicationDirPath() + "/../modules");
     }
-    qDebug() << "Looking for modules in:" << pluginsDir;
     
-    // Find and process all plugins in the directory to populate g_known_plugins
-    QStringList pluginPaths = findPlugins(pluginsDir);
+    qDebug() << "Looking for modules in" << pluginsDirs.size() << "directories:" << pluginsDirs;
     
-    if (pluginPaths.isEmpty()) {
-        qWarning() << "No modules found in:" << pluginsDir;
-    } else {
-        qDebug() << "Found" << pluginPaths.size() << "modules";
+    // Find and process all plugins in all directories to populate g_known_plugins
+    for (const QString& pluginsDir : pluginsDirs) {
+        qDebug() << "Scanning directory:" << pluginsDir;
+        QStringList pluginPaths = findPlugins(pluginsDir);
         
-        // Process each plugin to add to known plugins list
-        for (const QString &pluginPath : pluginPaths) {
-            QString pluginName = processPlugin(pluginPath);
-            if (pluginName.isEmpty()) {
-                qWarning() << "Failed to process plugin (no metadata or invalid):" << pluginPath;
-            } else {
-                qDebug() << "Successfully processed plugin:" << pluginName;
+        if (pluginPaths.isEmpty()) {
+            qDebug() << "No modules found in:" << pluginsDir;
+        } else {
+            qDebug() << "Found" << pluginPaths.size() << "modules in:" << pluginsDir;
+            
+            // Process each plugin to add to known plugins list
+            for (const QString &pluginPath : pluginPaths) {
+                QString pluginName = processPlugin(pluginPath);
+                if (pluginName.isEmpty()) {
+                    qWarning() << "Failed to process plugin (no metadata or invalid):" << pluginPath;
+                } else {
+                    qDebug() << "Successfully processed plugin:" << pluginName;
+                }
             }
         }
-        
-        qDebug() << "Total known plugins after processing:" << g_known_plugins.size();
-        qDebug() << "Known plugin names:" << g_known_plugins.keys();
-
-        // Initialize capability module if available (after plugin discovery)
-        initializeCapabilityModule();
     }
+    
+    qDebug() << "Total known plugins after processing:" << g_known_plugins.size();
+    qDebug() << "Known plugin names:" << g_known_plugins.keys();
+
+    // Initialize capability module if available (after plugin discovery)
+    initializeCapabilityModule();
 }
 
 int logos_core_exec()

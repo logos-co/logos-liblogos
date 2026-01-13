@@ -26,6 +26,9 @@ LOGOS_CORE_EXPORT void logos_core_set_mode(int mode);
 // Set a custom plugins directory
 LOGOS_CORE_EXPORT void logos_core_set_plugins_dir(const char* plugins_dir);
 
+// Add an additional plugins directory to scan (allows multiple directories)
+LOGOS_CORE_EXPORT void logos_core_add_plugins_dir(const char* plugins_dir);
+
 // Start the logos core functionality
 LOGOS_CORE_EXPORT void logos_core_start();
 
