@@ -15,6 +15,7 @@
 #include <QLocalSocket>
 #endif
 #include <QLocalServer>
+#include <cstring>
 #include "../common/interface.h"
 #include "core_manager/core_manager.h"
 #include "logos_api.h"
@@ -91,8 +92,10 @@ QString processPlugin(const QString &pluginPath)
 
 bool loadPlugin(const QString &pluginName)
 {
+    qDebug() << "Attempting to load plugin by name:" << pluginName;
+    
     if (!g_known_plugins.contains(pluginName)) {
-        qWarning() << "Cannot load unknown plugin:" << pluginName;
+        qWarning() << "Plugin not found among known plugins:" << pluginName;
         return false;
     }
 
@@ -815,6 +818,70 @@ bool unloadPlugin(const QString& pluginName)
     qDebug() << "Successfully unloaded plugin:" << pluginName;
     return true;
 #endif // Q_OS_IOS
+}
+
+char** getLoadedPluginsCStr()
+{
+    int count = g_loaded_plugins.size();
+    
+    if (count == 0) {
+        // Return an array with just a NULL terminator
+        char** result = new char*[1];
+        result[0] = nullptr;
+        return result;
+    }
+    
+    // Allocate memory for the array of strings
+    char** result = new char*[count + 1];  // +1 for null terminator
+    
+    // Copy each plugin name
+    for (int i = 0; i < count; ++i) {
+        QByteArray utf8Data = g_loaded_plugins[i].toUtf8();
+        result[i] = new char[utf8Data.size() + 1];
+        strcpy(result[i], utf8Data.constData());
+    }
+    
+    // Null-terminate the array
+    result[count] = nullptr;
+    
+    return result;
+}
+
+char** getKnownPluginsCStr()
+{
+    qDebug() << "getKnownPluginsCStr() called";
+    qDebug() << "g_known_plugins size:" << g_known_plugins.size();
+    qDebug() << "g_known_plugins keys:" << g_known_plugins.keys();
+    
+    // Get the keys from the hash (plugin names)
+    QStringList knownPlugins = g_known_plugins.keys();
+    int count = knownPlugins.size();
+    
+    if (count == 0) {
+        qWarning() << "No known plugins to return";
+        // Return an array with just a NULL terminator
+        char** result = new char*[1];
+        result[0] = nullptr;
+        return result;
+    }
+    
+    qDebug() << "Returning" << count << "known plugins";
+    
+    // Allocate memory for the array of strings
+    char** result = new char*[count + 1];  // +1 for null terminator
+    
+    // Copy each plugin name
+    for (int i = 0; i < count; ++i) {
+        QByteArray utf8Data = knownPlugins[i].toUtf8();
+        result[i] = new char[utf8Data.size() + 1];
+        strcpy(result[i], utf8Data.constData());
+        qDebug() << "  -" << knownPlugins[i];
+    }
+    
+    // Null-terminate the array
+    result[count] = nullptr;
+    
+    return result;
 }
 
 } // namespace PluginManager

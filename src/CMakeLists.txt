@@ -43,6 +43,9 @@ set(LOGOS_CORE_SOURCES
     logos_core/logos_core.cpp
     logos_core/logos_core.h
     logos_core/logos_core_internal.h
+    logos_core/global_state.cpp
+    logos_core/app_lifecycle.cpp
+    logos_core/app_lifecycle.h
     logos_core/plugin_manager.cpp
     logos_core/plugin_manager.h
     logos_core/proxy_api.cpp

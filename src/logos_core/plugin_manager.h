@@ -43,6 +43,14 @@ namespace PluginManager {
     // Unload a plugin by name (Remote mode only)
     // Returns true if successful, false otherwise
     bool unloadPlugin(const QString& pluginName);
+    
+    // Get loaded plugins as a C string array (for C API)
+    // Returns a null-terminated array of plugin names that must be freed by the caller
+    char** getLoadedPluginsCStr();
+    
+    // Get known plugins as a C string array (for C API)
+    // Returns a null-terminated array of plugin names that must be freed by the caller
+    char** getKnownPluginsCStr();
 }
 
 #endif // PLUGIN_MANAGER_H
