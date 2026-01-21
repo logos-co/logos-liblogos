@@ -56,6 +56,10 @@ set(HOST_SOURCES
 # Define the logos host sources
 set(LOGOS_HOST_SOURCES
     logos_host/logos_host.cpp
+    logos_host/command_line_parser.cpp
+    logos_host/command_line_parser.h
+    logos_host/plugin_initializer.cpp
+    logos_host/plugin_initializer.h
     common/interface.h
 )
 
