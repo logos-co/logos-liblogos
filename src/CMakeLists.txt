@@ -40,23 +40,23 @@ endif()
 
 # Define the library sources
 set(LOGOS_CORE_SOURCES
-    logos_core.cpp
-    logos_core.h
-    core_manager/core_manager.cpp
-    core_manager/core_manager.h
-    core_manager/core_manager_interface.h
-    ../interface.h
+    logos_core/logos_core.cpp
+    logos_core/logos_core.h
+    logos_core/core_manager/core_manager.cpp
+    logos_core/core_manager/core_manager.h
+    logos_core/core_manager/core_manager_interface.h
+    common/interface.h
 )
 
 # Define the host application sources
 set(HOST_SOURCES
-    main.cpp
+    logos_core/main.cpp
 )
 
 # Define the logos host sources
 set(LOGOS_HOST_SOURCES
-    logos_host.cpp
-    ../interface.h
+    logos_host/logos_host.cpp
+    common/interface.h
 )
 
 # Create the logos core library
@@ -80,7 +80,7 @@ target_link_libraries(logos_core PRIVATE
 # Include directories for the library
 target_include_directories(logos_core PRIVATE
     ${CMAKE_CURRENT_SOURCE_DIR}
-    ${CMAKE_CURRENT_SOURCE_DIR}/..
+    ${CMAKE_CURRENT_SOURCE_DIR}/logos_core
     ${Qt${QT_VERSION_MAJOR}_INCLUDE_DIRS}
 )
 
@@ -126,7 +126,7 @@ if(NOT CMAKE_SYSTEM_NAME STREQUAL "iOS")
     # Include directories for the host application
     target_include_directories(logoscore PRIVATE
         ${CMAKE_CURRENT_SOURCE_DIR}
-        ${CMAKE_CURRENT_SOURCE_DIR}/..
+        ${CMAKE_CURRENT_SOURCE_DIR}/logos_core
         ${Qt${QT_VERSION_MAJOR}_INCLUDE_DIRS}
     )
 
@@ -143,7 +143,7 @@ if(NOT CMAKE_SYSTEM_NAME STREQUAL "iOS")
     # Include directories for the logos host application
     target_include_directories(logos_host PRIVATE
         ${CMAKE_CURRENT_SOURCE_DIR}
-        ${CMAKE_CURRENT_SOURCE_DIR}/..
+        ${CMAKE_CURRENT_SOURCE_DIR}/logos_host
         ${Qt${QT_VERSION_MAJOR}_INCLUDE_DIRS}
     )
 

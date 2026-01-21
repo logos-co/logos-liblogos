@@ -8,7 +8,7 @@
 #include <QJsonArray>
 #include <QFileInfo>
 #include <QFile>
-#include "logos_core.h"
+#include "../logos_core.h"
 #include "logos_api.h"
 #include "logos_api_client.h"
 

@@ -6,7 +6,7 @@
 #include <QRemoteObjectRegistryHost>
 #include <QLocalSocket>
 #include <QLocalServer>
-#include "../interface.h"
+#include "../common/interface.h"
 #include "logos_api.h"
 #include "logos_api_provider.h"
 #include "token_manager.h"

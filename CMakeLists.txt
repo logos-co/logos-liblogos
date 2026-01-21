@@ -32,6 +32,6 @@ else()
 endif()
 
 # Install headers
-install(FILES interface.h src/logos_core.h
+install(FILES src/common/interface.h src/logos_core/logos_core.h
     DESTINATION include
 )

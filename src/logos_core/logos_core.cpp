@@ -25,7 +25,7 @@
 #include <QPair>
 #include <cmath>
 #include <cstring>
-#include "../interface.h"
+#include "../common/interface.h"
 #include "core_manager/core_manager.h"
 #include "logos_api.h"
 #include "logos_api_provider.h"

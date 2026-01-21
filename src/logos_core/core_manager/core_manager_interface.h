@@ -3,7 +3,7 @@
 
 #include <QString>
 #include <QStringList>
-#include "../../interface.h"
+#include "../../common/interface.h"
 
 // Core manager specific methods interface
 class CoreManagerInterface : public PluginInterface {
