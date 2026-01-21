@@ -17,8 +17,15 @@ pkgs.stdenv.mkDerivation {
     
     # Install headers
     mkdir -p $out/include
-    if [ -f interface.h ]; then
-      cp interface.h $out/include/
+    
+    # Install logos_core.h (main C API header)
+    if [ -f src/logos_core/logos_core.h ]; then
+      cp src/logos_core/logos_core.h $out/include/
+    fi
+    
+    # Install common interface header
+    if [ -f src/common/interface.h ]; then
+      cp src/common/interface.h $out/include/
     fi
     
     # Also copy SDK headers if available (including logos_mode.h)
