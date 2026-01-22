@@ -46,7 +46,10 @@ namespace ProxyAPI {
     }
 
     void asyncOperation(const char* data, AsyncCallback callback, void* user_data) {
-        assert(callback);
+        if (!callback) {
+            qWarning() << "asyncOperation: callback is null, returning early";
+            return;
+        }
         
         QString inputData = data ? QString::fromUtf8(data) : QString("no data");
         qDebug() << "Starting async operation with data:" << inputData;
@@ -76,7 +79,10 @@ namespace ProxyAPI {
     }
 
     void loadPluginAsync(const char* plugin_name, AsyncCallback callback, void* user_data) {
-        assert(callback);
+        if (!callback) {
+            qWarning() << "loadPluginAsync: callback is null, returning early";
+            return;
+        }
         
         if (!plugin_name) {
             qWarning() << "loadPluginAsync: plugin_name is null";
@@ -128,7 +134,10 @@ namespace ProxyAPI {
     }
 
     void callPluginMethodAsync(const char* plugin_name, const char* method_name, const char* params_json, AsyncCallback callback, void* user_data) {
-        assert(callback);
+        if (!callback) {
+            qWarning() << "callPluginMethodAsync: callback is null, returning early";
+            return;
+        }
         
         if (!plugin_name || !method_name) {
             qWarning() << "callPluginMethodAsync: plugin_name or method_name is null";
@@ -265,9 +274,10 @@ namespace ProxyAPI {
     }
 
     void registerEventListener(const char* plugin_name, const char* event_name, AsyncCallback callback, void* user_data) {
-        assert(plugin_name);
-        assert(event_name);
-        assert(callback);
+        if (!plugin_name || !event_name || !callback) {
+            qWarning() << "registerEventListener: null parameter, returning early";
+            return;
+        }
         
         QString pluginNameStr = QString::fromUtf8(plugin_name);
         QString eventNameStr = QString::fromUtf8(event_name);

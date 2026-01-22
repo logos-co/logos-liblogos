@@ -6,7 +6,12 @@ pkgs.stdenv.mkDerivation {
   version = common.version;
   
   inherit (build) src;
-  inherit (common) nativeBuildInputs buildInputs meta env;
+  inherit (common) buildInputs meta env;
+  
+  # Add platform-specific tools conditionally
+  nativeBuildInputs = common.nativeBuildInputs 
+    ++ pkgs.lib.optionals pkgs.stdenv.isDarwin [ pkgs.darwin.cctools ]
+    ++ pkgs.lib.optionals pkgs.stdenv.isLinux [ pkgs.patchelf ];
   
   # Use the same CMake flags as the main build
   cmakeFlags = common.cmakeFlags;
@@ -50,10 +55,17 @@ pkgs.stdenv.mkDerivation {
     mkdir -p $out/lib
     cp -r lib/* $out/lib/ || true
     
-    # Fix RPATH to find libraries in $out/lib
-    ${pkgs.darwin.cctools}/bin/install_name_tool \
-      -change @rpath/liblogos_core.dylib $out/lib/liblogos_core.dylib \
-      $out/bin/logos_core_tests || true
+    ${pkgs.lib.optionalString pkgs.stdenv.isDarwin ''
+      # Fix RPATH to find libraries in $out/lib on macOS
+      install_name_tool \
+        -change @rpath/liblogos_core.dylib $out/lib/liblogos_core.dylib \
+        $out/bin/logos_core_tests || true
+    ''}
+    
+    ${pkgs.lib.optionalString pkgs.stdenv.isLinux ''
+      # Fix RPATH on Linux to avoid /build/ references and include all dependencies
+      patchelf --set-rpath "$out/lib:${pkgs.gtest}/lib:${pkgs.qt6.qtbase}/lib:${pkgs.qt6.qtremoteobjects}/lib:${pkgs.stdenv.cc.cc.lib}/lib" $out/bin/logos_core_tests || true
+    ''}
     
     runHook postInstall
   '';
