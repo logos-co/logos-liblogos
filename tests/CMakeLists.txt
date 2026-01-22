@@ -11,6 +11,7 @@ add_executable(logos_core_tests
     test_app_lifecycle.cpp
     test_plugin_manager.cpp
     test_process_stats.cpp
+    test_proxy_api.cpp
 )
 
 target_link_libraries(logos_core_tests PRIVATE
