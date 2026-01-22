@@ -1,6 +1,8 @@
 #ifndef APP_LIFECYCLE_H
 #define APP_LIFECYCLE_H
 
+#include <QStringList>
+
 namespace AppLifecycle {
     // Initialize the logos core application
     void init(int argc, char* argv[]);
@@ -25,6 +27,12 @@ namespace AppLifecycle {
     
     // Process Qt events without blocking
     void processEvents();
+    
+    // Query methods
+    QStringList getPluginsDirs();
+    bool isInitialized();           // returns true if g_app is set
+    bool isAppOwnedByUs();          // returns true if we created the app
+    bool isRegistryHostInitialized(); // returns true if registry host exists
 }
 
 #endif // APP_LIFECYCLE_H

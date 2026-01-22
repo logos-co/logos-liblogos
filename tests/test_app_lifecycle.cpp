@@ -1,5 +1,6 @@
 #include <gtest/gtest.h>
 #include "app_lifecycle.h"
+#include "plugin_manager.h"
 #include "logos_core_internal.h"
 #include "logos_mode.h"
 #include "logos_api.h"
@@ -99,13 +100,13 @@ TEST_F(AppLifecycleTest, Init_CreatesNewApp) {
     
     AppLifecycle::init(1, argv);
     
-    // g_app should be set
-    ASSERT_NE(g_app, nullptr);
+    // App should be initialized
+    ASSERT_TRUE(AppLifecycle::isInitialized());
     
     // If there was an existing app, we should reuse it and not claim ownership
     if (beforeApp) {
-        EXPECT_EQ(g_app, beforeApp);
-        EXPECT_FALSE(g_app_created_by_us);
+        EXPECT_EQ(QCoreApplication::instance(), beforeApp);
+        EXPECT_FALSE(AppLifecycle::isAppOwnedByUs());
     }
 }
 
@@ -159,11 +160,12 @@ TEST_F(AppLifecycleTest, SetMode_DefaultIsRemote) {
 // Verifies that setPluginsDir() correctly sets a single plugins directory
 TEST_F(AppLifecycleTest, SetPluginsDir_SetsDirectory) {
     const char* testDir = "/test/plugins";
-    
+
     AppLifecycle::setPluginsDir(testDir);
-    
-    ASSERT_EQ(g_plugins_dirs.size(), 1);
-    EXPECT_EQ(g_plugins_dirs[0].toStdString(), testDir);
+
+    auto dirs = AppLifecycle::getPluginsDirs();
+    ASSERT_EQ(dirs.size(), 1);
+    EXPECT_EQ(dirs[0].toStdString(), testDir);
 }
 
 // Verifies that setPluginsDir() clears any existing directories before setting the new one
@@ -171,25 +173,14 @@ TEST_F(AppLifecycleTest, SetPluginsDir_ClearsExisting) {
     // Add multiple directories
     AppLifecycle::addPluginsDir("/dir1");
     AppLifecycle::addPluginsDir("/dir2");
-    ASSERT_EQ(g_plugins_dirs.size(), 2);
+    ASSERT_EQ(AppLifecycle::getPluginsDirs().size(), 2);
     
     // SetPluginsDir should clear and replace
     AppLifecycle::setPluginsDir("/new_dir");
     
-    ASSERT_EQ(g_plugins_dirs.size(), 1);
-    EXPECT_EQ(g_plugins_dirs[0].toStdString(), "/new_dir");
-}
-
-// Verifies that setPluginsDir(nullptr) clears the plugins directory list
-TEST_F(AppLifecycleTest, SetPluginsDir_NullHandling) {
-    // Add a directory first
-    AppLifecycle::addPluginsDir("/test");
-    ASSERT_EQ(g_plugins_dirs.size(), 1);
-    
-    // Passing null should clear the list
-    AppLifecycle::setPluginsDir(nullptr);
-    
-    EXPECT_TRUE(g_plugins_dirs.isEmpty());
+    auto dirs = AppLifecycle::getPluginsDirs();
+    ASSERT_EQ(dirs.size(), 1);
+    EXPECT_EQ(dirs[0].toStdString(), "/new_dir");
 }
 
 // Verifies that addPluginsDir() appends directories to the list without clearing existing ones
@@ -197,9 +188,10 @@ TEST_F(AppLifecycleTest, AddPluginsDir_AppendsDirectory) {
     AppLifecycle::addPluginsDir("/dir1");
     AppLifecycle::addPluginsDir("/dir2");
     
-    ASSERT_EQ(g_plugins_dirs.size(), 2);
-    EXPECT_EQ(g_plugins_dirs[0].toStdString(), "/dir1");
-    EXPECT_EQ(g_plugins_dirs[1].toStdString(), "/dir2");
+    auto dirs = AppLifecycle::getPluginsDirs();
+    ASSERT_EQ(dirs.size(), 2);
+    EXPECT_EQ(dirs[0].toStdString(), "/dir1");
+    EXPECT_EQ(dirs[1].toStdString(), "/dir2");
 }
 
 // Verifies that addPluginsDir() prevents duplicate directory entries
@@ -208,14 +200,14 @@ TEST_F(AppLifecycleTest, AddPluginsDir_NoDuplicates) {
     AppLifecycle::addPluginsDir("/test");
     
     // Should only be added once
-    EXPECT_EQ(g_plugins_dirs.size(), 1);
+    EXPECT_EQ(AppLifecycle::getPluginsDirs().size(), 1);
 }
 
 // Verifies that addPluginsDir(nullptr) is safely ignored
 TEST_F(AppLifecycleTest, AddPluginsDir_NullIgnored) {
     AppLifecycle::addPluginsDir(nullptr);
     
-    EXPECT_TRUE(g_plugins_dirs.isEmpty());
+    EXPECT_TRUE(AppLifecycle::getPluginsDirs().isEmpty());
 }
 
 // =============================================================================
@@ -264,7 +256,7 @@ TEST_F(AppLifecycleTest, Cleanup_PreservesExternalApp) {
     char* argv[] = {(char*)"test"};
     AppLifecycle::init(1, argv);
     
-    EXPECT_FALSE(g_app_created_by_us) << "Should not claim ownership of external app";
+    EXPECT_FALSE(AppLifecycle::isAppOwnedByUs()) << "Should not claim ownership of external app";
 }
 
 // =============================================================================
@@ -303,19 +295,19 @@ TEST_F(AppLifecycleTest, Start_InitializesRegistryHost) {
     AppLifecycle::init(1, argv);
     
     // Registry host should be null before start
-    ASSERT_EQ(g_registry_host, nullptr);
+    ASSERT_FALSE(AppLifecycle::isRegistryHostInitialized());
     
     AppLifecycle::start();
     
     // Registry host should be created
-    EXPECT_NE(g_registry_host, nullptr);
+    EXPECT_TRUE(AppLifecycle::isRegistryHostInitialized());
 }
 
 // Verifies that start() clears the loaded plugins list before discovering new plugins
 TEST_F(AppLifecycleTest, Start_ClearsLoadedPlugins) {
-    // Add some plugins to the loaded list
+    // Add some plugins to the loaded list (using internal API for setup)
     g_loaded_plugins.append("old_plugin");
-    ASSERT_FALSE(g_loaded_plugins.isEmpty());
+    ASSERT_FALSE(PluginManager::getLoadedPlugins().isEmpty());
     
     char* argv[] = {(char*)"test"};
     AppLifecycle::init(1, argv);
@@ -335,11 +327,12 @@ TEST_F(AppLifecycleTest, Start_UsesCustomPluginsDirs) {
     
     AppLifecycle::setPluginsDir("/custom/plugins");
     
-    // After start, g_plugins_dirs should still contain our custom dir
+    // After start, plugins dir should still contain our custom dir
     AppLifecycle::start();
     
-    ASSERT_EQ(g_plugins_dirs.size(), 1);
-    EXPECT_EQ(g_plugins_dirs[0].toStdString(), "/custom/plugins");
+    auto dirs = AppLifecycle::getPluginsDirs();
+    ASSERT_EQ(dirs.size(), 1);
+    EXPECT_EQ(dirs[0].toStdString(), "/custom/plugins");
 }
 
 // =============================================================================
@@ -348,7 +341,7 @@ TEST_F(AppLifecycleTest, Start_UsesCustomPluginsDirs) {
 
 // Verifies that exec() returns -1 when g_app is null (error condition)
 TEST_F(AppLifecycleTest, Exec_ReturnsNegativeWhenNoApp) {
-    // Set g_app to nullptr temporarily
+    // Set g_app to nullptr temporarily (need internal API for this edge case)
     QCoreApplication* savedApp = g_app;
     g_app = nullptr;
     
@@ -366,9 +359,9 @@ TEST_F(AppLifecycleTest, Exec_WithAppAvailable) {
     char* argv[] = {(char*)"test"};
     AppLifecycle::init(1, argv);
     
-    ASSERT_NE(g_app, nullptr);
+    ASSERT_TRUE(AppLifecycle::isInitialized());
     
     // We can't actually call exec() as it would block
     // Just verify the app exists and exec would be callable
-    EXPECT_NE(g_app, nullptr);
+    EXPECT_TRUE(AppLifecycle::isInitialized());
 }

@@ -884,4 +884,24 @@ char** getKnownPluginsCStr()
     return result;
 }
 
+QStringList getLoadedPlugins()
+{
+    return g_loaded_plugins;
+}
+
+QHash<QString, QString> getKnownPlugins()
+{
+    return g_known_plugins;
+}
+
+bool isPluginLoaded(const QString& name)
+{
+    return g_loaded_plugins.contains(name);
+}
+
+bool isPluginKnown(const QString& name)
+{
+    return g_known_plugins.contains(name);
+}
+
 } // namespace PluginManager

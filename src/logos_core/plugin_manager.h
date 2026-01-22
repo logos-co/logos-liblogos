@@ -3,6 +3,7 @@
 
 #include <QString>
 #include <QStringList>
+#include <QHash>
 
 namespace PluginManager {
     // Process a plugin file and extract its metadata
@@ -51,6 +52,12 @@ namespace PluginManager {
     // Get known plugins as a C string array (for C API)
     // Returns a null-terminated array of plugin names that must be freed by the caller
     char** getKnownPluginsCStr();
+    
+    // Query methods (Qt types for C++ usage)
+    QStringList getLoadedPlugins();
+    QHash<QString, QString> getKnownPlugins();
+    bool isPluginLoaded(const QString& name);
+    bool isPluginKnown(const QString& name);
 }
 
 #endif // PLUGIN_MANAGER_H
