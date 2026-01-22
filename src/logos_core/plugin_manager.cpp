@@ -854,4 +854,40 @@ namespace PluginManager {
         return g_known_plugins.contains(name);
     }
 
+    void clearState() {
+        qDebug() << "Clearing all plugin state";
+        
+        g_plugins_dirs.clear();
+        g_loaded_plugins.clear();
+        g_known_plugins.clear();
+        
+        #ifndef Q_OS_IOS
+        // Terminate and clean up all plugin processes
+        for (auto it = g_plugin_processes.begin(); it != g_plugin_processes.end(); ++it) {
+            QProcess* process = it.value();
+            if (process) {
+                process->terminate();
+                process->waitForFinished(1000);
+                delete process;
+            }
+        }
+        g_plugin_processes.clear();
+        #endif
+        
+        // Clean up all local plugin API instances
+        for (auto it = g_local_plugin_apis.begin(); it != g_local_plugin_apis.end(); ++it) {
+            if (it.value()) {
+                delete it.value();
+            }
+        }
+        g_local_plugin_apis.clear();
+        
+        qDebug() << "Plugin state cleared";
+    }
+
+    void addKnownPlugin(const QString& name, const QString& path) {
+        qDebug() << "Adding known plugin:" << name << "at path:" << path;
+        g_known_plugins.insert(name, path);
+    }
+
 }

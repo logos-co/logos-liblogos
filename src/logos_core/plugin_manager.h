@@ -58,6 +58,14 @@ namespace PluginManager {
     QHash<QString, QString> getKnownPlugins();
     bool isPluginLoaded(const QString& name);
     bool isPluginKnown(const QString& name);
+    
+    // State management
+    // Clear all plugin state (for shutdown/reinitialization)
+    void clearState();
+    
+    // Programmatically register a known plugin without file discovery
+    // Useful when plugin locations are known ahead of time
+    void addKnownPlugin(const QString& name, const QString& path);
 }
 
 #endif // PLUGIN_MANAGER_H

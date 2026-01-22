@@ -12,10 +12,8 @@
 class PluginManagerTest : public ::testing::Test {
 protected:
     void SetUp() override {
-        // Clear global state before each test
-        g_plugins_dirs.clear();
-        g_loaded_plugins.clear();
-        g_known_plugins.clear();
+        // Clear global state before each test using public API
+        PluginManager::clearState();
         
         // Set to Local mode by default (most testable functions require it)
         LogosModeConfig::setMode(LogosMode::Local);
@@ -25,14 +23,6 @@ protected:
             delete g_registry_host;
             g_registry_host = nullptr;
         }
-        
-        // Clear plugin processes (desktop only)
-        #ifndef Q_OS_IOS
-        g_plugin_processes.clear();
-        #endif
-        
-        // Clear local plugin APIs
-        g_local_plugin_apis.clear();
     }
     
     void TearDown() override {
@@ -44,27 +34,8 @@ protected:
             g_registry_host = nullptr;
         }
         
-        // Clean up plugin processes (desktop only)
-        #ifndef Q_OS_IOS
-        for (auto it = g_plugin_processes.begin(); it != g_plugin_processes.end(); ++it) {
-            QProcess* process = it.value();
-            process->terminate();
-            process->waitForFinished(1000);
-            delete process;
-        }
-        g_plugin_processes.clear();
-        #endif
-        
-        // Clean up local plugin APIs
-        for (auto it = g_local_plugin_apis.begin(); it != g_local_plugin_apis.end(); ++it) {
-            delete it.value();
-        }
-        g_local_plugin_apis.clear();
-        
-        // Clear global state
-        g_plugins_dirs.clear();
-        g_loaded_plugins.clear();
-        g_known_plugins.clear();
+        // Clear plugin state using public API
+        PluginManager::clearState();
     }
 };
 
@@ -79,6 +50,7 @@ TEST_F(PluginManagerTest, GetLoadedPlugins_ReturnsEmptyList) {
 }
 
 // Verifies that getLoadedPlugins() returns the correct list of loaded plugin names
+// Note: This is an implementation test that directly manipulates internal state
 TEST_F(PluginManagerTest, GetLoadedPlugins_ReturnsCorrectList) {
     // Add some plugins to the global list
     g_loaded_plugins.append("plugin1");
@@ -101,9 +73,9 @@ TEST_F(PluginManagerTest, GetKnownPlugins_ReturnsEmptyHash) {
 
 // Verifies that getKnownPlugins() returns the correct hash of plugin names to paths
 TEST_F(PluginManagerTest, GetKnownPlugins_ReturnsCorrectHash) {
-    // Add some plugins to the global hash
-    g_known_plugins.insert("plugin1", "/path/to/plugin1.dylib");
-    g_known_plugins.insert("plugin2", "/path/to/plugin2.dylib");
+    // Add some plugins using the public API
+    PluginManager::addKnownPlugin("plugin1", "/path/to/plugin1.dylib");
+    PluginManager::addKnownPlugin("plugin2", "/path/to/plugin2.dylib");
     
     QHash<QString, QString> known = PluginManager::getKnownPlugins();
     
@@ -118,6 +90,7 @@ TEST_F(PluginManagerTest, IsPluginLoaded_ReturnsFalseForUnloaded) {
 }
 
 // Verifies that isPluginLoaded() returns true for plugins that are currently loaded
+// Note: This is an implementation test that directly manipulates internal state
 TEST_F(PluginManagerTest, IsPluginLoaded_ReturnsTrueForLoaded) {
     g_loaded_plugins.append("test_plugin");
     
@@ -131,7 +104,7 @@ TEST_F(PluginManagerTest, IsPluginKnown_ReturnsFalseForUnknown) {
 
 // Verifies that isPluginKnown() returns true for plugins that have been discovered
 TEST_F(PluginManagerTest, IsPluginKnown_ReturnsTrueForKnown) {
-    g_known_plugins.insert("test_plugin", "/path/to/plugin");
+    PluginManager::addKnownPlugin("test_plugin", "/path/to/plugin");
     
     EXPECT_TRUE(PluginManager::isPluginKnown("test_plugin"));
 }
@@ -153,6 +126,7 @@ TEST_F(PluginManagerTest, GetLoadedPluginsCStr_ReturnsNullTerminatedArrayWhenEmp
 
 // Verifies that getLoadedPluginsCStr() returns a properly allocated null-terminated C string array
 // containing all loaded plugin names for C API compatibility
+// Note: This is an implementation test that directly manipulates internal state
 TEST_F(PluginManagerTest, GetLoadedPluginsCStr_ReturnsCorrectArray) {
     // Add plugins to the global list
     g_loaded_plugins.append("plugin1");
@@ -188,9 +162,9 @@ TEST_F(PluginManagerTest, GetKnownPluginsCStr_ReturnsNullTerminatedArrayWhenEmpt
 // Verifies that getKnownPluginsCStr() returns a properly allocated null-terminated C string array
 // containing all known plugin names for C API compatibility
 TEST_F(PluginManagerTest, GetKnownPluginsCStr_ReturnsCorrectArray) {
-    // Add plugins to the global hash
-    g_known_plugins.insert("plugin1", "/path/to/plugin1");
-    g_known_plugins.insert("plugin2", "/path/to/plugin2");
+    // Add plugins using the public API
+    PluginManager::addKnownPlugin("plugin1", "/path/to/plugin1");
+    PluginManager::addKnownPlugin("plugin2", "/path/to/plugin2");
     
     char** result = PluginManager::getKnownPluginsCStr();
     
@@ -285,10 +259,11 @@ TEST_F(PluginManagerTest, LoadPlugin_ReturnsFalseForAlreadyLoadedLocal) {
     LogosModeConfig::setMode(LogosMode::Local);
     
     // Simulate a loaded plugin in Local mode
-    g_known_plugins.insert("test_plugin", "/path/to/plugin");
+    PluginManager::addKnownPlugin("test_plugin", "/path/to/plugin");
     g_loaded_plugins.append("test_plugin");
     
     // Create a dummy LogosAPI to simulate loaded plugin
+    // Note: This is an implementation test verifying internal state checking
     g_local_plugin_apis.insert("test_plugin", nullptr);
     
     bool result = PluginManager::loadPlugin("test_plugin");
@@ -303,10 +278,11 @@ TEST_F(PluginManagerTest, LoadPlugin_ReturnsFalseForAlreadyLoadedRemote) {
     LogosModeConfig::setMode(LogosMode::Remote);
     
     // Simulate a loaded plugin in Remote mode
-    g_known_plugins.insert("test_plugin", "/path/to/plugin");
+    PluginManager::addKnownPlugin("test_plugin", "/path/to/plugin");
     g_loaded_plugins.append("test_plugin");
     
     // Create a dummy process to simulate loaded plugin
+    // Note: This is an implementation test verifying internal state checking
     QProcess* dummyProcess = new QProcess();
     g_plugin_processes.insert("test_plugin", dummyProcess);
     
@@ -335,6 +311,7 @@ TEST_F(PluginManagerTest, UnloadPlugin_ReturnsFalseForNotLoaded) {
 // Verifies that unloadPlugin() returns false when a plugin is marked as loaded but has no associated process
 TEST_F(PluginManagerTest, UnloadPlugin_ReturnsFalseForNoProcess) {
     // Add plugin to loaded list but not to processes
+    // Note: This is an implementation test verifying internal state consistency
     g_loaded_plugins.append("test_plugin");
     
     bool result = PluginManager::unloadPlugin("test_plugin");
