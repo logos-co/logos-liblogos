@@ -1,0 +1,379 @@
+#include <gtest/gtest.h>
+#include "plugin_manager.h"
+#include "logos_core_internal.h"
+#include "logos_mode.h"
+#include <QCoreApplication>
+#include <QDir>
+#include <QTemporaryDir>
+#include <QFile>
+#include <cstring>
+
+// Test fixture for plugin manager tests
+class PluginManagerTest : public ::testing::Test {
+protected:
+    void SetUp() override {
+        // Clear global state before each test
+        g_plugins_dirs.clear();
+        g_loaded_plugins.clear();
+        g_known_plugins.clear();
+        
+        // Set to Local mode by default (most testable functions require it)
+        LogosModeConfig::setMode(LogosMode::Local);
+        
+        // Ensure registry host is null at start
+        if (g_registry_host) {
+            delete g_registry_host;
+            g_registry_host = nullptr;
+        }
+        
+        // Clear plugin processes (desktop only)
+        #ifndef Q_OS_IOS
+        g_plugin_processes.clear();
+        #endif
+        
+        // Clear local plugin APIs
+        g_local_plugin_apis.clear();
+    }
+    
+    void TearDown() override {
+        // Clean up after each test
+        
+        // Clean up registry host if it was created
+        if (g_registry_host) {
+            delete g_registry_host;
+            g_registry_host = nullptr;
+        }
+        
+        // Clean up plugin processes (desktop only)
+        #ifndef Q_OS_IOS
+        for (auto it = g_plugin_processes.begin(); it != g_plugin_processes.end(); ++it) {
+            QProcess* process = it.value();
+            process->terminate();
+            process->waitForFinished(1000);
+            delete process;
+        }
+        g_plugin_processes.clear();
+        #endif
+        
+        // Clean up local plugin APIs
+        for (auto it = g_local_plugin_apis.begin(); it != g_local_plugin_apis.end(); ++it) {
+            delete it.value();
+        }
+        g_local_plugin_apis.clear();
+        
+        // Clear global state
+        g_plugins_dirs.clear();
+        g_loaded_plugins.clear();
+        g_known_plugins.clear();
+    }
+};
+
+// =============================================================================
+// Plugin Query Functions Tests
+// =============================================================================
+
+// Verifies that getLoadedPlugins() returns an empty list when no plugins are loaded
+TEST_F(PluginManagerTest, GetLoadedPlugins_ReturnsEmptyList) {
+    QStringList loaded = PluginManager::getLoadedPlugins();
+    EXPECT_TRUE(loaded.isEmpty());
+}
+
+// Verifies that getLoadedPlugins() returns the correct list of loaded plugin names
+TEST_F(PluginManagerTest, GetLoadedPlugins_ReturnsCorrectList) {
+    // Add some plugins to the global list
+    g_loaded_plugins.append("plugin1");
+    g_loaded_plugins.append("plugin2");
+    g_loaded_plugins.append("plugin3");
+    
+    QStringList loaded = PluginManager::getLoadedPlugins();
+    
+    ASSERT_EQ(loaded.size(), 3);
+    EXPECT_EQ(loaded[0].toStdString(), "plugin1");
+    EXPECT_EQ(loaded[1].toStdString(), "plugin2");
+    EXPECT_EQ(loaded[2].toStdString(), "plugin3");
+}
+
+// Verifies that getKnownPlugins() returns an empty hash when no plugins are known
+TEST_F(PluginManagerTest, GetKnownPlugins_ReturnsEmptyHash) {
+    QHash<QString, QString> known = PluginManager::getKnownPlugins();
+    EXPECT_TRUE(known.isEmpty());
+}
+
+// Verifies that getKnownPlugins() returns the correct hash of plugin names to paths
+TEST_F(PluginManagerTest, GetKnownPlugins_ReturnsCorrectHash) {
+    // Add some plugins to the global hash
+    g_known_plugins.insert("plugin1", "/path/to/plugin1.dylib");
+    g_known_plugins.insert("plugin2", "/path/to/plugin2.dylib");
+    
+    QHash<QString, QString> known = PluginManager::getKnownPlugins();
+    
+    ASSERT_EQ(known.size(), 2);
+    EXPECT_EQ(known.value("plugin1").toStdString(), "/path/to/plugin1.dylib");
+    EXPECT_EQ(known.value("plugin2").toStdString(), "/path/to/plugin2.dylib");
+}
+
+// Verifies that isPluginLoaded() returns false for plugins that are not loaded
+TEST_F(PluginManagerTest, IsPluginLoaded_ReturnsFalseForUnloaded) {
+    EXPECT_FALSE(PluginManager::isPluginLoaded("nonexistent_plugin"));
+}
+
+// Verifies that isPluginLoaded() returns true for plugins that are currently loaded
+TEST_F(PluginManagerTest, IsPluginLoaded_ReturnsTrueForLoaded) {
+    g_loaded_plugins.append("test_plugin");
+    
+    EXPECT_TRUE(PluginManager::isPluginLoaded("test_plugin"));
+}
+
+// Verifies that isPluginKnown() returns false for plugins that have not been discovered
+TEST_F(PluginManagerTest, IsPluginKnown_ReturnsFalseForUnknown) {
+    EXPECT_FALSE(PluginManager::isPluginKnown("nonexistent_plugin"));
+}
+
+// Verifies that isPluginKnown() returns true for plugins that have been discovered
+TEST_F(PluginManagerTest, IsPluginKnown_ReturnsTrueForKnown) {
+    g_known_plugins.insert("test_plugin", "/path/to/plugin");
+    
+    EXPECT_TRUE(PluginManager::isPluginKnown("test_plugin"));
+}
+
+// =============================================================================
+// C String Array Functions Tests
+// =============================================================================
+
+// Verifies that getLoadedPluginsCStr() returns a null-terminated array with just NULL when no plugins are loaded
+TEST_F(PluginManagerTest, GetLoadedPluginsCStr_ReturnsNullTerminatedArrayWhenEmpty) {
+    char** result = PluginManager::getLoadedPluginsCStr();
+    
+    ASSERT_NE(result, nullptr);
+    EXPECT_EQ(result[0], nullptr);
+    
+    // Clean up
+    delete[] result;
+}
+
+// Verifies that getLoadedPluginsCStr() returns a properly allocated null-terminated C string array
+// containing all loaded plugin names for C API compatibility
+TEST_F(PluginManagerTest, GetLoadedPluginsCStr_ReturnsCorrectArray) {
+    // Add plugins to the global list
+    g_loaded_plugins.append("plugin1");
+    g_loaded_plugins.append("plugin2");
+    
+    char** result = PluginManager::getLoadedPluginsCStr();
+    
+    ASSERT_NE(result, nullptr);
+    ASSERT_NE(result[0], nullptr);
+    ASSERT_NE(result[1], nullptr);
+    EXPECT_EQ(result[2], nullptr); // Null terminator
+    
+    EXPECT_STREQ(result[0], "plugin1");
+    EXPECT_STREQ(result[1], "plugin2");
+    
+    // Clean up
+    delete[] result[0];
+    delete[] result[1];
+    delete[] result;
+}
+
+// Verifies that getKnownPluginsCStr() returns a null-terminated array with just NULL when no plugins are known
+TEST_F(PluginManagerTest, GetKnownPluginsCStr_ReturnsNullTerminatedArrayWhenEmpty) {
+    char** result = PluginManager::getKnownPluginsCStr();
+    
+    ASSERT_NE(result, nullptr);
+    EXPECT_EQ(result[0], nullptr);
+    
+    // Clean up
+    delete[] result;
+}
+
+// Verifies that getKnownPluginsCStr() returns a properly allocated null-terminated C string array
+// containing all known plugin names for C API compatibility
+TEST_F(PluginManagerTest, GetKnownPluginsCStr_ReturnsCorrectArray) {
+    // Add plugins to the global hash
+    g_known_plugins.insert("plugin1", "/path/to/plugin1");
+    g_known_plugins.insert("plugin2", "/path/to/plugin2");
+    
+    char** result = PluginManager::getKnownPluginsCStr();
+    
+    ASSERT_NE(result, nullptr);
+    ASSERT_NE(result[0], nullptr);
+    ASSERT_NE(result[1], nullptr);
+    EXPECT_EQ(result[2], nullptr); // Null terminator
+    
+    // Note: QHash order is not guaranteed, so we check that both plugins are present
+    QStringList plugins;
+    plugins.append(QString::fromUtf8(result[0]));
+    plugins.append(QString::fromUtf8(result[1]));
+    
+    EXPECT_TRUE(plugins.contains("plugin1"));
+    EXPECT_TRUE(plugins.contains("plugin2"));
+    
+    // Clean up
+    delete[] result[0];
+    delete[] result[1];
+    delete[] result;
+}
+
+// =============================================================================
+// findPlugins Function Tests
+// =============================================================================
+
+// Verifies that findPlugins() returns an empty list when the directory does not exist
+TEST_F(PluginManagerTest, FindPlugins_ReturnsEmptyForNonExistentDir) {
+    QStringList plugins = PluginManager::findPlugins("/nonexistent/directory");
+    EXPECT_TRUE(plugins.isEmpty());
+}
+
+// Verifies that findPlugins() returns an empty list when the directory exists but contains no plugins
+TEST_F(PluginManagerTest, FindPlugins_ReturnsEmptyForEmptyDir) {
+    QTemporaryDir tempDir;
+    ASSERT_TRUE(tempDir.isValid());
+    
+    QStringList plugins = PluginManager::findPlugins(tempDir.path());
+    EXPECT_TRUE(plugins.isEmpty());
+}
+
+// Verifies that findPlugins() correctly filters plugin files by platform-specific extensions
+// (.dylib on macOS, .so on Linux, .dll on Windows) and ignores other file types
+TEST_F(PluginManagerTest, FindPlugins_FiltersByPlatformExtension) {
+    QTemporaryDir tempDir;
+    ASSERT_TRUE(tempDir.isValid());
+    
+    // Create test files with various extensions
+    QString correctExt;
+#ifdef Q_OS_WIN
+    correctExt = ".dll";
+#elif defined(Q_OS_MAC)
+    correctExt = ".dylib";
+#else
+    correctExt = ".so";
+#endif
+    
+    // Create a file with the correct extension
+    QFile correctFile(tempDir.filePath("plugin" + correctExt));
+    ASSERT_TRUE(correctFile.open(QIODevice::WriteOnly));
+    correctFile.close();
+    
+    // Create files with wrong extensions
+    QFile txtFile(tempDir.filePath("plugin.txt"));
+    ASSERT_TRUE(txtFile.open(QIODevice::WriteOnly));
+    txtFile.close();
+    
+    QFile noExtFile(tempDir.filePath("plugin"));
+    ASSERT_TRUE(noExtFile.open(QIODevice::WriteOnly));
+    noExtFile.close();
+    
+    QStringList plugins = PluginManager::findPlugins(tempDir.path());
+    
+    // Should only find the file with the correct extension
+    ASSERT_EQ(plugins.size(), 1);
+    EXPECT_TRUE(plugins[0].endsWith(correctExt));
+}
+
+// =============================================================================
+// loadPlugin Error Cases Tests
+// =============================================================================
+
+// Verifies that loadPlugin() returns false when attempting to load a plugin that is not in the known plugins list
+TEST_F(PluginManagerTest, LoadPlugin_ReturnsFalseForUnknownPlugin) {
+    bool result = PluginManager::loadPlugin("nonexistent_plugin");
+    EXPECT_FALSE(result);
+}
+
+// Verifies that loadPlugin() returns false when attempting to load a plugin that is already loaded in Local mode
+TEST_F(PluginManagerTest, LoadPlugin_ReturnsFalseForAlreadyLoadedLocal) {
+    // Ensure we're in Local mode (default, but being explicit)
+    LogosModeConfig::setMode(LogosMode::Local);
+    
+    // Simulate a loaded plugin in Local mode
+    g_known_plugins.insert("test_plugin", "/path/to/plugin");
+    g_loaded_plugins.append("test_plugin");
+    
+    // Create a dummy LogosAPI to simulate loaded plugin
+    g_local_plugin_apis.insert("test_plugin", nullptr);
+    
+    bool result = PluginManager::loadPlugin("test_plugin");
+    EXPECT_FALSE(result);
+}
+
+#ifndef Q_OS_IOS
+// Verifies that loadPlugin() returns false when attempting to load a plugin that is already running
+// in a separate process in Remote mode
+TEST_F(PluginManagerTest, LoadPlugin_ReturnsFalseForAlreadyLoadedRemote) {
+    // Set to Remote mode explicitly
+    LogosModeConfig::setMode(LogosMode::Remote);
+    
+    // Simulate a loaded plugin in Remote mode
+    g_known_plugins.insert("test_plugin", "/path/to/plugin");
+    g_loaded_plugins.append("test_plugin");
+    
+    // Create a dummy process to simulate loaded plugin
+    QProcess* dummyProcess = new QProcess();
+    g_plugin_processes.insert("test_plugin", dummyProcess);
+    
+    bool result = PluginManager::loadPlugin("test_plugin");
+    EXPECT_FALSE(result);
+}
+#endif
+
+// =============================================================================
+// unloadPlugin Error Cases Tests
+// =============================================================================
+
+#ifdef Q_OS_IOS
+// Verifies that unloadPlugin() is not supported on iOS (which doesn't support process-based plugins)
+TEST_F(PluginManagerTest, UnloadPlugin_NotSupportedOnIOS) {
+    bool result = PluginManager::unloadPlugin("any_plugin");
+    EXPECT_FALSE(result);
+}
+#else
+// Verifies that unloadPlugin() returns false when attempting to unload a plugin that is not loaded
+TEST_F(PluginManagerTest, UnloadPlugin_ReturnsFalseForNotLoaded) {
+    bool result = PluginManager::unloadPlugin("nonexistent_plugin");
+    EXPECT_FALSE(result);
+}
+
+// Verifies that unloadPlugin() returns false when a plugin is marked as loaded but has no associated process
+TEST_F(PluginManagerTest, UnloadPlugin_ReturnsFalseForNoProcess) {
+    // Add plugin to loaded list but not to processes
+    g_loaded_plugins.append("test_plugin");
+    
+    bool result = PluginManager::unloadPlugin("test_plugin");
+    EXPECT_FALSE(result);
+}
+#endif
+
+// =============================================================================
+// Mode-Dependent Functions Tests
+// =============================================================================
+
+// Verifies that loadStaticPlugins() returns 0 when no static plugins are registered
+// (requires Local mode for static plugin loading)
+TEST_F(PluginManagerTest, LoadStaticPlugins_ReturnsZeroWhenNoPlugins) {
+    // Set to Local mode (required for loadStaticPlugins)
+    LogosModeConfig::setMode(LogosMode::Local);
+    
+    // Should return 0 when no static plugins are registered
+    int result = PluginManager::loadStaticPlugins();
+    EXPECT_EQ(result, 0);
+}
+
+// Verifies that registerPluginInstance() returns false when given a null plugin instance pointer
+// (requires Local mode for direct plugin registration)
+TEST_F(PluginManagerTest, RegisterPluginInstance_ReturnsFalseForNullInstance) {
+    // Set to Local mode (required for registerPluginInstance)
+    LogosModeConfig::setMode(LogosMode::Local);
+    
+    bool result = PluginManager::registerPluginInstance("test_plugin", nullptr);
+    EXPECT_FALSE(result);
+}
+
+// Verifies that registerPluginByName() returns false when attempting to register a static plugin
+// that doesn't exist in the static plugin instances list (requires Local mode)
+TEST_F(PluginManagerTest, RegisterPluginByName_ReturnsFalseForUnfoundPlugin) {
+    // Set to Local mode (required for registerPluginByName)
+    LogosModeConfig::setMode(LogosMode::Local);
+    
+    // Try to register a non-existent plugin
+    bool result = PluginManager::registerPluginByName("nonexistent_plugin");
+    EXPECT_FALSE(result);
+}

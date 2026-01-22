@@ -9,6 +9,7 @@ get_filename_component(LOGOS_CPP_SDK_ROOT "${LOGOS_CPP_SDK_ROOT}" ABSOLUTE)
 
 add_executable(logos_core_tests
     test_app_lifecycle.cpp
+    test_plugin_manager.cpp
 )
 
 target_link_libraries(logos_core_tests PRIVATE
