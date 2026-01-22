@@ -7,6 +7,7 @@
 #include <QDebug>
 #include <QRemoteObjectRegistryHost>
 #include <QMetaType>
+#include <cassert>
 #ifndef Q_OS_IOS
 #include <QProcess>
 #endif
@@ -44,32 +45,21 @@ namespace AppLifecycle {
     }
 
     void setPluginsDir(const char* plugins_dir) {
-        if (!plugins_dir) {
-            qWarning() << "setPluginsDir: plugins_dir is null";
-            return;
-        }
+        assert(plugins_dir != nullptr);
         g_plugins_dirs.clear();
         g_plugins_dirs.append(QString(plugins_dir));
         qDebug() << "Custom plugins directory set to:" << g_plugins_dirs.first();
     }
 
     void addPluginsDir(const char* plugins_dir) {
-        if (!plugins_dir) {
-            qWarning() << "addPluginsDir: plugins_dir is null";
-            return;
-        }
+        assert(plugins_dir != nullptr);
         QString dir = QString(plugins_dir);
-        if (g_plugins_dirs.contains(dir)) {
-            return;
-        }
+        if (g_plugins_dirs.contains(dir)) return;
         g_plugins_dirs.append(dir);
         qDebug() << "Added plugins directory:" << dir;
     }
 
     void start() {
-        qDebug() << "Simple Plugin Example";
-        qDebug() << "Current directory:" << QDir::currentPath();
-        
         // Clear the list of loaded plugins before loading new ones
         g_loaded_plugins.clear();
         
@@ -126,10 +116,9 @@ namespace AppLifecycle {
     }
 
     int exec() {
-        if (g_app) {
-            return g_app->exec();
-        }
-        return -1;
+        // assert(g_app != nullptr);
+        if (!g_app) return -1;
+        return g_app->exec();
     }
 
     void cleanup() {
@@ -187,9 +176,7 @@ namespace AppLifecycle {
     }
 
     void processEvents() {
-        if (!g_app) {
-            return;
-        }
+        if (!g_app) return;
         g_app->processEvents();
     }
 

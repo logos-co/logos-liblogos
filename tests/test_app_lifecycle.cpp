@@ -203,13 +203,6 @@ TEST_F(AppLifecycleTest, AddPluginsDir_NoDuplicates) {
     EXPECT_EQ(AppLifecycle::getPluginsDirs().size(), 1);
 }
 
-// Verifies that addPluginsDir(nullptr) is safely ignored
-TEST_F(AppLifecycleTest, AddPluginsDir_NullIgnored) {
-    AppLifecycle::addPluginsDir(nullptr);
-    
-    EXPECT_TRUE(AppLifecycle::getPluginsDirs().isEmpty());
-}
-
 // =============================================================================
 // Cleanup Tests
 // =============================================================================
