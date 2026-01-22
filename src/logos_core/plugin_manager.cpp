@@ -77,6 +77,81 @@ namespace PluginManager {
         return pluginName;
     }
 
+    bool loadPluginLocal(const QString &pluginName, const QString &pluginPath) {
+        qDebug() << "Loading plugin:" << pluginName << "from path:" << pluginPath << "in-process (Local mode)";
+
+        // Check if plugin is already loaded
+        if (g_local_plugin_apis.contains(pluginName)) {
+            qWarning() << "Plugin already loaded (Local mode):" << pluginName;
+            return false;
+        }
+
+        // Load the plugin using QPluginLoader
+        QPluginLoader loader(pluginPath);
+        QObject* plugin = loader.instance();
+
+        if (!plugin) {
+            qCritical() << "Failed to load plugin (Local mode):" << loader.errorString();
+            return false;
+        }
+
+        qDebug() << "Plugin loaded successfully (Local mode)";
+
+        // Cast to the base PluginInterface
+        PluginInterface* basePlugin = qobject_cast<PluginInterface*>(plugin);
+        if (!basePlugin) {
+            qCritical() << "Plugin does not implement the PluginInterface (Local mode)";
+            return false;
+        }
+
+        // Verify that the plugin name matches
+        if (pluginName != basePlugin->name()) {
+            qWarning() << "Plugin name mismatch! Expected:" << pluginName << "Actual:" << basePlugin->name();
+        }
+
+        qDebug() << "Plugin name:" << basePlugin->name();
+        qDebug() << "Plugin version:" << basePlugin->version();
+
+        // Initialize LogosAPI for this plugin
+        LogosAPI* logos_api = new LogosAPI(pluginName, plugin);
+        qDebug() << "LogosAPI initialized for plugin (Local mode):" << pluginName;
+
+        // Register the plugin for access using LogosAPI Provider
+        // In Local mode, this uses PluginRegistry instead of QRemoteObjects
+        bool success = logos_api->getProvider()->registerObject(basePlugin->name(), plugin);
+        if (!success) {
+            qCritical() << "Failed to register plugin (Local mode):" << basePlugin->name();
+            delete logos_api;
+            return false;
+        }
+
+        qDebug() << "Plugin registered with PluginRegistry (Local mode):" << basePlugin->name();
+
+        // Generate and save auth token
+        QUuid authToken = QUuid::createUuid();
+        QString authTokenString = authToken.toString(QUuid::WithoutBraces);
+        qDebug() << "Generated auth token (Local mode):" << authTokenString;
+
+        // Save auth tokens for core access
+        logos_api->getTokenManager()->saveToken("core", authTokenString);
+        logos_api->getTokenManager()->saveToken("core_manager", authTokenString);
+        logos_api->getTokenManager()->saveToken("capability_module", authTokenString);
+        qDebug() << "Auth tokens saved for core access (Local mode)";
+
+        // Also save the plugin token in the global TokenManager
+        TokenManager& tokenManager = TokenManager::instance();
+        tokenManager.saveToken(pluginName, authTokenString);
+
+        // Store the LogosAPI instance for cleanup
+        g_local_plugin_apis.insert(pluginName, logos_api);
+
+        // Add the plugin name to our loaded plugins list
+        g_loaded_plugins.append(pluginName);
+
+        qDebug() << "Plugin" << pluginName << "is now running in-process (Local mode)";
+        return true;
+    }
+
     bool loadPlugin(const QString &pluginName) {
         qDebug() << "Attempting to load plugin by name:" << pluginName;
 
@@ -88,86 +163,9 @@ namespace PluginManager {
         QString pluginPath = g_known_plugins.value(pluginName);
 
         if (LogosModeConfig::isLocal()) {
-            qDebug() << "Loading plugin:" << pluginName << "from path:" << pluginPath << "in-process (Local mode)";
-
-            // Check if plugin is already loaded
-            if (g_local_plugin_apis.contains(pluginName)) {
-                qWarning() << "Plugin already loaded (Local mode):" << pluginName;
-                return false;
-            }
-
-            // Load the plugin using QPluginLoader
-            QPluginLoader loader(pluginPath);
-            QObject* plugin = loader.instance();
-
-            if (!plugin) {
-                qCritical() << "Failed to load plugin (Local mode):" << loader.errorString();
-                return false;
-            }
-
-            qDebug() << "Plugin loaded successfully (Local mode)";
-
-            // Cast to the base PluginInterface
-            PluginInterface* basePlugin = qobject_cast<PluginInterface*>(plugin);
-            if (!basePlugin) {
-                qCritical() << "Plugin does not implement the PluginInterface (Local mode)";
-                return false;
-            }
-
-            // Verify that the plugin name matches
-            if (pluginName != basePlugin->name()) {
-                qWarning() << "Plugin name mismatch! Expected:" << pluginName << "Actual:" << basePlugin->name();
-            }
-
-            qDebug() << "Plugin name:" << basePlugin->name();
-            qDebug() << "Plugin version:" << basePlugin->version();
-
-            // Initialize LogosAPI for this plugin
-            LogosAPI* logos_api = new LogosAPI(pluginName, plugin);
-            qDebug() << "LogosAPI initialized for plugin (Local mode):" << pluginName;
-
-            // Register the plugin for access using LogosAPI Provider
-            // In Local mode, this uses PluginRegistry instead of QRemoteObjects
-            bool success = logos_api->getProvider()->registerObject(basePlugin->name(), plugin);
-            if (!success) {
-                qCritical() << "Failed to register plugin (Local mode):" << basePlugin->name();
-                delete logos_api;
-                return false;
-            }
-
-            qDebug() << "Plugin registered with PluginRegistry (Local mode):" << basePlugin->name();
-
-            // Generate and save auth token
-            QUuid authToken = QUuid::createUuid();
-            QString authTokenString = authToken.toString(QUuid::WithoutBraces);
-            qDebug() << "Generated auth token (Local mode):" << authTokenString;
-
-            // Save auth tokens for core access
-            logos_api->getTokenManager()->saveToken("core", authTokenString);
-            logos_api->getTokenManager()->saveToken("core_manager", authTokenString);
-            logos_api->getTokenManager()->saveToken("capability_module", authTokenString);
-            qDebug() << "Auth tokens saved for core access (Local mode)";
-
-            // Also save the plugin token in the global TokenManager
-            TokenManager& tokenManager = TokenManager::instance();
-            tokenManager.saveToken(pluginName, authTokenString);
-
-            // Store the LogosAPI instance for cleanup
-            g_local_plugin_apis.insert(pluginName, logos_api);
-
-            // Add the plugin name to our loaded plugins list
-            g_loaded_plugins.append(pluginName);
-
-            qDebug() << "Plugin" << pluginName << "is now running in-process (Local mode)";
-            return true;
+            return loadPluginLocal(pluginName, pluginPath);
         }
 
-    #ifdef Q_OS_IOS
-        // iOS doesn't support spawning child processes
-        qWarning() << "Plugin loading via separate processes not supported on iOS:" << pluginName;
-        qWarning() << "Consider using Local mode with LogosModeConfig::setMode(LogosMode::Local)";
-        return false;
-    #else
         qDebug() << "Loading plugin:" << pluginName << "from path:" << pluginPath << "in separate process";
 
         // Check if plugin is already loaded
@@ -187,6 +185,7 @@ namespace PluginManager {
         if (logosHostPath.isEmpty()) {
             logosHostPath = QDir::cleanPath(QCoreApplication::applicationDirPath() + "/logos_host");
         }
+
     #ifdef Q_OS_WIN
         if (!logosHostPath.endsWith(".exe")) {
             logosHostPath += ".exe";
@@ -400,7 +399,6 @@ namespace PluginManager {
         qDebug() << "Remote registry URL for this plugin: local:logos_" << pluginName;
         
         return true;
-    #endif // Q_OS_IOS
     }
 
     void loadAndProcessPlugin(const QString &pluginPath) {
