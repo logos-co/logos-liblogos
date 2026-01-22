@@ -1,7 +1,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 
-#include "../src/logos_core.h"
+#include "../src/logos_core/logos_core.h"
 
 static void print_string_array(const char* title, char** arr) {
 	printf("%s\n", title);

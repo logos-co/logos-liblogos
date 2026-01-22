@@ -29,6 +29,7 @@
           lib = import ./nix/lib.nix { inherit pkgs common build; };
           bin = import ./nix/bin.nix { inherit pkgs common build lib; };
           include = import ./nix/include.nix { inherit pkgs common src logosSdk; };
+          tests = import ./nix/tests.nix { inherit pkgs common build; };
           
           # Combined package
           liblogos = pkgs.symlinkJoin {
@@ -41,6 +42,7 @@
           logos-liblogos-bin = bin;
           logos-liblogos-lib = lib;
           logos-liblogos-include = include;
+          logos-liblogos-tests = tests;
           
           # Combined output
           logos-liblogos = liblogos;

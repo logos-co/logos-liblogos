@@ -1,56 +1,16 @@
-#include <QCoreApplication>
+#include "plugin_initializer.h"
+#include <QLocalServer>
+#include <QLocalSocket>
 #include <QPluginLoader>
 #include <QObject>
 #include <QDebug>
-#include <QCommandLineParser>
-#include <QRemoteObjectRegistryHost>
-#include <QLocalSocket>
-#include <QLocalServer>
-#include "../interface.h"
+#include "../common/interface.h"
 #include "logos_api.h"
 #include "logos_api_provider.h"
 #include "token_manager.h"
 
-int main(int argc, char *argv[])
+QString receiveAuthToken(const QString& pluginName)
 {
-    QCoreApplication app(argc, argv);
-    app.setApplicationName("logos_host");
-    app.setApplicationVersion("1.0");
-
-    // Setup command line parser
-    QCommandLineParser parser;
-    parser.setApplicationDescription("Logos host for loading plugins in separate processes");
-    parser.addHelpOption();
-    parser.addVersionOption();
-
-    // Add plugin name option
-    QCommandLineOption pluginNameOption(QStringList() << "n" << "name",
-                                       "Name of the plugin to load",
-                                       "plugin_name");
-    parser.addOption(pluginNameOption);
-
-    // Add plugin path option
-    QCommandLineOption pluginPathOption(QStringList() << "p" << "path",
-                                       "Path to the plugin file",
-                                       "plugin_path");
-    parser.addOption(pluginPathOption);
-
-    // Process the command line arguments
-    parser.process(app);
-
-    // Get plugin name and path
-    QString pluginName = parser.value(pluginNameOption);
-    QString pluginPath = parser.value(pluginPathOption);
-
-    if (pluginName.isEmpty() || pluginPath.isEmpty()) {
-        qCritical() << "Both plugin name and path must be specified";
-        qCritical() << "Usage:" << argv[0] << "--name <plugin_name> --path <plugin_path>";
-        return 1;
-    }
-
-    qDebug() << "Logos host starting for plugin:" << pluginName;
-    qDebug() << "Plugin path:" << pluginPath;
-
     // Set up IPC server to receive auth token securely
     QString socketName = QString("logos_token_%1").arg(pluginName);
     QLocalServer* tokenServer = new QLocalServer();
@@ -60,7 +20,7 @@ int main(int argc, char *argv[])
 
     if (!tokenServer->listen(socketName)) {
         qCritical() << "Failed to start token server:" << tokenServer->errorString();
-        return 1;
+        return QString();
     }
 
     qDebug() << "Token server started, waiting for auth token...";
@@ -78,22 +38,28 @@ int main(int argc, char *argv[])
     } else {
         qCritical() << "Timeout waiting for auth token";
         tokenServer->deleteLater();
-        return 1;
+        return QString();
     }
 
     tokenServer->deleteLater();
 
     if (authToken.isEmpty()) {
         qCritical() << "No auth token received";
-        return 1;
+        return QString();
     }
+
+    return authToken;
+}
+
+PluginInterface* loadPlugin(const QString& pluginPath, const QString& expectedName, QPluginLoader& loader)
+{
     // Load the plugin
-    QPluginLoader loader(pluginPath);
+    loader.setFileName(pluginPath);
     QObject *plugin = loader.instance();
 
     if (!plugin) {
         qCritical() << "Failed to load plugin:" << loader.errorString();
-        return 1;
+        return nullptr;
     }
 
     qDebug() << "Plugin loaded successfully";
@@ -103,23 +69,29 @@ int main(int argc, char *argv[])
     if (!basePlugin) {
         qCritical() << "Plugin does not implement the PluginInterface";
         delete plugin;
-        return 1;
+        return nullptr;
     }
 
     // Verify that the plugin name matches
-    if (pluginName != basePlugin->name()) {
-        qWarning() << "Plugin name mismatch! Expected:" << pluginName << "Actual:" << basePlugin->name();
+    if (expectedName != basePlugin->name()) {
+        qWarning() << "Plugin name mismatch! Expected:" << expectedName << "Actual:" << basePlugin->name();
     }
 
     qDebug() << "Plugin name:" << basePlugin->name();
     qDebug() << "Plugin version:" << basePlugin->version();
 
+    return basePlugin;
+}
+
+LogosAPI* initializeLogosAPI(const QString& pluginName, QObject* plugin, 
+                              PluginInterface* basePlugin, const QString& authToken)
+{
     // Initialize LogosAPI for this plugin
     LogosAPI* logos_api = new LogosAPI(pluginName, plugin);
 
     if (!logos_api) {
         qCritical() << "Failed to create LogosAPI instance";
-        return 1;
+        return nullptr;
     }
 
     qDebug() << "LogosAPI initialized for plugin:" << pluginName;
@@ -137,17 +109,28 @@ int main(int argc, char *argv[])
         qCritical() << "Failed to register plugin for remote access:" << basePlugin->name();
         delete plugin;
         delete logos_api;
-        return 1;
+        return nullptr;
     }
 
-    qDebug() << "Logos host ready, entering event loop...";
-    
-    // Run the application event loop
-    int result = app.exec();
+    return logos_api;
+}
 
-    // Cleanup
-    delete logos_api;
-    qDebug() << "Logos host shutting down";
+LogosAPI* setupPlugin(const QString& pluginName, const QString& pluginPath, QPluginLoader& loader)
+{
+    // 1. Receive auth token securely
+    QString authToken = receiveAuthToken(pluginName);
+    if (authToken.isEmpty()) {
+        return nullptr;
+    }
 
-    return result;
-} 
+    // 2. Load and validate plugin
+    PluginInterface* basePlugin = loadPlugin(pluginPath, pluginName, loader);
+    if (!basePlugin) {
+        return nullptr;
+    }
+
+    // 3. Initialize LogosAPI and register plugin
+    LogosAPI* logos_api = initializeLogosAPI(pluginName, loader.instance(), 
+                                              basePlugin, authToken);
+    return logos_api;
+}

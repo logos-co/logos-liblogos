@@ -33,6 +33,41 @@ nix build '.#logos-liblogos-lib'
 
 # Build only the headers (outputs to /include)
 nix build '.#logos-liblogos-include'
+
+# Build and run tests
+nix build '.#logos-liblogos-tests'
+```
+
+#### Running Tests
+
+**Using Nix (Recommended):**
+
+```bash
+# Build and run tests (tests run automatically during build)
+nix build '.#logos-liblogos-tests'
+
+# To run tests manually after building:
+./result/bin/logos_core_tests
+
+# Run specific tests
+./result/bin/logos_core_tests --gtest_filter=AppLifecycleTest.*
+
+# List all available tests
+./result/bin/logos_core_tests --gtest_list_tests
+```
+
+**Manual Build:**
+
+```bash
+# From the build directory
+cd build-local
+ninja logos_core_tests
+
+# Run tests
+./bin/logos_core_tests
+
+# Or use CTest
+ctest --output-on-failure
 ```
 
 #### Development Shell
@@ -60,6 +95,7 @@ The nix build system is organized into modular files in the `/nix` directory:
 - `nix/bin.nix` - Extracts binaries (includes libraries for runtime linking)
 - `nix/lib.nix` - Extracts libraries only
 - `nix/include.nix` - Header installation
+- `nix/tests.nix` - Test suite build and execution
 
 **Note:** The `logos-liblogos-bin` package includes both binaries and their required libraries to ensure proper runtime linking. This is necessary because the binaries dynamically link against the logos libraries.
 
