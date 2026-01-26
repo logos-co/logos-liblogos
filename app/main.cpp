@@ -1,13 +1,20 @@
+#include <QCoreApplication>
 #include "logos_core.h"
+#include "command_line_parser.h"
 
-int main(int argc, char *argv[])
-{
-    // Initialize the logos core library
+int main(int argc, char *argv[]) {
+    QCoreApplication app(argc, argv);
+    app.setApplicationName("logoscore");
+    app.setApplicationVersion("1.0");
+
+    CoreArgs args = parseCommandLineArgs(app);
+    if (!args.valid) {
+        return 1;
+    }
+
     logos_core_init(argc, argv);
     
-    // Start the logos core functionality
     logos_core_start();
     
-    // Run the event loop and return the result
     return logos_core_exec();
 } 

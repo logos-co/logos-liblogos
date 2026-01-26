@@ -61,6 +61,7 @@ set(LOGOS_CORE_SOURCES
 # Define the host application sources
 set(HOST_SOURCES
     ${CMAKE_SOURCE_DIR}/app/main.cpp
+    ${CMAKE_SOURCE_DIR}/app/command_line_parser.cpp
 )
 
 # Define the logos host sources
@@ -85,7 +86,7 @@ endif()
 target_compile_definitions(logos_core PRIVATE LOGOS_CORE_LIBRARY)
 
 # Link Qt libraries and SDK to the library
-target_link_libraries(logos_core PRIVATE 
+target_link_libraries(logos_core PUBLIC 
     Qt${QT_VERSION_MAJOR}::Core 
     Qt${QT_VERSION_MAJOR}::RemoteObjects
     logos_sdk
@@ -139,9 +140,9 @@ if(NOT CMAKE_SYSTEM_NAME STREQUAL "iOS")
 
     # Include directories for the host application
     target_include_directories(logoscore PRIVATE
+        ${CMAKE_SOURCE_DIR}/app
         ${CMAKE_CURRENT_SOURCE_DIR}
         ${CMAKE_CURRENT_SOURCE_DIR}/logos_core
-        ${Qt${QT_VERSION_MAJOR}_INCLUDE_DIRS}
     )
 
     # Create the logos host application
