@@ -60,7 +60,7 @@ set(LOGOS_CORE_SOURCES
 
 # Define the host application sources
 set(HOST_SOURCES
-    logos_core/main.cpp
+    ${CMAKE_SOURCE_DIR}/app/main.cpp
 )
 
 # Define the logos host sources
