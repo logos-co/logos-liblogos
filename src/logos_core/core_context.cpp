@@ -4,6 +4,7 @@
 #include <QHash>
 #include <QList>
 #include <QPair>
+#include <QJsonObject>
 #include <QRemoteObjectRegistryHost>
 #ifndef Q_OS_IOS
 #include <QProcess>
@@ -25,6 +26,9 @@ QStringList g_loaded_plugins;
 
 // Hash to store known plugin names and paths
 QHash<QString, QString> g_known_plugins;
+
+// Hash to store plugin metadata (name -> metadata JSON object)
+QHash<QString, QJsonObject> g_plugin_metadata;
 
 // Hash to store plugin processes
 #ifndef Q_OS_IOS

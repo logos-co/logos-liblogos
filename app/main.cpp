@@ -2,6 +2,7 @@
 #include <QDebug>
 #include "logos_core.h"
 #include "command_line_parser.h"
+#include "plugin_manager.h"
 
 int main(int argc, char *argv[]) {
     QCoreApplication app(argc, argv);
@@ -21,12 +22,22 @@ int main(int argc, char *argv[]) {
     
     logos_core_start();
     
-    // Load modules specified via --load-modules in order
-    for (const QString& moduleName : args.loadModules) {
-        QString trimmed = moduleName.trimmed();
-        if (!trimmed.isEmpty()) {
-            if (!logos_core_load_plugin(trimmed.toUtf8().constData())) {
-                qWarning() << "Failed to load module:" << trimmed;
+    if (!args.loadModules.isEmpty()) {
+        QStringList trimmedModules;
+        for (const QString& moduleName : args.loadModules) {
+            QString trimmed = moduleName.trimmed();
+            if (!trimmed.isEmpty()) {
+                trimmedModules.append(trimmed);
+            }
+        }
+        
+        QStringList resolvedModules = PluginManager::resolveDependencies(trimmedModules);
+        
+        qDebug() << "Loading modules with resolved dependencies:" << resolvedModules;
+        
+        for (const QString& moduleName : resolvedModules) {
+            if (!logos_core_load_plugin(moduleName.toUtf8().constData())) {
+                qWarning() << "Failed to load module:" << moduleName;
             }
         }
     }

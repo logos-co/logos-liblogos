@@ -70,9 +70,11 @@ namespace PluginManager {
             }
         }
 
-        // Store the plugin in the known plugins hash
         g_known_plugins.insert(pluginName, pluginPath);
         qDebug() << "Added to known plugins: " << pluginName << " -> " << pluginPath;
+        
+        g_plugin_metadata.insert(pluginName, customMetadata);
+        qDebug() << "Stored metadata for plugin:" << pluginName;
         
         return pluginName;
     }
@@ -852,12 +854,107 @@ namespace PluginManager {
         return g_known_plugins.contains(name);
     }
 
+    QStringList resolveDependencies(const QStringList& requestedModules) {
+        qDebug() << "Resolving dependencies for modules:" << requestedModules;
+        
+        QSet<QString> modulesToLoad;
+        QStringList queue = requestedModules;
+        QStringList missingDependencies;
+        
+        while (!queue.isEmpty()) {
+            QString moduleName = queue.takeFirst();
+            
+            if (modulesToLoad.contains(moduleName)) {
+                continue;
+            }
+            
+            if (!g_known_plugins.contains(moduleName)) {
+                qWarning() << "Module not found in known plugins:" << moduleName;
+                missingDependencies.append(moduleName);
+                continue;
+            }
+            
+            modulesToLoad.insert(moduleName);
+            
+            if (g_plugin_metadata.contains(moduleName)) {
+                QJsonObject metadata = g_plugin_metadata.value(moduleName);
+                QJsonArray deps = metadata.value("dependencies").toArray();
+                for (const QJsonValue& dep : deps) {
+                    QString depName = dep.toString();
+                    if (!depName.isEmpty() && !modulesToLoad.contains(depName)) {
+                        queue.append(depName);
+                    }
+                }
+            }
+        }
+        
+        if (!missingDependencies.isEmpty()) {
+            qWarning() << "Missing dependencies detected:" << missingDependencies;
+        }
+        
+        QHash<QString, QStringList> dependents;
+        QHash<QString, int> inDegree;
+        
+        for (const QString& moduleName : modulesToLoad) {
+            if (!inDegree.contains(moduleName)) {
+                inDegree[moduleName] = 0;
+            }
+            
+            if (g_plugin_metadata.contains(moduleName)) {
+                QJsonObject metadata = g_plugin_metadata.value(moduleName);
+                QJsonArray deps = metadata.value("dependencies").toArray();
+                for (const QJsonValue& dep : deps) {
+                    QString depName = dep.toString();
+                    if (!depName.isEmpty() && modulesToLoad.contains(depName)) {
+                        inDegree[moduleName]++;
+                        dependents[depName].append(moduleName);
+                    }
+                }
+            }
+        }
+        
+        QStringList result;
+        QStringList zeroInDegree;
+        
+        for (const QString& moduleName : modulesToLoad) {
+            if (inDegree.value(moduleName, 0) == 0) {
+                zeroInDegree.append(moduleName);
+            }
+        }
+        
+        while (!zeroInDegree.isEmpty()) {
+            QString moduleName = zeroInDegree.takeFirst();
+            result.append(moduleName);
+            
+            for (const QString& dependent : dependents.value(moduleName)) {
+                inDegree[dependent]--;
+                if (inDegree[dependent] == 0) {
+                    zeroInDegree.append(dependent);
+                }
+            }
+        }
+        
+        if (result.size() < modulesToLoad.size()) {
+            QStringList cycleModules;
+            for (const QString& moduleName : modulesToLoad) {
+                if (!result.contains(moduleName)) {
+                    cycleModules.append(moduleName);
+                }
+            }
+            qCritical() << "Circular dependency detected involving modules:" << cycleModules;
+        }
+        
+        qDebug() << "Resolved load order:" << result;
+        return result;
+    }
+
     void clearState() {
         qDebug() << "Clearing all plugin state";
         
         g_plugins_dirs.clear();
         g_loaded_plugins.clear();
         g_known_plugins.clear();
+        g_plugin_metadata.clear();
         
         #ifndef Q_OS_IOS
         // Terminate and clean up all plugin processes

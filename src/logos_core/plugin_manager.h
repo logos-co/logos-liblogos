@@ -63,6 +63,11 @@ namespace PluginManager {
     bool isPluginLoaded(const QString& name);
     bool isPluginKnown(const QString& name);
     
+    // Resolve dependencies for a list of modules
+    // Returns the modules in load order (dependencies first), including all transitive dependencies
+    // Handles circular dependency detection and missing dependency warnings
+    QStringList resolveDependencies(const QStringList& requestedModules);
+    
     // State management
     // Clear all plugin state (for shutdown/reinitialization)
     void clearState();

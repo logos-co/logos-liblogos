@@ -160,9 +160,9 @@ TEST_F(CLITest, LoadModulesOption_LoadsModules) {
     int exitCode = runLogoscoreWithTimeout("--load-modules fake_module_xyz", &output);
     
     // Check that it actually tried to load the module (and failed since it doesn't exist)
-    // The warning comes from main.cpp when logos_core_load_plugin fails
-    EXPECT_NE(output.find("Failed to load module:"), std::string::npos)
-        << "Should see warning that module failed to load";
+    // The warning comes from dependency resolution when the module isn't in known plugins
+    EXPECT_NE(output.find("Module not found in known plugins:"), std::string::npos)
+        << "Should see warning that module was not found";
     EXPECT_NE(output.find("fake_module_xyz"), std::string::npos)
         << "Should see the module name in output";
 }
@@ -174,8 +174,8 @@ TEST_F(CLITest, LoadModulesShortAlias_Works) {
     int exitCode = runLogoscoreWithTimeout("-l fake_module_alias", &output);
     
     // Check that -l alias actually attempts to load the module (same behavior as --load-modules)
-    EXPECT_NE(output.find("Failed to load module:"), std::string::npos)
-        << "Should see warning that module failed to load";
+    EXPECT_NE(output.find("Module not found in known plugins:"), std::string::npos)
+        << "Should see warning that module was not found";
     EXPECT_NE(output.find("fake_module_alias"), std::string::npos)
         << "Should see the module name in output";
 }
