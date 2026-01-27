@@ -24,8 +24,10 @@
 #include "logos_api_client.h"
 #include "token_manager.h"
 #include "logos_mode.h"
+#include "signal.h"
 
 namespace PluginManager {
+    bool is_shutting_down = false;
 
     QString processPlugin(const QString &pluginPath) {
         qDebug() << "\n------------------------------------------";
@@ -334,11 +336,32 @@ namespace PluginManager {
                                     << "Exit code:" << exitCode 
                                     << "Exit status:" << exitStatus;
                             
-                            // TODO: This is temporary and later needs a mechanism to restart the process
-                            if (exitStatus == QProcess::CrashExit) {
-                                qCritical() << "Plugin process crashed:" << pluginName << "- terminating core with error";
-                                exit(1);
-                            }
+                        if (exitStatus == QProcess::NormalExit) {
+                            qInfo() << "Plugin process finished normally for" << pluginName << "exitCode=" << exitCode;
+                            return;
+                        }
+#ifdef Q_OS_WIN
+                        // Windows does not have POSIX signals like SIGTERM/SIGINT.
+                        // So we are not able to distinguish between graceful and crash exits easily.
+                        // If it is during shutdown, we should not exit in order to clean up the process.
+                        if (is_shutting_down) {
+                            qInfo() << "Plugin process terminated during shutdown for" << pluginName;
+                         // TODO: This is temporary and later needs a mechanism to restart the process
+                        } else if (exitStatus == QProcess::CrashExit) {
+                            qCritical() << "Plugin process crashed:" << pluginName << "- terminating core with error";
+                            exit(1);
+                         }
+
+#else
+                        if (exitStatus == QProcess::CrashExit &&
+                            (exitCode == SIGTERM || exitCode == SIGINT)) {
+                            qInfo() << "Plugin process terminated gracefully for" << pluginName;
+                         // TODO: This is temporary and later needs a mechanism to restart the process
+                        } else if (exitStatus == QProcess::CrashExit) {
+                            qCritical() << "Plugin process crashed:" << pluginName << "- terminating core with error";
+                            exit(1);
+                         }
+#endif
                             
                             // Remove from our tracking lists
                             g_plugin_processes.remove(pluginName);
@@ -351,8 +374,11 @@ namespace PluginManager {
         // Connect to error signal
         QObject::connect(process, &QProcess::errorOccurred,
                         [pluginName](QProcess::ProcessError error) {
-                            qCritical() << "Plugin process error for" << pluginName << ":" << error;
-                            
+                            if (is_shutting_down) {
+                                qInfo() << "Plugin process error during shutdown for" << pluginName << ":" << error;
+                                return;
+                            }
+
                             // TODO: This is temporary and later needs a mechanism to restart the process
                             if (error == QProcess::Crashed) {
                                 qCritical() << "Plugin process crashed:" << pluginName << "- terminating core with error";
@@ -860,6 +886,7 @@ namespace PluginManager {
         g_known_plugins.clear();
         
         #ifndef Q_OS_IOS
+        is_shutting_down = true;
         // Terminate and clean up all plugin processes
         for (auto it = g_plugin_processes.begin(); it != g_plugin_processes.end(); ++it) {
             QProcess* process = it.value();
@@ -870,6 +897,7 @@ namespace PluginManager {
             }
         }
         g_plugin_processes.clear();
+        is_shutting_down = false;
         #endif
         
         // Clean up all local plugin API instances
