@@ -123,6 +123,35 @@ Then build:
 
 The built libraries will be available in `build/lib/` and binaries in `build/bin/`.
 
+## Usage
+
+### logoscore Command
+
+The `logoscore` binary is the main entry point for the Logos Core application framework.
+
+#### Command Line Options
+
+- `--modules-dir <path>`, `-m <path>` - Specify a custom directory to scan for modules. If not provided, defaults to `../modules` relative to the application binary.
+
+- `--help`, `-h` - Display help information and available options.
+
+- `--version` - Display version information.
+
+#### Examples
+
+```bash
+# Run with default modules directory
+./result/bin/logoscore
+
+# Run with a custom modules directory
+./result/bin/logoscore --modules-dir /path/to/custom/modules
+# Or using the short form
+./result/bin/logoscore -m /path/to/custom/modules
+
+# Display help
+./result/bin/logoscore --help
+```
+
 ### Requirements
 
 #### Build Tools
