@@ -133,6 +133,8 @@ The `logoscore` binary is the main entry point for the Logos Core application fr
 
 - `--modules-dir <path>`, `-m <path>` - Specify a custom directory to scan for modules. If not provided, defaults to `../modules` relative to the application binary.
 
+- `--load-modules <modules>`, `-l <modules>` - Comma-separated list of modules to load in order. Modules are loaded after the application starts.
+
 - `--help`, `-h` - Display help information and available options.
 
 - `--version` - Display version information.
@@ -147,6 +149,14 @@ The `logoscore` binary is the main entry point for the Logos Core application fr
 ./result/bin/logoscore --modules-dir /path/to/custom/modules
 # Or using the short form
 ./result/bin/logoscore -m /path/to/custom/modules
+
+# Load specific modules
+./result/bin/logoscore --load-modules module1,module2,module3
+# Or using the short form
+./result/bin/logoscore -l module1,module2,module3
+
+# Combine options: custom modules directory and load specific modules
+./result/bin/logoscore -m /path/to/modules -l module1,module2
 
 # Display help
 ./result/bin/logoscore --help

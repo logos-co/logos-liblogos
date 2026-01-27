@@ -97,6 +97,23 @@ protected:
             return WEXITSTATUS(status);
         }
     }
+    
+    // Helper to run logoscore with timeout (for commands that run event loop)
+    // Uses timeout command to kill process after specified seconds
+    int runLogoscoreWithTimeout(const std::string& args, std::string* output, int timeoutSecs = 2) {
+        std::string cmd = "timeout " + std::to_string(timeoutSecs) + " " + logoscoreBinary.string() + " " + args + " 2>&1";
+        FILE* pipe = popen(cmd.c_str(), "r");
+        if (!pipe) return -1;
+        
+        char buffer[128];
+        while (fgets(buffer, sizeof(buffer), pipe)) {
+            *output += buffer;
+        }
+        int status = pclose(pipe);
+        // timeout command returns 124 when it times out (which is expected for event loop)
+        // We'll treat timeout as success for our purposes since we got the output
+        return WEXITSTATUS(status);
+    }
 };
 
 // Test: logoscore --help
@@ -123,28 +140,57 @@ TEST_F(CLITest, VersionCommand) {
     EXPECT_FALSE(output.empty()) << "Version output should not be empty";
 }
 
-// Test: --modules-dir in help text
-// Specifically verifies that the --modules-dir option appears with its description
-TEST_F(CLITest, ModulesDirOption_InHelp) {
+// Test: --modules-dir option actually sets the custom modules directory
+// Verifies that the --modules-dir option works by checking the output
+TEST_F(CLITest, ModulesDirOption_SetDirectory) {
     std::string output;
-    int exitCode = runLogoscore("--help", &output);
+    int exitCode = runLogoscoreWithTimeout("--modules-dir /tmp/test_modules", &output);
     
-    EXPECT_EQ(exitCode, 0);
-    EXPECT_NE(output.find("--modules-dir"), std::string::npos) << "--modules-dir option should be in help";
-    EXPECT_NE(output.find("Directory to scan for modules"), std::string::npos) 
-        << "Help should contain the --modules-dir description";
+    // Check that the directory was actually set (qDebug output from app_lifecycle.cpp)
+    EXPECT_NE(output.find("Custom plugins directory set to:"), std::string::npos) 
+        << "Should see debug message that custom directory was set";
+    EXPECT_NE(output.find("/tmp/test_modules"), std::string::npos) 
+        << "Should see the custom directory path in output";
 }
 
-// Test: -m alias for --modules-dir
-// Verifies that the short form -m works as an alias for --modules-dir
-TEST_F(CLITest, ModulesDirShortAlias) {
+// Test: --load-modules option actually attempts to load specified modules
+// Verifies that the --load-modules option works by trying to load a non-existent module
+TEST_F(CLITest, LoadModulesOption_LoadsModules) {
     std::string output;
-    int exitCode = runLogoscore("--help", &output);
+    int exitCode = runLogoscoreWithTimeout("--load-modules fake_module_xyz", &output);
     
-    EXPECT_EQ(exitCode, 0);
-    // Qt's QCommandLineParser shows short options in help as "-m, --modules-dir"
-    EXPECT_NE(output.find("-m"), std::string::npos) << "Help should show -m alias";
-    EXPECT_NE(output.find("--modules-dir"), std::string::npos) << "Help should show --modules-dir option";
+    // Check that it actually tried to load the module (and failed since it doesn't exist)
+    // The warning comes from main.cpp when logos_core_load_plugin fails
+    EXPECT_NE(output.find("Failed to load module:"), std::string::npos)
+        << "Should see warning that module failed to load";
+    EXPECT_NE(output.find("fake_module_xyz"), std::string::npos)
+        << "Should see the module name in output";
+}
+
+// Test: -l alias works as short form for --load-modules
+// Verifies that the -l option produces the same behavior as --load-modules
+TEST_F(CLITest, LoadModulesShortAlias_Works) {
+    std::string output;
+    int exitCode = runLogoscoreWithTimeout("-l fake_module_alias", &output);
+    
+    // Check that -l alias actually attempts to load the module (same behavior as --load-modules)
+    EXPECT_NE(output.find("Failed to load module:"), std::string::npos)
+        << "Should see warning that module failed to load";
+    EXPECT_NE(output.find("fake_module_alias"), std::string::npos)
+        << "Should see the module name in output";
+}
+
+// Test: -m alias works as short form for --modules-dir
+// Verifies that the -m option produces the same behavior as --modules-dir
+TEST_F(CLITest, ModulesDirShortAlias_Works) {
+    std::string output;
+    int exitCode = runLogoscoreWithTimeout("-m /tmp/test_modules_alias", &output);
+    
+    // Check that -m alias actually sets the directory (same behavior as --modules-dir)
+    EXPECT_NE(output.find("Custom plugins directory set to:"), std::string::npos)
+        << "Should see debug message that custom directory was set";
+    EXPECT_NE(output.find("/tmp/test_modules_alias"), std::string::npos)
+        << "Should see the custom directory path in output";
 }
 
 // Test: invalid option

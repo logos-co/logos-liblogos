@@ -2,12 +2,14 @@
 #define COMMAND_LINE_PARSER_H
 
 #include <QString>
+#include <QStringList>
 
 class QCoreApplication;
 
 struct CoreArgs {
     bool valid;
-    QString modulesDir;  // Optional: custom modules directory
+    QString modulesDir;           // Optional: custom modules directory
+    QStringList loadModules;      // Optional: modules to load in order
 };
 
 CoreArgs parseCommandLineArgs(QCoreApplication& app);
