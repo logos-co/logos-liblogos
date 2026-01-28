@@ -16,8 +16,8 @@ pkgs.stdenvNoCC.mkDerivation {
   # Clear LD_LIBRARY_PATH to prevent external Qt installations from interfering
   qtWrapperArgs = [ "--unset LD_LIBRARY_PATH" ];
   
-  # autoPatchelfHook uses buildInputs to find libraries (zstd, Qt, etc.)
-  buildInputs = pkgs.lib.optionals pkgs.stdenv.isLinux common.buildInputs;
+  # Required for autoPatchelfHook (Linux) and wrapQtAppsNoGuiHook (both platforms)
+  buildInputs = common.buildInputs;
   
   installPhase = ''
     runHook preInstall
