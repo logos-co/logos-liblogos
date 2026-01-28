@@ -48,7 +48,7 @@ namespace AppLifecycle {
         assert(plugins_dir != nullptr);
         g_plugins_dirs.clear();
         g_plugins_dirs.append(QString(plugins_dir));
-        qDebug() << "Custom plugins directory set to:" << g_plugins_dirs.first();
+        qInfo() << "Custom plugins directory set to:" << g_plugins_dirs.first();
     }
 
     void addPluginsDir(const char* plugins_dir) {
