@@ -50,7 +50,7 @@ int main(int argc, char *argv[]) {
     logos_core_init(argc, argv);
     
     if (!args.modulesDir.isEmpty()) {
-        logos_core_set_plugins_dir(args.modulesDir.toUtf8().constData());
+        logos_core_add_plugins_dir(args.modulesDir.toUtf8().constData());
     }
     
     logos_core_start();
