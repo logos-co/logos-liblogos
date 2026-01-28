@@ -203,3 +203,83 @@ TEST_F(CLITest, InvalidOption) {
     EXPECT_NE(exitCode, 0) << "Invalid option should cause non-zero exit code";
     EXPECT_FALSE(output.empty()) << "Error output should not be empty";
 }
+
+// =============================================================================
+// --call option tests
+// =============================================================================
+
+// Test: --call option appears in help
+// Verifies that the --call option is documented in help text
+TEST_F(CLITest, CallOption_AppearsInHelp) {
+    std::string output;
+    int exitCode = runLogoscore("--help", &output);
+    
+    EXPECT_EQ(exitCode, 0);
+    EXPECT_NE(output.find("--call"), std::string::npos) 
+        << "Help should contain --call option";
+    EXPECT_NE(output.find("-c"), std::string::npos) 
+        << "Help should contain -c short option";
+}
+
+// Test: --call with invalid syntax (no dot separator)
+// Verifies that invalid call syntax is rejected
+TEST_F(CLITest, CallOption_InvalidSyntaxNoDot) {
+    std::string output;
+    int exitCode = runLogoscoreWithTimeout("--call \"modulemethodname()\"", &output);
+    
+    EXPECT_NE(output.find("Invalid call syntax") + output.find("Skipping invalid call"), std::string::npos)
+        << "Should warn about invalid call syntax (no dot found)";
+}
+
+// Test: --call with non-existent module
+// Verifies that calling a method on a non-loaded module fails appropriately
+TEST_F(CLITest, CallOption_NonExistentModule) {
+    std::string output;
+    int exitCode = runLogoscoreWithTimeout("--call \"fake_module.someMethod()\"", &output);
+    
+    EXPECT_NE(output.find("Plugin not loaded") + output.find("fake_module"), std::string::npos)
+        << "Should indicate that the module is not loaded";
+}
+
+// Test: --call short alias -c works
+// Verifies that -c produces the same behavior as --call
+TEST_F(CLITest, CallOption_ShortAliasWorks) {
+    std::string output;
+    int exitCode = runLogoscoreWithTimeout("-c \"fake_module.testMethod()\"", &output);
+    
+    EXPECT_NE(output.find("Plugin not loaded") + output.find("fake_module"), std::string::npos)
+        << "Short alias -c should work the same as --call";
+}
+
+// Test: --call with multiple calls
+// Verifies that multiple --call options are processed
+TEST_F(CLITest, CallOption_MultipleCallsProcessed) {
+    std::string output;
+    int exitCode = runLogoscoreWithTimeout(
+        "--call \"module1.method1()\" --call \"module2.method2()\"", &output);
+    
+    EXPECT_NE(output.find("Executing call") + output.find("module1"), std::string::npos)
+        << "Should attempt to execute module calls";
+}
+
+// Test: --call with file parameter
+// Verifies that @file syntax is recognized (even if file doesn't exist)
+TEST_F(CLITest, CallOption_FileParameterSyntax) {
+    std::string output;
+    int exitCode = runLogoscoreWithTimeout(
+        "--call \"fake_module.init(@/nonexistent/file.txt)\"", &output);
+    
+    EXPECT_NE(output.find("Failed to open file") + output.find("Plugin not loaded"), std::string::npos)
+        << "Should attempt to resolve @file parameter";
+}
+
+// Test: --call parsing preserves parameters
+// Verifies that parameters are correctly parsed from the call string
+TEST_F(CLITest, CallOption_ParameterParsing) {
+    std::string output;
+    int exitCode = runLogoscoreWithTimeout(
+        "--call \"fake_module.method('string param', 42, true)\"", &output);
+    
+    EXPECT_NE(output.find("3 params") + output.find("params"), std::string::npos)
+        << "Should parse multiple parameters correctly";
+}

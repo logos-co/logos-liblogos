@@ -135,6 +135,8 @@ The `logoscore` binary is the main entry point for the Logos Core application fr
 
 - `--load-modules <modules>`, `-l <modules>` - Comma-separated list of modules to load in order. Modules are loaded after the application starts. note: if not modules are left out they will automatically be loaded if there is a dependency specified between them. for example `--load-modules logos_irc` is the same as `--load-modules waku_module,chat,logos_irc`
 
+- `--call <call>`, `-c <call>` - Call a module method: `module.method(param1, param2)`. Use `@file` to read a parameter from a file. Can be repeated multiple times to execute calls sequentially. Calls execute synchronously and abort on error.
+
 - `--help`, `-h` - Display help information and available options.
 
 - `--version` - Display version information.
@@ -157,6 +159,25 @@ The `logoscore` binary is the main entry point for the Logos Core application fr
 
 # Combine options: custom modules directory and load specific modules
 ./result/bin/logoscore -m /path/to/modules -l module1,module2
+
+# Call a module method with no parameters
+./result/bin/logoscore -l my_module --call "my_module.start()"
+# Or using the short form
+./result/bin/logoscore -l my_module -c "my_module.start()"
+
+# Call a module method with parameters
+./result/bin/logoscore -l storage --call "storage.init('config', 42, true)"
+
+# Read a parameter from a file (use @ prefix)
+./result/bin/logoscore -l storage --call "storage.loadConfig(@config.json)"
+
+# Multiple sequential calls
+./result/bin/logoscore -l storage --call "storage.init(@config.txt)" --call "storage.start()"
+
+# Combine all options: load modules and call methods
+./result/bin/logoscore -m ./modules -l storage,chat \
+  --call "storage.init(@config.json)" \
+  --call "chat.connect('localhost', 8080)"
 
 # Display help
 ./result/bin/logoscore --help

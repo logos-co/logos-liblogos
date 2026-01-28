@@ -4,6 +4,7 @@
 #include "logos_core.h"
 #include "command_line_parser.h"
 #include "plugin_manager.h"
+#include "call_executor.h"
 
 // Custom message handler that ensures immediate flushing of output
 // We do this due to github actions timing out
@@ -71,6 +72,13 @@ int main(int argc, char *argv[]) {
             if (!logos_core_load_plugin(moduleName.toUtf8().constData())) {
                 qWarning() << "Failed to load module:" << moduleName;
             }
+        }
+    }
+    
+    if (!args.calls.isEmpty()) {
+        int callResult = CallExecutor::executeCalls(args.calls);
+        if (callResult != 0) {
+            return callResult;
         }
     }
     

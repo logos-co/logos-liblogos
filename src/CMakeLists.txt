@@ -62,6 +62,7 @@ set(LOGOS_CORE_SOURCES
 set(HOST_SOURCES
     ${CMAKE_SOURCE_DIR}/app/main.cpp
     ${CMAKE_SOURCE_DIR}/app/command_line_parser.cpp
+    ${CMAKE_SOURCE_DIR}/app/call_executor.cpp
 )
 
 # Define the logos host sources
