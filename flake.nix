@@ -5,18 +5,20 @@
     # Follow the same nixpkgs as logos-cpp-sdk to ensure compatibility
     nixpkgs.follows = "logos-cpp-sdk/nixpkgs";
     logos-cpp-sdk.url = "github:logos-co/logos-cpp-sdk";
+    logos-capability-module.url = "github:logos-co/logos-capability-module";
   };
 
-  outputs = { self, nixpkgs, logos-cpp-sdk }:
+  outputs = { self, nixpkgs, logos-cpp-sdk, logos-capability-module }:
     let
       systems = [ "aarch64-darwin" "x86_64-darwin" "aarch64-linux" "x86_64-linux" ];
       forAllSystems = f: nixpkgs.lib.genAttrs systems (system: f {
         pkgs = import nixpkgs { inherit system; };
         logosSdk = logos-cpp-sdk.packages.${system}.default;
+        capabilityModule = logos-capability-module.packages.${system}.default;
       });
     in
     {
-      packages = forAllSystems ({ pkgs, logosSdk }: 
+      packages = forAllSystems ({ pkgs, logosSdk, capabilityModule }: 
         let
           # Common configuration
           common = import ./nix/default.nix { inherit pkgs logosSdk; };
@@ -27,7 +29,8 @@
           
           # Individual package components (reference the shared build)
           lib = import ./nix/lib.nix { inherit pkgs common build; };
-          bin = import ./nix/bin.nix { inherit pkgs common build lib; };
+          modules = import ./nix/modules.nix { inherit pkgs common capabilityModule; };
+          bin = import ./nix/bin.nix { inherit pkgs common build lib modules; };
           include = import ./nix/include.nix { inherit pkgs common src logosSdk; };
           tests = import ./nix/tests.nix { inherit pkgs common build; };
           
@@ -43,6 +46,7 @@
           logos-liblogos-lib = lib;
           logos-liblogos-include = include;
           logos-liblogos-tests = tests;
+          logos-liblogos-modules = modules;
           
           # Combined output
           logos-liblogos = liblogos;

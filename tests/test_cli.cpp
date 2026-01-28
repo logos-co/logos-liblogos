@@ -140,15 +140,15 @@ TEST_F(CLITest, VersionCommand) {
     EXPECT_FALSE(output.empty()) << "Version output should not be empty";
 }
 
-// Test: --modules-dir option actually sets the custom modules directory
+// Test: --modules-dir option actually adds the custom modules directory
 // Verifies that the --modules-dir option works by checking the output
 TEST_F(CLITest, ModulesDirOption_SetDirectory) {
     std::string output;
     int exitCode = runLogoscoreWithTimeout("--modules-dir /tmp/test_modules", &output);
     
-    // Check that the directory was actually set (qDebug output from app_lifecycle.cpp)
-    EXPECT_NE(output.find("Custom plugins directory set to:"), std::string::npos) 
-        << "Should see debug message that custom directory was set";
+    // Check that the directory was actually added (qDebug output from app_lifecycle.cpp)
+    EXPECT_NE(output.find("Added plugins directory:"), std::string::npos) 
+        << "Should see debug message that custom directory was added";
     EXPECT_NE(output.find("/tmp/test_modules"), std::string::npos) 
         << "Should see the custom directory path in output";
 }
@@ -186,9 +186,9 @@ TEST_F(CLITest, ModulesDirShortAlias_Works) {
     std::string output;
     int exitCode = runLogoscoreWithTimeout("-m /tmp/test_modules_alias", &output);
     
-    // Check that -m alias actually sets the directory (same behavior as --modules-dir)
-    EXPECT_NE(output.find("Custom plugins directory set to:"), std::string::npos)
-        << "Should see debug message that custom directory was set";
+    // Check that -m alias actually adds the directory (same behavior as --modules-dir)
+    EXPECT_NE(output.find("Added plugins directory:"), std::string::npos)
+        << "Should see debug message that custom directory was added";
     EXPECT_NE(output.find("/tmp/test_modules_alias"), std::string::npos)
         << "Should see the custom directory path in output";
 }

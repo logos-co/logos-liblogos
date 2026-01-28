@@ -1,5 +1,5 @@
 # Extracts binaries from the shared build
-{ pkgs, common, build, lib }:
+{ pkgs, common, build, lib, modules }:
 
 pkgs.stdenvNoCC.mkDerivation {
   pname = "${common.pname}-bin";
@@ -34,6 +34,12 @@ pkgs.stdenvNoCC.mkDerivation {
     if [ -d ${lib}/lib ]; then
       cp -r ${lib}/lib/* $out/lib/
       chmod -R +w $out/lib  # Make writable if needed
+    fi
+    
+    # Copy modules from the modules derivation
+    mkdir -p $out/modules
+    if [ -d ${modules}/modules ]; then
+      cp -r ${modules}/modules/* $out/modules/
     fi
     
     runHook postInstall
