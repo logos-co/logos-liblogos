@@ -52,7 +52,7 @@
         }
       );
 
-      devShells = forAllSystems ({ pkgs }: {
+      devShells = forAllSystems ({ pkgs, ... }: {
         default = pkgs.mkShell {
           nativeBuildInputs = [
             pkgs.cmake
