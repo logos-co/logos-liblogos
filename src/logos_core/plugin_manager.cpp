@@ -24,7 +24,7 @@
 #include "logos_api_client.h"
 #include "token_manager.h"
 #include "logos_mode.h"
-#include "../module_lib/module_lib.h"
+#include <module_lib/module_lib.h>
 
 using namespace ModuleLib;
 

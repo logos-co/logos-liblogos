@@ -38,16 +38,29 @@ else()
   message(FATAL_ERROR "logos-cpp-sdk not found at ${LOGOS_CPP_SDK_ROOT}")
 endif()
 
-# Define module_lib sources (Qt plugin abstraction layer)
-set(MODULE_LIB_SOURCES
-    module_lib/module_metadata.cpp
-    module_lib/module_metadata.h
-    module_lib/module_loader.cpp
-    module_lib/module_loader.h
-    module_lib/module_introspection.cpp
-    module_lib/module_introspection.h
-    module_lib/module_lib.h
-)
+# Find logos-module library
+if(DEFINED LOGOS_MODULE_ROOT AND EXISTS "${LOGOS_MODULE_ROOT}/lib")
+  message(STATUS "Using logos-module at ${LOGOS_MODULE_ROOT}")
+  
+  find_library(LOGOS_MODULE_LIBRARY
+    NAMES logos_module
+    PATHS "${LOGOS_MODULE_ROOT}/lib"
+    NO_DEFAULT_PATH
+  )
+  
+  if(NOT LOGOS_MODULE_LIBRARY)
+    message(FATAL_ERROR "logos_module library not found in ${LOGOS_MODULE_ROOT}/lib")
+  endif()
+  
+  # Create an imported target for logos_module
+  add_library(logos_module STATIC IMPORTED)
+  set_target_properties(logos_module PROPERTIES
+    IMPORTED_LOCATION "${LOGOS_MODULE_LIBRARY}"
+    INTERFACE_INCLUDE_DIRECTORIES "${LOGOS_MODULE_ROOT}/include"
+  )
+else()
+  message(STATUS "LOGOS_MODULE_ROOT not set, logos-module will need to be provided")
+endif()
 
 # Define the library sources
 set(LOGOS_CORE_SOURCES
@@ -67,7 +80,6 @@ set(LOGOS_CORE_SOURCES
     logos_core/core_manager/core_manager.h
     logos_core/core_manager/core_manager_interface.h
     common/interface.h
-    ${MODULE_LIB_SOURCES}
 )
 
 # Define the host application sources
@@ -85,7 +97,6 @@ set(LOGOS_HOST_SOURCES
     logos_host/plugin_initializer.cpp
     logos_host/plugin_initializer.h
     common/interface.h
-    ${MODULE_LIB_SOURCES}
 )
 
 # Create the logos core library
@@ -99,20 +110,25 @@ endif()
 # Set the LOGOS_CORE_LIBRARY definition for the library
 target_compile_definitions(logos_core PRIVATE LOGOS_CORE_LIBRARY)
 
-# Link Qt libraries and SDK to the library
+# Link Qt libraries, SDK and module library
 target_link_libraries(logos_core PUBLIC 
     Qt${QT_VERSION_MAJOR}::Core 
     Qt${QT_VERSION_MAJOR}::RemoteObjects
     logos_sdk
+    logos_module
 )
 
 # Include directories for the library
 target_include_directories(logos_core PRIVATE
     ${CMAKE_CURRENT_SOURCE_DIR}
     ${CMAKE_CURRENT_SOURCE_DIR}/logos_core
-    ${CMAKE_CURRENT_SOURCE_DIR}/module_lib
     ${Qt${QT_VERSION_MAJOR}_INCLUDE_DIRS}
 )
+
+# Add logos_module include directory if available
+if(DEFINED LOGOS_MODULE_ROOT AND EXISTS "${LOGOS_MODULE_ROOT}/include")
+  target_include_directories(logos_core PRIVATE ${LOGOS_MODULE_ROOT}/include)
+endif()
 
 # Add SDK include directory if using built SDK
 if(EXISTS "${LOGOS_CPP_SDK_ROOT}/lib" AND EXISTS "${LOGOS_CPP_SDK_ROOT}/include")
@@ -163,20 +179,25 @@ if(NOT CMAKE_SYSTEM_NAME STREQUAL "iOS")
     # Create the logos host application
     add_executable(logos_host ${LOGOS_HOST_SOURCES})
 
-    # Link the logos host with Qt libraries
+    # Link the logos host with Qt libraries and module library
     target_link_libraries(logos_host PRIVATE 
         Qt${QT_VERSION_MAJOR}::Core 
         Qt${QT_VERSION_MAJOR}::RemoteObjects
         logos_sdk
+        logos_module
     )
 
     # Include directories for the logos host application
     target_include_directories(logos_host PRIVATE
         ${CMAKE_CURRENT_SOURCE_DIR}
         ${CMAKE_CURRENT_SOURCE_DIR}/logos_host
-        ${CMAKE_CURRENT_SOURCE_DIR}/module_lib
         ${Qt${QT_VERSION_MAJOR}_INCLUDE_DIRS}
     )
+    
+    # Add logos_module include directory if available
+    if(DEFINED LOGOS_MODULE_ROOT AND EXISTS "${LOGOS_MODULE_ROOT}/include")
+      target_include_directories(logos_host PRIVATE ${LOGOS_MODULE_ROOT}/include)
+    endif()
 
     # Add SDK include directory if using built SDK
     if(EXISTS "${LOGOS_CPP_SDK_ROOT}/lib" AND EXISTS "${LOGOS_CPP_SDK_ROOT}/include")

@@ -11,7 +11,7 @@
 #include "../logos_core.h"
 #include "logos_api.h"
 #include "logos_api_client.h"
-#include "../../module_lib/module_lib.h"
+#include <module_lib/module_lib.h>
 
 using namespace ModuleLib;
 
