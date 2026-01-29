@@ -24,6 +24,9 @@
 #include "logos_api_client.h"
 #include "token_manager.h"
 #include "logos_mode.h"
+#include "../module_lib/module_lib.h"
+
+using namespace ModuleLib;
 
 namespace PluginManager {
 
@@ -31,38 +34,29 @@ namespace PluginManager {
         qDebug() << "\n------------------------------------------";
         qDebug() << "Processing plugin from:" << pluginPath;
 
-        QPluginLoader loader(pluginPath);
-
-        QJsonObject metadata = loader.metaData();
-        if (metadata.isEmpty()) {
+        // Use module_lib to extract metadata
+        auto metadataOpt = ModuleLoader::extractMetadata(pluginPath);
+        if (!metadataOpt) {
             qWarning() << "No metadata found for plugin:" << pluginPath;
             return QString();
         }
 
-        QJsonObject customMetadata = metadata.value("MetaData").toObject();
-        if (customMetadata.isEmpty()) {
-            qWarning() << "No custom metadata found for plugin:" << pluginPath;
-            return QString();
-        }
-
-        QString pluginName = customMetadata.value("name").toString();
-        if (pluginName.isEmpty()) {
+        const ModuleMetadata& metadata = *metadataOpt;
+        if (!metadata.isValid()) {
             qWarning() << "Plugin name not specified in metadata for:" << pluginPath;
             return QString();
         }
 
         qDebug() << "Plugin Metadata:";
-        qDebug() << " - Name:" << pluginName;
-        qDebug() << " - Version:" << customMetadata.value("version").toString();
-        qDebug() << " - Description:" << customMetadata.value("description").toString();
-        qDebug() << " - Author:" << customMetadata.value("author").toString();
-        qDebug() << " - Type:" << customMetadata.value("type").toString();
+        qDebug() << " - Name:" << metadata.name;
+        qDebug() << " - Version:" << metadata.version;
+        qDebug() << " - Description:" << metadata.description;
+        qDebug() << " - Author:" << metadata.author;
+        qDebug() << " - Type:" << metadata.type;
 
-        QJsonArray dependencies = customMetadata.value("dependencies").toArray();
-        if (!dependencies.isEmpty()) {
+        if (!metadata.dependencies.isEmpty()) {
             qDebug() << " - Dependencies:";
-            for (const QJsonValue &dep : dependencies) {
-                QString dependency = dep.toString();
+            for (const QString &dependency : metadata.dependencies) {
                 qDebug() << "   *" << dependency;
                 if (!g_loaded_plugins.contains(dependency)) {
                     qWarning() << "Required dependency not loaded:" << dependency;
@@ -70,13 +64,14 @@ namespace PluginManager {
             }
         }
 
-        g_known_plugins.insert(pluginName, pluginPath);
-        qDebug() << "Added to known plugins: " << pluginName << " -> " << pluginPath;
+        g_known_plugins.insert(metadata.name, pluginPath);
+        qDebug() << "Added to known plugins: " << metadata.name << " -> " << pluginPath;
         
-        g_plugin_metadata.insert(pluginName, customMetadata);
-        qDebug() << "Stored metadata for plugin:" << pluginName;
+        // Store the raw metadata for compatibility with existing code
+        g_plugin_metadata.insert(metadata.name, metadata.rawMetadata);
+        qDebug() << "Stored metadata for plugin:" << metadata.name;
         
-        return pluginName;
+        return metadata.name;
     }
 
     bool loadPluginLocal(const QString &pluginName, const QString &pluginPath) {
@@ -88,19 +83,21 @@ namespace PluginManager {
             return false;
         }
 
-        // Load the plugin using QPluginLoader
-        QPluginLoader loader(pluginPath);
-        QObject* plugin = loader.instance();
+        // Load the plugin using module_lib
+        QString errorString;
+        ModuleHandle handle = ModuleLoader::loadFromPath(pluginPath, &errorString);
 
-        if (!plugin) {
-            qCritical() << "Failed to load plugin (Local mode):" << loader.errorString();
+        if (!handle.isValid()) {
+            qCritical() << "Failed to load plugin (Local mode):" << errorString;
             return false;
         }
 
         qDebug() << "Plugin loaded successfully (Local mode)";
 
-        // Cast to the base PluginInterface
-        PluginInterface* basePlugin = qobject_cast<PluginInterface*>(plugin);
+        QObject* plugin = handle.instance();
+
+        // Cast to the base PluginInterface using module_lib
+        PluginInterface* basePlugin = handle.as<PluginInterface>();
         if (!basePlugin) {
             qCritical() << "Plugin does not implement the PluginInterface (Local mode)";
             return false;
@@ -149,6 +146,9 @@ namespace PluginManager {
 
         // Add the plugin name to our loaded plugins list
         g_loaded_plugins.append(pluginName);
+
+        // Release ownership from handle so the plugin stays loaded
+        handle.release();
 
         qDebug() << "Plugin" << pluginName << "is now running in-process (Local mode)";
         return true;
@@ -568,22 +568,23 @@ namespace PluginManager {
 
         int loadedCount = 0;
         
-        // Get all statically registered plugin instances
-        // These are registered via Q_IMPORT_PLUGIN() in the application
-        const QObjectList staticPlugins = QPluginLoader::staticInstances();
+        // Get all statically registered plugin instances using module_lib
+        auto staticModules = ModuleLoader::getStaticModules();
         
-        qDebug() << "Found" << staticPlugins.size() << "static plugin instances";
+        qDebug() << "Found" << staticModules.size() << "static plugin instances";
         
-        for (QObject* pluginObject : staticPlugins) {
-            if (!pluginObject) {
-                qWarning() << "Null static plugin instance, skipping";
+        for (auto& handle : staticModules) {
+            if (!handle.isValid()) {
+                qWarning() << "Invalid static plugin instance, skipping";
                 continue;
             }
             
-            // Cast to PluginInterface
-            PluginInterface* basePlugin = qobject_cast<PluginInterface*>(pluginObject);
+            QObject* pluginObject = handle.instance();
+            
+            // Cast to PluginInterface using module_lib
+            PluginInterface* basePlugin = handle.as<PluginInterface>();
             if (!basePlugin) {
-                qDebug() << "Static plugin" << pluginObject->metaObject()->className() 
+                qDebug() << "Static plugin" << ModuleIntrospection::getClassName(pluginObject)
                         << "does not implement PluginInterface, skipping";
                 continue;
             }
@@ -655,7 +656,10 @@ namespace PluginManager {
         
         qDebug() << "registerPluginInstance: Registering plugin:" << pluginName;
         
-        PluginInterface* basePlugin = qobject_cast<PluginInterface*>(pluginObject);
+        // Wrap the existing plugin object using module_lib
+        ModuleHandle handle = ModuleLoader::wrapExisting(pluginObject);
+        
+        PluginInterface* basePlugin = handle.as<PluginInterface>();
         if (!basePlugin) {
             qCritical() << "Plugin" << pluginName << "does not implement PluginInterface";
             return false;
@@ -715,16 +719,17 @@ namespace PluginManager {
         
         qDebug() << "registerPluginByName: Looking for plugin:" << pluginName;
         
-        const QObjectList staticPlugins = QPluginLoader::staticInstances();
-        qDebug() << "Found" << staticPlugins.size() << "static plugin instances";
+        // Use module_lib to get static plugins
+        auto staticModules = ModuleLoader::getStaticModules();
+        qDebug() << "Found" << staticModules.size() << "static plugin instances";
         
-        for (QObject* obj : staticPlugins) {
-            if (!obj) continue;
+        for (auto& handle : staticModules) {
+            if (!handle.isValid()) continue;
             
-            PluginInterface* plugin = qobject_cast<PluginInterface*>(obj);
+            PluginInterface* plugin = handle.as<PluginInterface>();
             if (plugin && plugin->name() == pluginName) {
                 qDebug() << "Found matching static plugin:" << pluginName;
-                return registerPluginInstance(pluginName, obj);
+                return registerPluginInstance(pluginName, handle.instance());
             }
         }
         return false;

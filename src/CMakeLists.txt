@@ -38,6 +38,17 @@ else()
   message(FATAL_ERROR "logos-cpp-sdk not found at ${LOGOS_CPP_SDK_ROOT}")
 endif()
 
+# Define module_lib sources (Qt plugin abstraction layer)
+set(MODULE_LIB_SOURCES
+    module_lib/module_metadata.cpp
+    module_lib/module_metadata.h
+    module_lib/module_loader.cpp
+    module_lib/module_loader.h
+    module_lib/module_introspection.cpp
+    module_lib/module_introspection.h
+    module_lib/module_lib.h
+)
+
 # Define the library sources
 set(LOGOS_CORE_SOURCES
     logos_core/logos_core.cpp
@@ -56,6 +67,7 @@ set(LOGOS_CORE_SOURCES
     logos_core/core_manager/core_manager.h
     logos_core/core_manager/core_manager_interface.h
     common/interface.h
+    ${MODULE_LIB_SOURCES}
 )
 
 # Define the host application sources
@@ -73,6 +85,7 @@ set(LOGOS_HOST_SOURCES
     logos_host/plugin_initializer.cpp
     logos_host/plugin_initializer.h
     common/interface.h
+    ${MODULE_LIB_SOURCES}
 )
 
 # Create the logos core library
@@ -97,6 +110,7 @@ target_link_libraries(logos_core PUBLIC
 target_include_directories(logos_core PRIVATE
     ${CMAKE_CURRENT_SOURCE_DIR}
     ${CMAKE_CURRENT_SOURCE_DIR}/logos_core
+    ${CMAKE_CURRENT_SOURCE_DIR}/module_lib
     ${Qt${QT_VERSION_MAJOR}_INCLUDE_DIRS}
 )
 
@@ -160,6 +174,7 @@ if(NOT CMAKE_SYSTEM_NAME STREQUAL "iOS")
     target_include_directories(logos_host PRIVATE
         ${CMAKE_CURRENT_SOURCE_DIR}
         ${CMAKE_CURRENT_SOURCE_DIR}/logos_host
+        ${CMAKE_CURRENT_SOURCE_DIR}/module_lib
         ${Qt${QT_VERSION_MAJOR}_INCLUDE_DIRS}
     )
 

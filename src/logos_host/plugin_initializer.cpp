@@ -8,6 +8,9 @@
 #include "logos_api.h"
 #include "logos_api_provider.h"
 #include "token_manager.h"
+#include "../module_lib/module_lib.h"
+
+using namespace ModuleLib;
 
 QString receiveAuthToken(const QString& pluginName)
 {
@@ -53,22 +56,24 @@ QString receiveAuthToken(const QString& pluginName)
 
 PluginInterface* loadPlugin(const QString& pluginPath, const QString& expectedName, QPluginLoader& loader)
 {
-    // Load the plugin
+    // Load the plugin using module_lib for abstraction
+    // Note: We still use the passed loader for lifecycle management compatibility
     loader.setFileName(pluginPath);
-    QObject *plugin = loader.instance();
+    
+    QString errorString;
+    ModuleHandle handle = ModuleLoader::loadFromPath(pluginPath, &errorString);
 
-    if (!plugin) {
-        qCritical() << "Failed to load plugin:" << loader.errorString();
+    if (!handle.isValid()) {
+        qCritical() << "Failed to load plugin:" << errorString;
         return nullptr;
     }
 
     qDebug() << "Plugin loaded successfully";
 
-    // Cast to the base PluginInterface
-    PluginInterface *basePlugin = qobject_cast<PluginInterface *>(plugin);
+    // Cast to the base PluginInterface using module_lib
+    PluginInterface *basePlugin = handle.as<PluginInterface>();
     if (!basePlugin) {
         qCritical() << "Plugin does not implement the PluginInterface";
-        delete plugin;
         return nullptr;
     }
 
@@ -80,6 +85,9 @@ PluginInterface* loadPlugin(const QString& pluginPath, const QString& expectedNa
     qDebug() << "Plugin name:" << basePlugin->name();
     qDebug() << "Plugin version:" << basePlugin->version();
 
+    // Release ownership so the plugin stays loaded
+    handle.release();
+    
     return basePlugin;
 }
 
