@@ -24,6 +24,7 @@
 #include "logos_api_client.h"
 #include "token_manager.h"
 #include "logos_mode.h"
+#include "signal.h"
 
 namespace PluginManager {
 
@@ -336,11 +337,32 @@ namespace PluginManager {
                                     << "Exit code:" << exitCode 
                                     << "Exit status:" << exitStatus;
                             
-                            // TODO: This is temporary and later needs a mechanism to restart the process
-                            if (exitStatus == QProcess::CrashExit) {
-                                qCritical() << "Plugin process crashed:" << pluginName << "- terminating core with error";
-                                exit(1);
-                            }
+                        if (exitStatus == QProcess::NormalExit) {
+                            qInfo() << "Plugin process finished normally for" << pluginName << "exitCode=" << exitCode;
+                            return;
+                        }
+#ifdef Q_OS_WIN
+                        // Windows does not have POSIX signals like SIGTERM/SIGINT.
+                        // So we are not able to distinguish between graceful and crash exits easily.
+                        // If it is during shutdown, we should not exit in order to clean up the process.
+                        if (g_terminating_processes[pluginName] != nullptr) {
+                            qInfo() << "Plugin process terminated during shutdown for" << pluginName;
+                         // TODO: This is temporary and later needs a mechanism to restart the process
+                        } else if (exitStatus == QProcess::CrashExit) {
+                            qCritical() << "Plugin process crashed:" << pluginName << "- terminating core with error";
+                            exit(1);
+                         }
+
+#else
+                        if (exitStatus == QProcess::CrashExit &&
+                            (exitCode == SIGTERM || exitCode == SIGINT)) {
+                            qInfo() << "Plugin process terminated gracefully for" << pluginName;
+                         // TODO: This is temporary and later needs a mechanism to restart the process
+                        } else if (exitStatus == QProcess::CrashExit) {
+                            qCritical() << "Plugin process crashed:" << pluginName << "- terminating core with error";
+                            exit(1);
+                         }
+#endif
                             
                             // Remove from our tracking lists
                             g_plugin_processes.remove(pluginName);
@@ -353,8 +375,13 @@ namespace PluginManager {
         // Connect to error signal
         QObject::connect(process, &QProcess::errorOccurred,
                         [pluginName](QProcess::ProcessError error) {
-                            qCritical() << "Plugin process error for" << pluginName << ":" << error;
-                            
+                            if (g_terminating_processes[pluginName] != nullptr) {
+                                qInfo() << "Received error signal during shutdown for" << pluginName << ":" << error;
+                                return;
+                            }
+
+                            qDebug() << "Plugin process error occurred for" << pluginName << ":" << error;
+
                             // TODO: This is temporary and later needs a mechanism to restart the process
                             if (error == QProcess::Crashed) {
                                 qCritical() << "Plugin process crashed:" << pluginName << "- terminating core with error";
@@ -772,6 +799,7 @@ namespace PluginManager {
         
         // The process will be cleaned up by the signal handler
         qDebug() << "Successfully unloaded plugin:" << pluginName;
+
         return true;
     #endif // Q_OS_IOS
     }
@@ -957,6 +985,7 @@ namespace PluginManager {
         g_plugin_metadata.clear();
         
         #ifndef Q_OS_IOS
+
         // Terminate and clean up all plugin processes
         for (auto it = g_plugin_processes.begin(); it != g_plugin_processes.end(); ++it) {
             QProcess* process = it.value();
@@ -967,6 +996,7 @@ namespace PluginManager {
             }
         }
         g_plugin_processes.clear();
+
         #endif
         
         // Clean up all local plugin API instances
@@ -984,5 +1014,4 @@ namespace PluginManager {
         qDebug() << "Adding known plugin:" << name << "at path:" << path;
         g_known_plugins.insert(name, path);
     }
-
 }

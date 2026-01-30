@@ -39,6 +39,7 @@ extern QHash<QString, QJsonObject> g_plugin_metadata;
 // Global hash to store plugin processes
 #ifndef Q_OS_IOS
 extern QHash<QString, QProcess*> g_plugin_processes;
+extern QHash<QString, QProcess*> g_terminating_processes;
 #endif
 
 // Global hash to store LogosAPI instances for Local mode plugins
