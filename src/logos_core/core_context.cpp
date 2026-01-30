@@ -29,6 +29,7 @@ QHash<QString, QString> g_known_plugins;
 // Hash to store plugin processes
 #ifndef Q_OS_IOS
 QHash<QString, QProcess*> g_plugin_processes;
+QHash<QString, QProcess*> g_terminating_processes;
 #endif
 
 // Hash to store LogosAPI instances for Local mode plugins

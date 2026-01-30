@@ -27,7 +27,6 @@
 #include "signal.h"
 
 namespace PluginManager {
-    bool is_shutting_down = false;
 
     QString processPlugin(const QString &pluginPath) {
         qDebug() << "\n------------------------------------------";
@@ -344,7 +343,7 @@ namespace PluginManager {
                         // Windows does not have POSIX signals like SIGTERM/SIGINT.
                         // So we are not able to distinguish between graceful and crash exits easily.
                         // If it is during shutdown, we should not exit in order to clean up the process.
-                        if (is_shutting_down) {
+                        if (g_terminating_processes[pluginName] != nullptr) {
                             qInfo() << "Plugin process terminated during shutdown for" << pluginName;
                          // TODO: This is temporary and later needs a mechanism to restart the process
                         } else if (exitStatus == QProcess::CrashExit) {
@@ -374,10 +373,12 @@ namespace PluginManager {
         // Connect to error signal
         QObject::connect(process, &QProcess::errorOccurred,
                         [pluginName](QProcess::ProcessError error) {
-                            if (is_shutting_down) {
-                                qInfo() << "Plugin process error during shutdown for" << pluginName << ":" << error;
+                            if (g_terminating_processes[pluginName] != nullptr) {
+                                qInfo() << "Received error signal during shutdown for" << pluginName << ":" << error;
                                 return;
                             }
+
+                            qDebug() << "Plugin process error occurred for" << pluginName << ":" << error;
 
                             // TODO: This is temporary and later needs a mechanism to restart the process
                             if (error == QProcess::Crashed) {
@@ -796,6 +797,7 @@ namespace PluginManager {
         
         // The process will be cleaned up by the signal handler
         qDebug() << "Successfully unloaded plugin:" << pluginName;
+
         return true;
     #endif // Q_OS_IOS
     }
@@ -886,7 +888,7 @@ namespace PluginManager {
         g_known_plugins.clear();
         
         #ifndef Q_OS_IOS
-        is_shutting_down = true;
+
         // Terminate and clean up all plugin processes
         for (auto it = g_plugin_processes.begin(); it != g_plugin_processes.end(); ++it) {
             QProcess* process = it.value();
@@ -897,7 +899,7 @@ namespace PluginManager {
             }
         }
         g_plugin_processes.clear();
-        is_shutting_down = false;
+
         #endif
         
         // Clean up all local plugin API instances
@@ -915,5 +917,4 @@ namespace PluginManager {
         qDebug() << "Adding known plugin:" << name << "at path:" << path;
         g_known_plugins.insert(name, path);
     }
-
 }

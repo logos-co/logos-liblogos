@@ -140,10 +140,12 @@ namespace AppLifecycle {
         // Terminate all plugin processes (Remote mode)
         if (!g_plugin_processes.isEmpty()) {
             qDebug() << "Terminating all plugin processes...";
+
             for (auto it = g_plugin_processes.begin(); it != g_plugin_processes.end(); ++it) {
                 QProcess* process = it.value();
                 QString pluginName = it.key();
                 
+                g_terminating_processes[pluginName] = process;
                 qDebug() << "Terminating plugin process:" << pluginName;
                 process->terminate();
                 
@@ -156,6 +158,8 @@ namespace AppLifecycle {
                 delete process;
             }
             g_plugin_processes.clear();
+            g_terminating_processes.clear();
+
         }
     #endif
         g_loaded_plugins.clear();
