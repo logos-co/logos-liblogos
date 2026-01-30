@@ -1,5 +1,5 @@
 # Common build configuration shared across all packages
-{ pkgs, logosSdk }:
+{ pkgs, logosSdk, logosModule }:
 
 {
   pname = "logos-liblogos";
@@ -19,17 +19,20 @@
     pkgs.qt6.qtremoteobjects 
     pkgs.zstd
     pkgs.gtest
+    logosModule
   ];
   
   # Common CMake flags
   cmakeFlags = [ 
     "-GNinja"
     "-DLOGOS_CPP_SDK_ROOT=${logosSdk}"
+    "-DLOGOS_MODULE_ROOT=${logosModule}"
   ];
   
   # Environment variables
   env = {
     LOGOS_CPP_SDK_ROOT = "${logosSdk}";
+    LOGOS_MODULE_ROOT = "${logosModule}";
   };
   
   # Metadata

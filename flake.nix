@@ -6,22 +6,24 @@
     nixpkgs.follows = "logos-cpp-sdk/nixpkgs";
     logos-cpp-sdk.url = "github:logos-co/logos-cpp-sdk";
     logos-capability-module.url = "github:logos-co/logos-capability-module";
+    logos-module.url = "github:logos-co/logos-module";
   };
 
-  outputs = { self, nixpkgs, logos-cpp-sdk, logos-capability-module }:
+  outputs = { self, nixpkgs, logos-cpp-sdk, logos-capability-module, logos-module }:
     let
       systems = [ "aarch64-darwin" "x86_64-darwin" "aarch64-linux" "x86_64-linux" ];
       forAllSystems = f: nixpkgs.lib.genAttrs systems (system: f {
         pkgs = import nixpkgs { inherit system; };
         logosSdk = logos-cpp-sdk.packages.${system}.default;
         capabilityModule = logos-capability-module.packages.${system}.default;
+        logosModule = logos-module.packages.${system}.default;
       });
     in
     {
-      packages = forAllSystems ({ pkgs, logosSdk, capabilityModule }: 
+      packages = forAllSystems ({ pkgs, logosSdk, capabilityModule, logosModule }: 
         let
           # Common configuration
-          common = import ./nix/default.nix { inherit pkgs logosSdk; };
+          common = import ./nix/default.nix { inherit pkgs logosSdk logosModule; };
           src = ./.;
           
           # Shared build that compiles everything
