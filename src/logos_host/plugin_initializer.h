@@ -2,19 +2,19 @@
 #define PLUGIN_INITIALIZER_H
 
 #include <QString>
+#include <module_lib/module_lib.h>
 
-class QPluginLoader;
 class PluginInterface;
 class LogosAPI;
 class QObject;
 
 QString receiveAuthToken(const QString& pluginName);
 
-PluginInterface* loadPlugin(const QString& pluginPath, const QString& expectedName, QPluginLoader& loader);
+ModuleLib::LogosModule loadPlugin(const QString& pluginPath, const QString& expectedName);
 
 LogosAPI* initializeLogosAPI(const QString& pluginName, QObject* plugin, 
                               PluginInterface* basePlugin, const QString& authToken);
 
-LogosAPI* setupPlugin(const QString& pluginName, const QString& pluginPath, QPluginLoader& loader);
+LogosAPI* setupPlugin(const QString& pluginName, const QString& pluginPath);
 
 #endif // PLUGIN_INITIALIZER_H

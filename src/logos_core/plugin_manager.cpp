@@ -1,6 +1,5 @@
 #include "plugin_manager.h"
 #include "logos_core_internal.h"
-#include <QPluginLoader>
 #include <QDebug>
 #include <QDir>
 #include <QFile>

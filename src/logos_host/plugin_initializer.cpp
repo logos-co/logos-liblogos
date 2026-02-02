@@ -1,7 +1,6 @@
 #include "plugin_initializer.h"
 #include <QLocalServer>
 #include <QLocalSocket>
-#include <QPluginLoader>
 #include <QObject>
 #include <QDebug>
 #include "../common/interface.h"
@@ -54,18 +53,15 @@ QString receiveAuthToken(const QString& pluginName)
     return authToken;
 }
 
-PluginInterface* loadPlugin(const QString& pluginPath, const QString& expectedName, QPluginLoader& loader)
+LogosModule loadPlugin(const QString& pluginPath, const QString& expectedName)
 {
     // Load the plugin using module_lib for abstraction
-    // Note: We still use the passed loader for lifecycle management compatibility
-    loader.setFileName(pluginPath);
-    
     QString errorString;
     LogosModule module = LogosModule::loadFromPath(pluginPath, &errorString);
 
     if (!module.isValid()) {
         qCritical() << "Failed to load plugin:" << errorString;
-        return nullptr;
+        return LogosModule();
     }
 
     qDebug() << "Plugin loaded successfully";
@@ -74,7 +70,7 @@ PluginInterface* loadPlugin(const QString& pluginPath, const QString& expectedNa
     PluginInterface *basePlugin = module.as<PluginInterface>();
     if (!basePlugin) {
         qCritical() << "Plugin does not implement the PluginInterface";
-        return nullptr;
+        return LogosModule();
     }
 
     // Verify that the plugin name matches
@@ -85,10 +81,8 @@ PluginInterface* loadPlugin(const QString& pluginPath, const QString& expectedNa
     qDebug() << "Plugin name:" << basePlugin->name();
     qDebug() << "Plugin version:" << basePlugin->version();
 
-    // Release ownership so the plugin stays loaded
-    module.release();
-    
-    return basePlugin;
+    // Return the module - caller manages lifecycle and calls release()
+    return module;
 }
 
 LogosAPI* initializeLogosAPI(const QString& pluginName, QObject* plugin, 
@@ -123,7 +117,7 @@ LogosAPI* initializeLogosAPI(const QString& pluginName, QObject* plugin,
     return logos_api;
 }
 
-LogosAPI* setupPlugin(const QString& pluginName, const QString& pluginPath, QPluginLoader& loader)
+LogosAPI* setupPlugin(const QString& pluginName, const QString& pluginPath)
 {
     // 1. Receive auth token securely
     QString authToken = receiveAuthToken(pluginName);
@@ -132,13 +126,18 @@ LogosAPI* setupPlugin(const QString& pluginName, const QString& pluginPath, QPlu
     }
 
     // 2. Load and validate plugin
-    PluginInterface* basePlugin = loadPlugin(pluginPath, pluginName, loader);
-    if (!basePlugin) {
+    LogosModule module = loadPlugin(pluginPath, pluginName);
+    if (!module.isValid()) {
         return nullptr;
     }
 
     // 3. Initialize LogosAPI and register plugin
-    LogosAPI* logos_api = initializeLogosAPI(pluginName, loader.instance(), 
+    PluginInterface* basePlugin = module.as<PluginInterface>();
+    LogosAPI* logos_api = initializeLogosAPI(pluginName, module.instance(), 
                                               basePlugin, authToken);
+    
+    // Release module ownership so the plugin stays loaded
+    module.release();
+    
     return logos_api;
 }

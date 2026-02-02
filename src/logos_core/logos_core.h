@@ -72,7 +72,6 @@ LOGOS_CORE_EXPORT int logos_core_load_static_plugins();
 LOGOS_CORE_EXPORT int logos_core_register_plugin_instance(const char* plugin_name, void* plugin_instance);
 
 // Register a statically-linked plugin by name (Local mode only)
-// Searches QPluginLoader::staticInstances() for a plugin with matching name()
 // Must be called after logos_core_start() in Local mode
 // Returns 1 if successful, 0 if failed
 LOGOS_CORE_EXPORT int logos_core_register_plugin_by_name(const char* plugin_name);

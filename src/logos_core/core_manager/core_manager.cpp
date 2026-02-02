@@ -2,7 +2,6 @@
 #include <QCoreApplication>
 #include <QDebug>
 #include <QDir>
-#include <QPluginLoader>
 #include <QMetaMethod>
 #include <QJsonObject>
 #include <QJsonArray>
