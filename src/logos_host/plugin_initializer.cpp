@@ -61,9 +61,9 @@ PluginInterface* loadPlugin(const QString& pluginPath, const QString& expectedNa
     loader.setFileName(pluginPath);
     
     QString errorString;
-    ModuleHandle handle = ModuleLoader::loadFromPath(pluginPath, &errorString);
+    LogosModule module = LogosModule::loadFromPath(pluginPath, &errorString);
 
-    if (!handle.isValid()) {
+    if (!module.isValid()) {
         qCritical() << "Failed to load plugin:" << errorString;
         return nullptr;
     }
@@ -71,7 +71,7 @@ PluginInterface* loadPlugin(const QString& pluginPath, const QString& expectedNa
     qDebug() << "Plugin loaded successfully";
 
     // Cast to the base PluginInterface using module_lib
-    PluginInterface *basePlugin = handle.as<PluginInterface>();
+    PluginInterface *basePlugin = module.as<PluginInterface>();
     if (!basePlugin) {
         qCritical() << "Plugin does not implement the PluginInterface";
         return nullptr;
@@ -86,7 +86,7 @@ PluginInterface* loadPlugin(const QString& pluginPath, const QString& expectedNa
     qDebug() << "Plugin version:" << basePlugin->version();
 
     // Release ownership so the plugin stays loaded
-    handle.release();
+    module.release();
     
     return basePlugin;
 }

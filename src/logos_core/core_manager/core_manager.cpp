@@ -145,7 +145,7 @@ QJsonArray CoreManagerPlugin::getPluginMethods(const QString& pluginName) {
     }
 
     // Use module_lib for runtime introspection
-    QJsonArray methodsArray = ModuleIntrospection::getMethodsAsJson(plugin, true);
+    QJsonArray methodsArray = LogosModule::getMethodsAsJson(plugin, true);
 
     // Clean up the replica object when done
     delete plugin;

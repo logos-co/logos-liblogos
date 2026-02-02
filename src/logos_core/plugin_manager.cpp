@@ -35,7 +35,7 @@ namespace PluginManager {
         qDebug() << "Processing plugin from:" << pluginPath;
 
         // Use module_lib to extract metadata
-        auto metadataOpt = ModuleLoader::extractMetadata(pluginPath);
+        auto metadataOpt = LogosModule::extractMetadata(pluginPath);
         if (!metadataOpt) {
             qWarning() << "No metadata found for plugin:" << pluginPath;
             return QString();
@@ -85,19 +85,19 @@ namespace PluginManager {
 
         // Load the plugin using module_lib
         QString errorString;
-        ModuleHandle handle = ModuleLoader::loadFromPath(pluginPath, &errorString);
+        LogosModule module = LogosModule::loadFromPath(pluginPath, &errorString);
 
-        if (!handle.isValid()) {
+        if (!module.isValid()) {
             qCritical() << "Failed to load plugin (Local mode):" << errorString;
             return false;
         }
 
         qDebug() << "Plugin loaded successfully (Local mode)";
 
-        QObject* plugin = handle.instance();
+        QObject* plugin = module.instance();
 
         // Cast to the base PluginInterface using module_lib
-        PluginInterface* basePlugin = handle.as<PluginInterface>();
+        PluginInterface* basePlugin = module.as<PluginInterface>();
         if (!basePlugin) {
             qCritical() << "Plugin does not implement the PluginInterface (Local mode)";
             return false;
@@ -147,8 +147,8 @@ namespace PluginManager {
         // Add the plugin name to our loaded plugins list
         g_loaded_plugins.append(pluginName);
 
-        // Release ownership from handle so the plugin stays loaded
-        handle.release();
+        // Release ownership from module so the plugin stays loaded
+        module.release();
 
         qDebug() << "Plugin" << pluginName << "is now running in-process (Local mode)";
         return true;
@@ -569,22 +569,22 @@ namespace PluginManager {
         int loadedCount = 0;
         
         // Get all statically registered plugin instances using module_lib
-        auto staticModules = ModuleLoader::getStaticModules();
+        auto staticModules = LogosModule::getStaticModules();
         
         qDebug() << "Found" << staticModules.size() << "static plugin instances";
         
-        for (auto& handle : staticModules) {
-            if (!handle.isValid()) {
+        for (auto& module : staticModules) {
+            if (!module.isValid()) {
                 qWarning() << "Invalid static plugin instance, skipping";
                 continue;
             }
             
-            QObject* pluginObject = handle.instance();
+            QObject* pluginObject = module.instance();
             
             // Cast to PluginInterface using module_lib
-            PluginInterface* basePlugin = handle.as<PluginInterface>();
+            PluginInterface* basePlugin = module.as<PluginInterface>();
             if (!basePlugin) {
-                qDebug() << "Static plugin" << ModuleIntrospection::getClassName(pluginObject)
+                qDebug() << "Static plugin" << module.getClassName()
                         << "does not implement PluginInterface, skipping";
                 continue;
             }
@@ -657,9 +657,9 @@ namespace PluginManager {
         qDebug() << "registerPluginInstance: Registering plugin:" << pluginName;
         
         // Wrap the existing plugin object using module_lib
-        ModuleHandle handle = ModuleLoader::wrapExisting(pluginObject);
+        LogosModule module = LogosModule::wrapExisting(pluginObject);
         
-        PluginInterface* basePlugin = handle.as<PluginInterface>();
+        PluginInterface* basePlugin = module.as<PluginInterface>();
         if (!basePlugin) {
             qCritical() << "Plugin" << pluginName << "does not implement PluginInterface";
             return false;
@@ -720,16 +720,16 @@ namespace PluginManager {
         qDebug() << "registerPluginByName: Looking for plugin:" << pluginName;
         
         // Use module_lib to get static plugins
-        auto staticModules = ModuleLoader::getStaticModules();
+        auto staticModules = LogosModule::getStaticModules();
         qDebug() << "Found" << staticModules.size() << "static plugin instances";
         
-        for (auto& handle : staticModules) {
-            if (!handle.isValid()) continue;
+        for (auto& module : staticModules) {
+            if (!module.isValid()) continue;
             
-            PluginInterface* plugin = handle.as<PluginInterface>();
+            PluginInterface* plugin = module.as<PluginInterface>();
             if (plugin && plugin->name() == pluginName) {
                 qDebug() << "Found matching static plugin:" << pluginName;
-                return registerPluginInstance(pluginName, handle.instance());
+                return registerPluginInstance(pluginName, module.instance());
             }
         }
         return false;
