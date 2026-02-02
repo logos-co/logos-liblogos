@@ -171,7 +171,22 @@ char* logos_core_get_token(const char* key)
 
 char* logos_core_get_module_stats()
 {
-    return ProcessStats::getModuleStats();
+#ifdef Q_OS_IOS
+    // iOS doesn't support process-based plugins, pass empty map
+    QHash<QString, qint64> emptyProcesses;
+    return ProcessStats::getModuleStats(emptyProcesses);
+#else
+    // Build PID map from plugin processes
+    QHash<QString, qint64> processes;
+    for (auto it = g_plugin_processes.begin(); it != g_plugin_processes.end(); ++it) {
+        // Skip core_manager as it runs in-process
+        if (it.key() == "core_manager") {
+            continue;
+        }
+        processes[it.key()] = it.value()->processId();
+    }
+    return ProcessStats::getModuleStats(processes);
+#endif
 }
 
 // === Async Callback API Implementation ===

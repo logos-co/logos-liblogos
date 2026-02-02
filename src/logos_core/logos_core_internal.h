@@ -58,14 +58,4 @@ struct EventListener {
 // Global list to store registered event listeners
 extern QList<EventListener> g_event_listeners;
 
-// Structure for process statistics
-struct ProcessStatsData {
-    double cpuPercent;
-    double cpuTimeSeconds;
-    double memoryMB;
-};
-
-// Global hash to track previous CPU times for percentage calculation
-extern QHash<qint64, QPair<double, qint64>> g_previous_cpu_times;
-
 #endif // LOGOS_CORE_INTERNAL_H

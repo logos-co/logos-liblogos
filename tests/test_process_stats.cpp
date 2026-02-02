@@ -5,34 +5,43 @@
 #include <QJsonDocument>
 #include <QJsonArray>
 #include <QJsonObject>
+#include <QProcess>
 #include <cstring>
 #include <unistd.h>
 
 // Test fixture for process stats tests
 class ProcessStatsTest : public ::testing::Test {
 protected:
+    // Store test processes for cleanup
+    QList<QProcess*> testProcesses;
+    
     void SetUp() override {
-        // Clear previous CPU times to ensure test isolation
-        g_previous_cpu_times.clear();
-        
-        // Clear plugin processes
-        g_plugin_processes.clear();
+        // Clear internal CPU time history to ensure test isolation
+        ProcessStats::clearHistory();
     }
     
     void TearDown() override {
-        // Clean up previous CPU times
-        g_previous_cpu_times.clear();
+        // Clean up internal CPU time history
+        ProcessStats::clearHistory();
         
-        // Clean up plugin processes
-        for (auto it = g_plugin_processes.begin(); it != g_plugin_processes.end(); ++it) {
-            QProcess* process = it.value();
+        // Clean up test processes
+        for (QProcess* process : testProcesses) {
             if (process) {
                 process->terminate();
                 process->waitForFinished(1000);
                 delete process;
             }
         }
-        g_plugin_processes.clear();
+        testProcesses.clear();
+    }
+    
+    // Helper to create a test process and track it for cleanup
+    QProcess* createTestProcess() {
+        QProcess* process = new QProcess();
+        process->start("sleep", QStringList() << "10");
+        process->waitForStarted();
+        testProcesses.append(process);
+        return process;
     }
 };
 
@@ -42,7 +51,7 @@ protected:
 
 // Verifies that getProcessStats() returns zeroed stats for negative PID
 TEST_F(ProcessStatsTest, GetProcessStats_ReturnsZeroedStatsForNegativePid) {
-    ProcessStatsData stats = ProcessStats::getProcessStats(-1);
+    ProcessStats::ProcessStatsData stats = ProcessStats::getProcessStats(-1);
     
     EXPECT_EQ(stats.cpuPercent, 0.0);
     EXPECT_EQ(stats.cpuTimeSeconds, 0.0);
@@ -51,7 +60,7 @@ TEST_F(ProcessStatsTest, GetProcessStats_ReturnsZeroedStatsForNegativePid) {
 
 // Verifies that getProcessStats() returns zeroed stats for zero PID
 TEST_F(ProcessStatsTest, GetProcessStats_ReturnsZeroedStatsForZeroPid) {
-    ProcessStatsData stats = ProcessStats::getProcessStats(0);
+    ProcessStats::ProcessStatsData stats = ProcessStats::getProcessStats(0);
     
     EXPECT_EQ(stats.cpuPercent, 0.0);
     EXPECT_EQ(stats.cpuTimeSeconds, 0.0);
@@ -62,7 +71,7 @@ TEST_F(ProcessStatsTest, GetProcessStats_ReturnsZeroedStatsForZeroPid) {
 TEST_F(ProcessStatsTest, GetProcessStats_ReturnsValidStatsForCurrentProcess) {
     qint64 currentPid = getpid();
     
-    ProcessStatsData stats = ProcessStats::getProcessStats(currentPid);
+    ProcessStats::ProcessStatsData stats = ProcessStats::getProcessStats(currentPid);
     
     // We can't predict exact values, but we can verify the structure is populated
     // On supported platforms (macOS, Linux), at least some stats should be non-zero
@@ -76,7 +85,7 @@ TEST_F(ProcessStatsTest, GetProcessStats_ReturnsValidStatsForCurrentProcess) {
 TEST_F(ProcessStatsTest, GetProcessStats_MemoryIsNonNegative) {
     qint64 currentPid = getpid();
     
-    ProcessStatsData stats = ProcessStats::getProcessStats(currentPid);
+    ProcessStats::ProcessStatsData stats = ProcessStats::getProcessStats(currentPid);
     
     EXPECT_GE(stats.memoryMB, 0.0);
 }
@@ -85,7 +94,7 @@ TEST_F(ProcessStatsTest, GetProcessStats_MemoryIsNonNegative) {
 TEST_F(ProcessStatsTest, GetProcessStats_CpuTimeIsNonNegative) {
     qint64 currentPid = getpid();
     
-    ProcessStatsData stats = ProcessStats::getProcessStats(currentPid);
+    ProcessStats::ProcessStatsData stats = ProcessStats::getProcessStats(currentPid);
     
     EXPECT_GE(stats.cpuTimeSeconds, 0.0);
 }
@@ -94,10 +103,10 @@ TEST_F(ProcessStatsTest, GetProcessStats_CpuTimeIsNonNegative) {
 TEST_F(ProcessStatsTest, GetProcessStats_CpuPercentIsZeroOnFirstCall) {
     qint64 currentPid = getpid();
     
-    // Ensure no previous data exists
-    g_previous_cpu_times.remove(currentPid);
+    // Ensure no previous data exists by clearing history
+    ProcessStats::clearHistory();
     
-    ProcessStatsData stats = ProcessStats::getProcessStats(currentPid);
+    ProcessStats::ProcessStatsData stats = ProcessStats::getProcessStats(currentPid);
     
     // First call should have 0% CPU since there's no previous measurement
     EXPECT_EQ(stats.cpuPercent, 0.0);
@@ -120,22 +129,20 @@ TEST_F(ProcessStatsTest, GetProcessStats_CpuPercentUpdatesOnSecondCall) {
     usleep(10000); // 10ms
     
     // Second call should potentially have non-zero CPU percent
-    ProcessStatsData stats = ProcessStats::getProcessStats(currentPid);
+    ProcessStats::ProcessStatsData stats = ProcessStats::getProcessStats(currentPid);
     
     // CPU percent should be non-negative (might be 0 if work was too fast)
     EXPECT_GE(stats.cpuPercent, 0.0);
-    
-    // Verify that previous CPU times are being tracked
-    EXPECT_TRUE(g_previous_cpu_times.contains(currentPid));
 }
 
 // =============================================================================
 // getModuleStats Tests
 // =============================================================================
 
-// Verifies that getModuleStats() returns an empty JSON array when no plugins are loaded
+// Verifies that getModuleStats() returns an empty JSON array when no processes are passed
 TEST_F(ProcessStatsTest, GetModuleStats_ReturnsEmptyArrayWhenNoPlugins) {
-    char* result = ProcessStats::getModuleStats();
+    QHash<QString, qint64> emptyProcesses;
+    char* result = ProcessStats::getModuleStats(emptyProcesses);
     
     ASSERT_NE(result, nullptr);
     
@@ -154,7 +161,8 @@ TEST_F(ProcessStatsTest, GetModuleStats_ReturnsEmptyArrayWhenNoPlugins) {
 
 // Verifies that getModuleStats() returns a non-null pointer
 TEST_F(ProcessStatsTest, GetModuleStats_ReturnsNonNullPointer) {
-    char* result = ProcessStats::getModuleStats();
+    QHash<QString, qint64> emptyProcesses;
+    char* result = ProcessStats::getModuleStats(emptyProcesses);
     
     ASSERT_NE(result, nullptr);
     
@@ -164,17 +172,16 @@ TEST_F(ProcessStatsTest, GetModuleStats_ReturnsNonNullPointer) {
 
 // Verifies that getModuleStats() returns valid JSON structure with correct fields
 TEST_F(ProcessStatsTest, GetModuleStats_ReturnsValidJsonStructure) {
-    // Create a dummy plugin process
-    QProcess* dummyProcess = new QProcess();
-    dummyProcess->start("sleep", QStringList() << "1");
-    dummyProcess->waitForStarted();
-    
-    qint64 pid = dummyProcess->processId();
+    // Create a test process
+    QProcess* testProcess = createTestProcess();
+    qint64 pid = testProcess->processId();
     ASSERT_GT(pid, 0);
     
-    g_plugin_processes.insert("test_plugin", dummyProcess);
+    // Build PID map
+    QHash<QString, qint64> processes;
+    processes["test_plugin"] = pid;
     
-    char* result = ProcessStats::getModuleStats();
+    char* result = ProcessStats::getModuleStats(processes);
     
     ASSERT_NE(result, nullptr);
     
@@ -201,24 +208,25 @@ TEST_F(ProcessStatsTest, GetModuleStats_ReturnsValidJsonStructure) {
     
     // Clean up
     delete[] result;
-    // Note: Process cleanup is handled by TearDown()
 }
 
-// Verifies that getModuleStats() skips core_manager plugin
-TEST_F(ProcessStatsTest, GetModuleStats_SkipsCoreManager) {
-    // Create a dummy process for core_manager
-    QProcess* coreManagerProcess = new QProcess();
-    coreManagerProcess->start("sleep", QStringList() << "1");
-    coreManagerProcess->waitForStarted();
-    g_plugin_processes.insert("core_manager", coreManagerProcess);
+// Verifies that getModuleStats() includes all processes passed to it
+TEST_F(ProcessStatsTest, GetModuleStats_IncludesAllPassedProcesses) {
+    // Create test processes
+    QProcess* process1 = createTestProcess();
+    QProcess* process2 = createTestProcess();
     
-    // Create another plugin process
-    QProcess* otherProcess = new QProcess();
-    otherProcess->start("sleep", QStringList() << "1");
-    otherProcess->waitForStarted();
-    g_plugin_processes.insert("other_plugin", otherProcess);
+    qint64 pid1 = process1->processId();
+    qint64 pid2 = process2->processId();
+    ASSERT_GT(pid1, 0);
+    ASSERT_GT(pid2, 0);
     
-    char* result = ProcessStats::getModuleStats();
+    // Build PID map with multiple processes
+    QHash<QString, qint64> processes;
+    processes["plugin_one"] = pid1;
+    processes["plugin_two"] = pid2;
+    
+    char* result = ProcessStats::getModuleStats(processes);
     
     ASSERT_NE(result, nullptr);
     
@@ -230,13 +238,53 @@ TEST_F(ProcessStatsTest, GetModuleStats_SkipsCoreManager) {
     
     QJsonArray modulesArray = doc.array();
     
-    // Should only contain other_plugin, not core_manager
-    ASSERT_EQ(modulesArray.size(), 1);
+    // Should contain both processes
+    ASSERT_EQ(modulesArray.size(), 2);
     
-    QJsonObject moduleObj = modulesArray[0].toObject();
-    EXPECT_EQ(moduleObj["name"].toString().toStdString(), "other_plugin");
+    // Collect names
+    QSet<QString> names;
+    for (const QJsonValue& val : modulesArray) {
+        names.insert(val.toObject()["name"].toString());
+    }
+    
+    EXPECT_TRUE(names.contains("plugin_one"));
+    EXPECT_TRUE(names.contains("plugin_two"));
     
     // Clean up
     delete[] result;
-    // Note: Process cleanup is handled by TearDown()
+}
+
+// Verifies that getModuleStats() skips invalid PIDs
+TEST_F(ProcessStatsTest, GetModuleStats_SkipsInvalidPids) {
+    // Create one valid process
+    QProcess* validProcess = createTestProcess();
+    qint64 validPid = validProcess->processId();
+    ASSERT_GT(validPid, 0);
+    
+    // Build PID map with valid and invalid PIDs
+    QHash<QString, qint64> processes;
+    processes["valid_plugin"] = validPid;
+    processes["invalid_plugin"] = -1;  // Invalid PID
+    processes["zero_plugin"] = 0;      // Invalid PID
+    
+    char* result = ProcessStats::getModuleStats(processes);
+    
+    ASSERT_NE(result, nullptr);
+    
+    // Parse the JSON
+    QByteArray jsonData(result);
+    QJsonDocument doc = QJsonDocument::fromJson(jsonData);
+    
+    EXPECT_TRUE(doc.isArray());
+    
+    QJsonArray modulesArray = doc.array();
+    
+    // Should only contain the valid process
+    ASSERT_EQ(modulesArray.size(), 1);
+    
+    QJsonObject moduleObj = modulesArray[0].toObject();
+    EXPECT_EQ(moduleObj["name"].toString().toStdString(), "valid_plugin");
+    
+    // Clean up
+    delete[] result;
 }

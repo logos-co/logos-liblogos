@@ -4,6 +4,8 @@
 #include <QJsonArray>
 #include <QJsonObject>
 #include <QJsonDocument>
+#include <QPair>
+#include <QSet>
 #include <cmath>
 #include <cstring>
 
@@ -22,6 +24,15 @@
 #endif
 
 namespace ProcessStats {
+
+// Internal state: tracks previous CPU times for percentage calculation
+namespace {
+    QHash<qint64, QPair<double, qint64>> s_previous_cpu_times;
+}
+
+    void clearHistory() {
+        s_previous_cpu_times.clear();
+    }
 
     ProcessStatsData getProcessStats(qint64 pid) {
         ProcessStatsData stats = {0.0, 0.0, 0.0};
@@ -45,8 +56,8 @@ namespace ProcessStats {
             
             // Calculate CPU percentage
             qint64 currentTime = QDateTime::currentMSecsSinceEpoch();
-            if (g_previous_cpu_times.contains(pid)) {
-                QPair<double, qint64> previous = g_previous_cpu_times[pid];
+            if (s_previous_cpu_times.contains(pid)) {
+                QPair<double, qint64> previous = s_previous_cpu_times[pid];
                 double timeDelta = (currentTime - previous.second) / 1000.0; // Convert to seconds
                 double cpuDelta = stats.cpuTimeSeconds - previous.first;
                 
@@ -56,7 +67,7 @@ namespace ProcessStats {
             }
             
             // Update previous values
-            g_previous_cpu_times[pid] = QPair<double, qint64>(stats.cpuTimeSeconds, currentTime);
+            s_previous_cpu_times[pid] = QPair<double, qint64>(stats.cpuTimeSeconds, currentTime);
         }
         
     #elif defined(Q_OS_LINUX)
@@ -109,8 +120,8 @@ namespace ProcessStats {
         
         // Calculate CPU percentage
         qint64 currentTime = QDateTime::currentMSecsSinceEpoch();
-        if (g_previous_cpu_times.contains(pid)) {
-            QPair<double, qint64> previous = g_previous_cpu_times[pid];
+        if (s_previous_cpu_times.contains(pid)) {
+            QPair<double, qint64> previous = s_previous_cpu_times[pid];
             double timeDelta = (currentTime - previous.second) / 1000.0; // Convert to seconds
             double cpuDelta = stats.cpuTimeSeconds - previous.first;
             
@@ -120,7 +131,7 @@ namespace ProcessStats {
         }
         
         // Update previous values
-        g_previous_cpu_times[pid] = QPair<double, qint64>(stats.cpuTimeSeconds, currentTime);
+        s_previous_cpu_times[pid] = QPair<double, qint64>(stats.cpuTimeSeconds, currentTime);
         
     #else
         // Unsupported platform
@@ -130,24 +141,34 @@ namespace ProcessStats {
         return stats;
     }
 
-    char* getModuleStats() {
+    char* getModuleStats(const QHash<QString, qint64>& processes) {
         qDebug() << "getModuleStats() called";
         
         QJsonArray modulesArray;
         
     #ifndef Q_OS_IOS
-        // Iterate through plugin processes
-        for (auto it = g_plugin_processes.begin(); it != g_plugin_processes.end(); ++it) {
-            QString pluginName = it.key();
-            QProcess* process = it.value();
-            
-            // Skip core_manager as it runs in-process
-            if (pluginName == "core_manager") {
-                continue;
+        // Clean up stale entries from internal cache
+        // Build set of active PIDs
+        QSet<qint64> activePids;
+        for (auto it = processes.begin(); it != processes.end(); ++it) {
+            activePids.insert(it.value());
+        }
+        
+        // Remove entries for processes that are no longer active
+        auto cacheIt = s_previous_cpu_times.begin();
+        while (cacheIt != s_previous_cpu_times.end()) {
+            if (!activePids.contains(cacheIt.key())) {
+                cacheIt = s_previous_cpu_times.erase(cacheIt);
+            } else {
+                ++cacheIt;
             }
+        }
+        
+        // Iterate through provided processes
+        for (auto it = processes.begin(); it != processes.end(); ++it) {
+            QString pluginName = it.key();
+            qint64 pid = it.value();
             
-            // Get process ID
-            qint64 pid = process->processId();
             if (pid <= 0) {
                 qWarning() << "Invalid PID for plugin:" << pluginName;
                 continue;
