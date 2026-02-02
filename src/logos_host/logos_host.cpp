@@ -1,5 +1,4 @@
 #include <QCoreApplication>
-#include <QPluginLoader>
 #include <QDebug>
 #include "command_line_parser.h"
 #include "plugin_initializer.h"
@@ -21,8 +20,7 @@ int main(int argc, char *argv[])
     qDebug() << "Plugin path:" << args.path;
 
     // 2. Setup plugin (auth token, loading, and API initialization)
-    QPluginLoader loader;
-    LogosAPI* logos_api = setupPlugin(args.name, args.path, loader);
+    LogosAPI* logos_api = setupPlugin(args.name, args.path);
     if (!logos_api) {
         return 1;
     }

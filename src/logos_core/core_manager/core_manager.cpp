@@ -2,7 +2,6 @@
 #include <QCoreApplication>
 #include <QDebug>
 #include <QDir>
-#include <QPluginLoader>
 #include <QMetaMethod>
 #include <QJsonObject>
 #include <QJsonArray>
@@ -11,6 +10,9 @@
 #include "../logos_core.h"
 #include "logos_api.h"
 #include "logos_api_client.h"
+#include <module_lib/module_lib.h>
+
+using namespace ModuleLib;
 
 CoreManagerPlugin::CoreManagerPlugin() {
     qDebug() << "CoreManager plugin created";
@@ -128,8 +130,6 @@ QString CoreManagerPlugin::processPlugin(const QString& filePath) {
 // TODO: unclear if in use but it needs to be updated
 // TODO: this should NOT be in liblogos in any case and should be moved to its own module
 QJsonArray CoreManagerPlugin::getPluginMethods(const QString& pluginName) {
-    QJsonArray methodsArray;
-
     auto m_logosAPI = new LogosAPI("core_manager", this);
 
     // Get the plugin using LogosAPI instead of PluginRegistry
@@ -140,53 +140,11 @@ QJsonArray CoreManagerPlugin::getPluginMethods(const QString& pluginName) {
 
     if (!plugin) {
         qWarning() << "Plugin not found:" << pluginName;
-        return methodsArray;
+        return QJsonArray();
     }
 
-    // Use QMetaObject for runtime introspection
-    const QMetaObject* metaObject = plugin->metaObject();
-
-    // Iterate through methods and add to the JSON array
-    for (int i = 0; i < metaObject->methodCount(); ++i) {
-        QMetaMethod method = metaObject->method(i);
-
-        // Skip methods from QObject and other base classes
-        if (method.enclosingMetaObject() != metaObject) {
-            continue;
-        }
-
-        // Create a JSON object for each method
-        QJsonObject methodObj;
-        methodObj["signature"] = QString::fromUtf8(method.methodSignature());
-        methodObj["name"] = QString::fromUtf8(method.name());
-        methodObj["returnType"] = QString::fromUtf8(method.typeName());
-
-        // Check if the method is invokable via QMetaObject::invokeMethod
-        methodObj["isInvokable"] = method.isValid() && (method.methodType() == QMetaMethod::Method || 
-                                    method.methodType() == QMetaMethod::Slot);
-
-        // Add parameter information if available
-        if (method.parameterCount() > 0) {
-            QJsonArray params;
-            for (int p = 0; p < method.parameterCount(); ++p) {
-                QJsonObject paramObj;
-                paramObj["type"] = QString::fromUtf8(method.parameterTypeName(p));
-
-                // Try to get parameter name if available
-                QByteArrayList paramNames = method.parameterNames();
-                if (p < paramNames.size() && !paramNames.at(p).isEmpty()) {
-                    paramObj["name"] = QString::fromUtf8(paramNames.at(p));
-                } else {
-                    paramObj["name"] = "param" + QString::number(p);
-                }
-
-                params.append(paramObj);
-            }
-            methodObj["parameters"] = params;
-        }
-
-        methodsArray.append(methodObj);
-    }
+    // Use module_lib for runtime introspection
+    QJsonArray methodsArray = LogosModule::getMethodsAsJson(plugin, true);
 
     // Clean up the replica object when done
     delete plugin;

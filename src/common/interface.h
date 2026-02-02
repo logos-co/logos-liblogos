@@ -5,6 +5,8 @@
 #include <QString>
 #include "logos_api.h"
 
+// NOTE: this will eventually be moved into logos-co/logos-module
+
 // Define the common base interface for all modules
 class PluginInterface
 {
