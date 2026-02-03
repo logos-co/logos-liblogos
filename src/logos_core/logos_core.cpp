@@ -81,6 +81,12 @@ int logos_core_load_plugin_with_dependencies(const char* plugin_name)
     
     QStringList resolvedModules = PluginManager::resolveDependencies(requestedModules);
     
+    // If the requested plugin wasn't resolved (unknown plugin), return failure
+    if (resolvedModules.isEmpty() || !resolvedModules.contains(name)) {
+        qWarning() << "Cannot load plugin: plugin not found:" << name;
+        return 0;
+    }
+    
     qDebug() << "Loading plugin with resolved dependencies:" << resolvedModules;
     
     // Load all plugins in dependency order
