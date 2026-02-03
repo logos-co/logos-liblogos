@@ -92,6 +92,10 @@ int logos_core_load_plugin_with_dependencies(const char* plugin_name)
     // Load all plugins in dependency order
     bool allSucceeded = true;
     for (const QString& moduleName : resolvedModules) {
+        if (PluginManager::isPluginLoaded(moduleName)) {
+            qDebug() << "Plugin already loaded, skipping:" << moduleName;
+            continue;
+        }
         if (!PluginManager::loadPlugin(moduleName)) {
             qWarning() << "Failed to load module:" << moduleName;
             allSucceeded = false;

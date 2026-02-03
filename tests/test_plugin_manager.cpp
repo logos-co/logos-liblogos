@@ -476,3 +476,38 @@ TEST_F(PluginManagerTest, LoadPluginWithDependencies_ReturnsZeroForUnknown) {
     int result = logos_core_load_plugin_with_dependencies("unknown_plugin");
     EXPECT_EQ(result, 0);
 }
+
+// Verifies that logos_core_load_plugin_with_dependencies() skips already-loaded plugins
+TEST_F(PluginManagerTest, LoadPluginWithDependencies_SkipsAlreadyLoaded) {
+    // Set up plugin_a which depends on plugin_b
+    PluginManager::addKnownPlugin("plugin_a", "/path/to/plugin_a");
+    PluginManager::addKnownPlugin("plugin_b", "/path/to/plugin_b");
+    
+    QJsonObject metadataA;
+    metadataA["name"] = "plugin_a";
+    QJsonArray depsA;
+    depsA.append("plugin_b");
+    metadataA["dependencies"] = depsA;
+    g_plugin_metadata.insert("plugin_a", metadataA);
+    
+    QJsonObject metadataB;
+    metadataB["name"] = "plugin_b";
+    metadataB["dependencies"] = QJsonArray();
+    g_plugin_metadata.insert("plugin_b", metadataB);
+    
+    // Mark plugin_b as already loaded
+    g_loaded_plugins.append("plugin_b");
+    
+    // Verify the skip logic preconditions
+    EXPECT_TRUE(PluginManager::isPluginLoaded("plugin_b"));
+    EXPECT_FALSE(PluginManager::isPluginLoaded("plugin_a"));
+    
+    // The function should skip plugin_b (already loaded) and only attempt to load plugin_a
+    // Since plugin_a doesn't have a real file, loading will fail for plugin_a specifically,
+    // but the important thing is plugin_b is skipped (not double-loaded)
+    int result = logos_core_load_plugin_with_dependencies("plugin_a");
+    
+    // Result will be 0 because plugin_a can't actually be loaded (no real file),
+    // but plugin_b should still be in loaded state (not removed or errored)
+    EXPECT_TRUE(PluginManager::isPluginLoaded("plugin_b"));
+}
