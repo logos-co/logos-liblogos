@@ -424,29 +424,32 @@ namespace PluginManager {
             return plugins;
         }
         
-        // Get all files in the directory
-        QStringList entries = dir.entryList(QDir::Files);
-        qDebug() << "Files found:" << entries;
-        
-        // Filter for plugin files based on platform
-        QStringList nameFilters;
+        QString libExtension;
     #ifdef Q_OS_WIN
-        nameFilters << "*.dll";
+        libExtension = ".dll";
     #elif defined(Q_OS_MAC)
-        nameFilters << "*.dylib";
+        libExtension = ".dylib";
     #else
-        nameFilters << "*.so";
+        libExtension = ".so";
     #endif
-        
-        dir.setNameFilters(nameFilters);
-        QStringList pluginFiles = dir.entryList(QDir::Files);
-        
-        for (const QString &fileName : pluginFiles) {
-            QString filePath = dir.absoluteFilePath(fileName);
-            plugins.append(filePath);
-            qDebug() << "Found plugin:" << filePath;
+
+        // Iterate through subdirectories (each subdirectory is a module)
+        QStringList subdirs = dir.entryList(QDir::Dirs | QDir::NoDotAndDotDot);
+        qDebug() << "Module directories found:" << subdirs;
+
+        for (const QString &subdir : subdirs) {
+            // For now expect library file named <subdir>/<subdir>.<ext>
+            QString pluginLibPath = dir.absoluteFilePath(subdir + "/" + subdir + libExtension);
+
+            if (QFile::exists(pluginLibPath)) {
+                plugins.append(pluginLibPath);
+                qDebug() << "Found plugin:" << pluginLibPath;
+            } else {
+                qDebug() << "No plugin library found in:" << subdir 
+                         << "(expected:" << pluginLibPath << ")";
+            }
         }
-        
+
         return plugins;
     }
 

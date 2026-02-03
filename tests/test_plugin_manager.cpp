@@ -206,13 +206,13 @@ TEST_F(PluginManagerTest, FindPlugins_ReturnsEmptyForEmptyDir) {
     EXPECT_TRUE(plugins.isEmpty());
 }
 
-// Verifies that findPlugins() correctly filters plugin files by platform-specific extensions
-// (.dylib on macOS, .so on Linux, .dll on Windows) and ignores other file types
-TEST_F(PluginManagerTest, FindPlugins_FiltersByPlatformExtension) {
+// Verifies that findPlugins() correctly finds plugin files in subdirectories
+// with platform-specific extensions (.dylib on macOS, .so on Linux, .dll on Windows)
+TEST_F(PluginManagerTest, FindPlugins_FindsPluginsInSubdirectories) {
     QTemporaryDir tempDir;
     ASSERT_TRUE(tempDir.isValid());
     
-    // Create test files with various extensions
+    // Determine platform-specific extension
     QString correctExt;
 #ifdef Q_OS_WIN
     correctExt = ".dll";
@@ -222,24 +222,28 @@ TEST_F(PluginManagerTest, FindPlugins_FiltersByPlatformExtension) {
     correctExt = ".so";
 #endif
     
-    // Create a file with the correct extension
-    QFile correctFile(tempDir.filePath("plugin" + correctExt));
+    // Create a valid plugin subdirectory with matching library name
+    QDir(tempDir.path()).mkdir("myplugin");
+    QFile correctFile(tempDir.filePath("myplugin/myplugin" + correctExt));
     ASSERT_TRUE(correctFile.open(QIODevice::WriteOnly));
     correctFile.close();
     
-    // Create files with wrong extensions
-    QFile txtFile(tempDir.filePath("plugin.txt"));
-    ASSERT_TRUE(txtFile.open(QIODevice::WriteOnly));
-    txtFile.close();
+    // Create a subdirectory without a matching library (should be ignored)
+    QDir(tempDir.path()).mkdir("otherplugin");
+    QFile wrongFile(tempDir.filePath("otherplugin/wrong_name" + correctExt));
+    ASSERT_TRUE(wrongFile.open(QIODevice::WriteOnly));
+    wrongFile.close();
     
-    QFile noExtFile(tempDir.filePath("plugin"));
-    ASSERT_TRUE(noExtFile.open(QIODevice::WriteOnly));
-    noExtFile.close();
+    // Create a flat file in root (should be ignored - old structure)
+    QFile flatFile(tempDir.filePath("flatplugin" + correctExt));
+    ASSERT_TRUE(flatFile.open(QIODevice::WriteOnly));
+    flatFile.close();
     
     QStringList plugins = PluginManager::findPlugins(tempDir.path());
     
-    // Should only find the file with the correct extension
+    // Should only find the plugin in the subdirectory with matching name
     ASSERT_EQ(plugins.size(), 1);
+    EXPECT_TRUE(plugins[0].contains("myplugin/myplugin"));
     EXPECT_TRUE(plugins[0].endsWith(correctExt));
 }
 
