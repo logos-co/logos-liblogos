@@ -82,5 +82,7 @@ int main(int argc, char *argv[]) {
         }
     }
     
-    return logos_core_exec();
+    int result = logos_core_exec();
+    logos_core_cleanup();
+    return result;
 } 
