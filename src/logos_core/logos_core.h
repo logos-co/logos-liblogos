@@ -50,6 +50,11 @@ LOGOS_CORE_EXPORT char** logos_core_get_known_plugins();
 // Returns 1 if successful, 0 if failed
 LOGOS_CORE_EXPORT int logos_core_load_plugin(const char* plugin_name);
 
+// Load a plugin and all its dependencies automatically
+// Resolves the dependency tree and loads plugins in correct order
+// Returns 1 if all plugins loaded successfully, 0 if any failed
+LOGOS_CORE_EXPORT int logos_core_load_plugin_with_dependencies(const char* plugin_name);
+
 // Unload a specific plugin by name
 // Returns 1 if successful, 0 if failed
 LOGOS_CORE_EXPORT int logos_core_unload_plugin(const char* plugin_name);

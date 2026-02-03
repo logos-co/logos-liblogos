@@ -100,8 +100,8 @@ QJsonArray CoreManagerPlugin::getKnownPlugins() {
 }
 
 bool CoreManagerPlugin::loadPlugin(const QString& pluginName) {
-    qDebug() << "CoreManager: Loading plugin:" << pluginName;
-    int result = logos_core_load_plugin(pluginName.toUtf8().constData());
+    qDebug() << "CoreManager: Loading plugin with dependencies:" << pluginName;
+    int result = logos_core_load_plugin_with_dependencies(pluginName.toUtf8().constData());
     return result == 1;
 }
 

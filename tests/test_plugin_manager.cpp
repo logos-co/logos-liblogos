@@ -1,11 +1,13 @@
 #include <gtest/gtest.h>
 #include "plugin_manager.h"
 #include "logos_core_internal.h"
+#include "logos_core.h"
 #include "logos_mode.h"
 #include <QCoreApplication>
 #include <QDir>
 #include <QTemporaryDir>
 #include <QFile>
+#include <QJsonArray>
 #include <cstring>
 
 // Test fixture for plugin manager tests
@@ -353,4 +355,159 @@ TEST_F(PluginManagerTest, RegisterPluginByName_ReturnsFalseForUnfoundPlugin) {
     // Try to register a non-existent plugin
     bool result = PluginManager::registerPluginByName("nonexistent_plugin");
     EXPECT_FALSE(result);
+}
+
+// =============================================================================
+// resolveDependencies Function Tests
+// =============================================================================
+
+// Verifies that resolveDependencies() returns an empty list when given an empty list
+TEST_F(PluginManagerTest, ResolveDependencies_ReturnsEmptyForEmptyInput) {
+    QStringList result = PluginManager::resolveDependencies(QStringList());
+    EXPECT_TRUE(result.isEmpty());
+}
+
+// Verifies that resolveDependencies() returns an empty list when the plugin is not known
+TEST_F(PluginManagerTest, ResolveDependencies_ReturnsEmptyForUnknownPlugin) {
+    QStringList requested;
+    requested.append("unknown_plugin");
+    
+    QStringList result = PluginManager::resolveDependencies(requested);
+    EXPECT_TRUE(result.isEmpty());
+}
+
+// Verifies that resolveDependencies() returns the plugin itself when it has no dependencies
+TEST_F(PluginManagerTest, ResolveDependencies_ReturnsSinglePluginWithNoDeps) {
+    // Add a known plugin with no dependencies
+    PluginManager::addKnownPlugin("plugin_a", "/path/to/plugin_a");
+    QJsonObject metadata;
+    metadata["name"] = "plugin_a";
+    metadata["dependencies"] = QJsonArray();
+    g_plugin_metadata.insert("plugin_a", metadata);
+    
+    QStringList requested;
+    requested.append("plugin_a");
+    
+    QStringList result = PluginManager::resolveDependencies(requested);
+    
+    ASSERT_EQ(result.size(), 1);
+    EXPECT_EQ(result[0].toStdString(), "plugin_a");
+}
+
+// Verifies that resolveDependencies() returns dependencies in topological order (deps first)
+TEST_F(PluginManagerTest, ResolveDependencies_ReturnsCorrectOrder) {
+    // Set up plugin_a which depends on plugin_b
+    PluginManager::addKnownPlugin("plugin_a", "/path/to/plugin_a");
+    PluginManager::addKnownPlugin("plugin_b", "/path/to/plugin_b");
+    
+    QJsonObject metadataA;
+    metadataA["name"] = "plugin_a";
+    QJsonArray depsA;
+    depsA.append("plugin_b");
+    metadataA["dependencies"] = depsA;
+    g_plugin_metadata.insert("plugin_a", metadataA);
+    
+    QJsonObject metadataB;
+    metadataB["name"] = "plugin_b";
+    metadataB["dependencies"] = QJsonArray();
+    g_plugin_metadata.insert("plugin_b", metadataB);
+    
+    QStringList requested;
+    requested.append("plugin_a");
+    
+    QStringList result = PluginManager::resolveDependencies(requested);
+    
+    // Should return both plugins, with plugin_b first (dependency order)
+    ASSERT_EQ(result.size(), 2);
+    EXPECT_EQ(result[0].toStdString(), "plugin_b");  // Dependency first
+    EXPECT_EQ(result[1].toStdString(), "plugin_a");  // Then the requested plugin
+}
+
+// Verifies that resolveDependencies() handles transitive dependencies correctly
+TEST_F(PluginManagerTest, ResolveDependencies_HandlesTransitiveDeps) {
+    // Set up: plugin_a -> plugin_b -> plugin_c
+    PluginManager::addKnownPlugin("plugin_a", "/path/to/plugin_a");
+    PluginManager::addKnownPlugin("plugin_b", "/path/to/plugin_b");
+    PluginManager::addKnownPlugin("plugin_c", "/path/to/plugin_c");
+    
+    QJsonObject metadataA;
+    metadataA["name"] = "plugin_a";
+    QJsonArray depsA;
+    depsA.append("plugin_b");
+    metadataA["dependencies"] = depsA;
+    g_plugin_metadata.insert("plugin_a", metadataA);
+    
+    QJsonObject metadataB;
+    metadataB["name"] = "plugin_b";
+    QJsonArray depsB;
+    depsB.append("plugin_c");
+    metadataB["dependencies"] = depsB;
+    g_plugin_metadata.insert("plugin_b", metadataB);
+    
+    QJsonObject metadataC;
+    metadataC["name"] = "plugin_c";
+    metadataC["dependencies"] = QJsonArray();
+    g_plugin_metadata.insert("plugin_c", metadataC);
+    
+    QStringList requested;
+    requested.append("plugin_a");
+    
+    QStringList result = PluginManager::resolveDependencies(requested);
+    
+    // Should return all three plugins in correct order
+    ASSERT_EQ(result.size(), 3);
+    EXPECT_EQ(result[0].toStdString(), "plugin_c");  // Deepest dependency first
+    EXPECT_EQ(result[1].toStdString(), "plugin_b");  // Then intermediate
+    EXPECT_EQ(result[2].toStdString(), "plugin_a");  // Then requested plugin
+}
+
+// =============================================================================
+// C API: logos_core_load_plugin_with_dependencies Tests
+// =============================================================================
+
+// Verifies that logos_core_load_plugin_with_dependencies() returns 0 for null plugin name
+TEST_F(PluginManagerTest, LoadPluginWithDependencies_ReturnsZeroForNull) {
+    int result = logos_core_load_plugin_with_dependencies(nullptr);
+    EXPECT_EQ(result, 0);
+}
+
+// Verifies that logos_core_load_plugin_with_dependencies() returns 0 for unknown plugin
+TEST_F(PluginManagerTest, LoadPluginWithDependencies_ReturnsZeroForUnknown) {
+    int result = logos_core_load_plugin_with_dependencies("unknown_plugin");
+    EXPECT_EQ(result, 0);
+}
+
+// Verifies that logos_core_load_plugin_with_dependencies() skips already-loaded plugins
+TEST_F(PluginManagerTest, LoadPluginWithDependencies_SkipsAlreadyLoaded) {
+    // Set up plugin_a which depends on plugin_b
+    PluginManager::addKnownPlugin("plugin_a", "/path/to/plugin_a");
+    PluginManager::addKnownPlugin("plugin_b", "/path/to/plugin_b");
+    
+    QJsonObject metadataA;
+    metadataA["name"] = "plugin_a";
+    QJsonArray depsA;
+    depsA.append("plugin_b");
+    metadataA["dependencies"] = depsA;
+    g_plugin_metadata.insert("plugin_a", metadataA);
+    
+    QJsonObject metadataB;
+    metadataB["name"] = "plugin_b";
+    metadataB["dependencies"] = QJsonArray();
+    g_plugin_metadata.insert("plugin_b", metadataB);
+    
+    // Mark plugin_b as already loaded
+    g_loaded_plugins.append("plugin_b");
+    
+    // Verify the skip logic preconditions
+    EXPECT_TRUE(PluginManager::isPluginLoaded("plugin_b"));
+    EXPECT_FALSE(PluginManager::isPluginLoaded("plugin_a"));
+    
+    // The function should skip plugin_b (already loaded) and only attempt to load plugin_a
+    // Since plugin_a doesn't have a real file, loading will fail for plugin_a specifically,
+    // but the important thing is plugin_b is skipped (not double-loaded)
+    int result = logos_core_load_plugin_with_dependencies("plugin_a");
+    
+    // Result will be 0 because plugin_a can't actually be loaded (no real file),
+    // but plugin_b should still be in loaded state (not removed or errored)
+    EXPECT_TRUE(PluginManager::isPluginLoaded("plugin_b"));
 }

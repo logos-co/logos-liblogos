@@ -68,6 +68,43 @@ int logos_core_load_plugin(const char* plugin_name)
     return success ? 1 : 0;
 }
 
+int logos_core_load_plugin_with_dependencies(const char* plugin_name)
+{
+    if (!plugin_name) {
+        qWarning() << "Cannot load plugin: name is null";
+        return 0;
+    }
+    
+    QString name = QString::fromUtf8(plugin_name);
+    QStringList requestedModules;
+    requestedModules.append(name);
+    
+    QStringList resolvedModules = PluginManager::resolveDependencies(requestedModules);
+    
+    // If the requested plugin wasn't resolved (unknown plugin), return failure
+    if (resolvedModules.isEmpty() || !resolvedModules.contains(name)) {
+        qWarning() << "Cannot load plugin: plugin not found:" << name;
+        return 0;
+    }
+    
+    qDebug() << "Loading plugin with resolved dependencies:" << resolvedModules;
+    
+    // Load all plugins in dependency order
+    bool allSucceeded = true;
+    for (const QString& moduleName : resolvedModules) {
+        if (PluginManager::isPluginLoaded(moduleName)) {
+            qDebug() << "Plugin already loaded, skipping:" << moduleName;
+            continue;
+        }
+        if (!PluginManager::loadPlugin(moduleName)) {
+            qWarning() << "Failed to load module:" << moduleName;
+            allSucceeded = false;
+        }
+    }
+    
+    return allSucceeded ? 1 : 0;
+}
+
 int logos_core_load_static_plugins()
 {
     return PluginManager::loadStaticPlugins();
