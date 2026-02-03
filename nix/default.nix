@@ -1,5 +1,5 @@
 # Common build configuration shared across all packages
-{ pkgs, logosSdk, logosModule }:
+{ pkgs, logosSdk, logosModule, processStats }:
 
 {
   pname = "logos-liblogos";
@@ -20,6 +20,7 @@
     pkgs.zstd
     pkgs.gtest
     logosModule
+    processStats
   ];
   
   # Common CMake flags
@@ -27,12 +28,14 @@
     "-GNinja"
     "-DLOGOS_CPP_SDK_ROOT=${logosSdk}"
     "-DLOGOS_MODULE_ROOT=${logosModule}"
+    "-DPROCESS_STATS_ROOT=${processStats}"
   ];
   
   # Environment variables
   env = {
     LOGOS_CPP_SDK_ROOT = "${logosSdk}";
     LOGOS_MODULE_ROOT = "${logosModule}";
+    PROCESS_STATS_ROOT = "${processStats}";
   };
   
   # Metadata
@@ -41,4 +44,3 @@
     platforms = platforms.unix;
   };
 }
-

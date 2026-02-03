@@ -3,7 +3,7 @@
 #include "app_lifecycle.h"
 #include "plugin_manager.h"
 #include "proxy_api.h"
-#include "process_stats.h"
+#include <process_stats/process_stats.h>
 #include "token_manager.h"
 #include <QDebug>
 #include <QByteArray>
