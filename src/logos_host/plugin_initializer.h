@@ -13,7 +13,8 @@ QString receiveAuthToken(const QString& pluginName);
 ModuleLib::LogosModule loadPlugin(const QString& pluginPath, const QString& expectedName);
 
 LogosAPI* initializeLogosAPI(const QString& pluginName, QObject* plugin, 
-                              PluginInterface* basePlugin, const QString& authToken);
+                              PluginInterface* basePlugin, const QString& authToken,
+                              const QString& pluginPath);
 
 LogosAPI* setupPlugin(const QString& pluginName, const QString& pluginPath);
 

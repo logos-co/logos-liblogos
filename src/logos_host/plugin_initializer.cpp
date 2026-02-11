@@ -3,6 +3,7 @@
 #include <QLocalSocket>
 #include <QObject>
 #include <QDebug>
+#include <QFileInfo>
 #include "../common/interface.h"
 #include "logos_api.h"
 #include "logos_api_provider.h"
@@ -86,10 +87,12 @@ LogosModule loadPlugin(const QString& pluginPath, const QString& expectedName)
 }
 
 LogosAPI* initializeLogosAPI(const QString& pluginName, QObject* plugin, 
-                              PluginInterface* basePlugin, const QString& authToken)
+                              PluginInterface* basePlugin, const QString& authToken,
+                              const QString& pluginPath)
 {
     // Initialize LogosAPI for this plugin
     LogosAPI* logos_api = new LogosAPI(pluginName, plugin);
+    logos_api->setProperty("modulePath", QFileInfo(pluginPath).absolutePath());
 
     if (!logos_api) {
         qCritical() << "Failed to create LogosAPI instance";
@@ -134,7 +137,7 @@ LogosAPI* setupPlugin(const QString& pluginName, const QString& pluginPath)
     // 3. Initialize LogosAPI and register plugin
     PluginInterface* basePlugin = module.as<PluginInterface>();
     LogosAPI* logos_api = initializeLogosAPI(pluginName, module.instance(), 
-                                              basePlugin, authToken);
+                                              basePlugin, authToken, pluginPath);
     
     // Release module ownership so the plugin stays loaded
     module.release();
