@@ -3,6 +3,7 @@
 #include <QDebug>
 #include <QDir>
 #include <QFile>
+#include <QFileInfo>
 #include <QJsonObject>
 #include <QJsonDocument>
 #include <QJsonArray>
@@ -112,6 +113,7 @@ namespace PluginManager {
 
         // Initialize LogosAPI for this plugin
         LogosAPI* logos_api = new LogosAPI(pluginName, plugin);
+        logos_api->setProperty("modulePath", QFileInfo(pluginPath).absolutePath());
         qDebug() << "LogosAPI initialized for plugin (Local mode):" << pluginName;
 
         // Register the plugin for access using LogosAPI Provider
