@@ -1,0 +1,17 @@
+{
+    "host": "0.0.0.0",
+    "tcpPort": 30303,
+    "udpPort": 9000,
+    "clusterId": 2,
+    "numShardsInNetwork": 8,
+    "relay": true,
+    "store": false,
+    "filter": false,
+    "lightpush": false,
+    "mix": false,
+    "discv5Discovery": false,
+    "enableKadDiscovery": false,
+    "logLevel": "DEBUG",
+    "maxMessageSize": "1024KiB",
+    "kadBootstrapNodes": []
+}
