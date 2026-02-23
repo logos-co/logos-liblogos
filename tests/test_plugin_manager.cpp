@@ -8,7 +8,41 @@
 #include <QTemporaryDir>
 #include <QFile>
 #include <QJsonArray>
+#include <QJsonDocument>
+#include <QJsonObject>
 #include <cstring>
+
+namespace {
+QString testPlatformVariant() {
+#if defined(Q_OS_MAC)
+    #if defined(Q_PROCESSOR_ARM)
+        return "darwin-arm64";
+    #else
+        return "darwin-x86_64";
+    #endif
+#elif defined(Q_OS_LINUX)
+    #if defined(Q_PROCESSOR_X86_64)
+        return "linux-x86_64";
+    #elif defined(Q_PROCESSOR_ARM_64)
+        return "linux-arm64";
+    #else
+        return "linux-x86";
+    #endif
+#elif defined(Q_OS_WIN)
+    #if defined(Q_PROCESSOR_X86_64)
+        return "windows-x86_64";
+    #else
+        return "windows-x86";
+    #endif
+#else
+        return "unknown";
+#endif
+}
+
+QJsonObject mainFieldForPlatform(const QString &libName) {
+    return QJsonObject{{testPlatformVariant(), libName}};
+}
+}
 
 // Test fixture for plugin manager tests
 class PluginManagerTest : public ::testing::Test {
@@ -208,41 +242,141 @@ TEST_F(PluginManagerTest, FindPlugins_ReturnsEmptyForEmptyDir) {
     EXPECT_TRUE(plugins.isEmpty());
 }
 
-// Verifies that findPlugins() correctly filters plugin files by platform-specific extensions
-// (.dylib on macOS, .so on Linux, .dll on Windows) and ignores other file types
-TEST_F(PluginManagerTest, FindPlugins_FiltersByPlatformExtension) {
+// Verifies that findPlugins() discovers plugins from subdirectories containing a manifest.json
+// with a "main" field pointing to an existing library file
+TEST_F(PluginManagerTest, FindPlugins_DiscoversPluginFromManifest) {
     QTemporaryDir tempDir;
     ASSERT_TRUE(tempDir.isValid());
     
-    // Create test files with various extensions
-    QString correctExt;
-#ifdef Q_OS_WIN
-    correctExt = ".dll";
-#elif defined(Q_OS_MAC)
-    correctExt = ".dylib";
-#else
-    correctExt = ".so";
-#endif
+    QDir rootDir(tempDir.path());
     
-    // Create a file with the correct extension
-    QFile correctFile(tempDir.filePath("plugin" + correctExt));
-    ASSERT_TRUE(correctFile.open(QIODevice::WriteOnly));
-    correctFile.close();
+    // Create a valid plugin subdirectory with manifest and library
+    ASSERT_TRUE(rootDir.mkpath("my_plugin"));
+    QDir pluginDir(rootDir.filePath("my_plugin"));
     
-    // Create files with wrong extensions
-    QFile txtFile(tempDir.filePath("plugin.txt"));
-    ASSERT_TRUE(txtFile.open(QIODevice::WriteOnly));
-    txtFile.close();
+    QString libName = "my_plugin.dylib";
+    QFile libFile(pluginDir.filePath(libName));
+    ASSERT_TRUE(libFile.open(QIODevice::WriteOnly));
+    libFile.close();
     
-    QFile noExtFile(tempDir.filePath("plugin"));
-    ASSERT_TRUE(noExtFile.open(QIODevice::WriteOnly));
-    noExtFile.close();
+    QFile manifest(pluginDir.filePath("manifest.json"));
+    ASSERT_TRUE(manifest.open(QIODevice::WriteOnly));
+    manifest.write(QJsonDocument(QJsonObject{{"main", mainFieldForPlatform(libName)}}).toJson());
+    manifest.close();
     
     QStringList plugins = PluginManager::findPlugins(tempDir.path());
     
-    // Should only find the file with the correct extension
     ASSERT_EQ(plugins.size(), 1);
-    EXPECT_TRUE(plugins[0].endsWith(correctExt));
+    EXPECT_TRUE(plugins[0].endsWith(libName));
+}
+
+// Verifies that findPlugins() skips subdirectories that have no manifest.json
+TEST_F(PluginManagerTest, FindPlugins_SkipsSubdirWithoutManifest) {
+    QTemporaryDir tempDir;
+    ASSERT_TRUE(tempDir.isValid());
+    
+    QDir rootDir(tempDir.path());
+    ASSERT_TRUE(rootDir.mkpath("no_manifest_plugin"));
+    
+    // Create a library file but no manifest
+    QFile libFile(rootDir.filePath("no_manifest_plugin/plugin.dylib"));
+    ASSERT_TRUE(libFile.open(QIODevice::WriteOnly));
+    libFile.close();
+    
+    QStringList plugins = PluginManager::findPlugins(tempDir.path());
+    EXPECT_TRUE(plugins.isEmpty());
+}
+
+// Verifies that findPlugins() skips manifests with a missing "main" field
+TEST_F(PluginManagerTest, FindPlugins_SkipsManifestWithoutMainField) {
+    QTemporaryDir tempDir;
+    ASSERT_TRUE(tempDir.isValid());
+    
+    QDir rootDir(tempDir.path());
+    ASSERT_TRUE(rootDir.mkpath("bad_manifest_plugin"));
+    
+    QFile manifest(rootDir.filePath("bad_manifest_plugin/manifest.json"));
+    ASSERT_TRUE(manifest.open(QIODevice::WriteOnly));
+    manifest.write(QJsonDocument(QJsonObject{{"version", "1.0"}}).toJson());
+    manifest.close();
+    
+    QStringList plugins = PluginManager::findPlugins(tempDir.path());
+    EXPECT_TRUE(plugins.isEmpty());
+}
+
+// Verifies that findPlugins() skips manifests where "main" has no entry for the current platform
+TEST_F(PluginManagerTest, FindPlugins_SkipsManifestWithWrongPlatform) {
+    QTemporaryDir tempDir;
+    ASSERT_TRUE(tempDir.isValid());
+    
+    QDir rootDir(tempDir.path());
+    ASSERT_TRUE(rootDir.mkpath("wrong_platform_plugin"));
+    QDir pluginDir(rootDir.filePath("wrong_platform_plugin"));
+    
+    QFile libFile(pluginDir.filePath("plugin.dll"));
+    ASSERT_TRUE(libFile.open(QIODevice::WriteOnly));
+    libFile.close();
+    
+    QJsonObject mainObj{{"fake-platform-999", "plugin.dll"}};
+    QFile manifest(pluginDir.filePath("manifest.json"));
+    ASSERT_TRUE(manifest.open(QIODevice::WriteOnly));
+    manifest.write(QJsonDocument(QJsonObject{{"main", mainObj}}).toJson());
+    manifest.close();
+    
+    QStringList plugins = PluginManager::findPlugins(tempDir.path());
+    EXPECT_TRUE(plugins.isEmpty());
+}
+
+// Verifies that findPlugins() skips manifests where "main" points to a nonexistent file
+TEST_F(PluginManagerTest, FindPlugins_SkipsManifestWithMissingLibrary) {
+    QTemporaryDir tempDir;
+    ASSERT_TRUE(tempDir.isValid());
+    
+    QDir rootDir(tempDir.path());
+    ASSERT_TRUE(rootDir.mkpath("missing_lib_plugin"));
+    
+    QFile manifest(rootDir.filePath("missing_lib_plugin/manifest.json"));
+    ASSERT_TRUE(manifest.open(QIODevice::WriteOnly));
+    manifest.write(QJsonDocument(QJsonObject{{"main", mainFieldForPlatform("nonexistent.dylib")}}).toJson());
+    manifest.close();
+    
+    QStringList plugins = PluginManager::findPlugins(tempDir.path());
+    EXPECT_TRUE(plugins.isEmpty());
+}
+
+// Verifies that findPlugins() discovers multiple valid plugins and ignores invalid ones
+TEST_F(PluginManagerTest, FindPlugins_DiscoversMultiplePlugins) {
+    QTemporaryDir tempDir;
+    ASSERT_TRUE(tempDir.isValid());
+    
+    QDir rootDir(tempDir.path());
+    
+    // Valid plugin A
+    ASSERT_TRUE(rootDir.mkpath("plugin_a"));
+    QFile libA(rootDir.filePath("plugin_a/liba.dylib"));
+    ASSERT_TRUE(libA.open(QIODevice::WriteOnly));
+    libA.close();
+    QFile manifestA(rootDir.filePath("plugin_a/manifest.json"));
+    ASSERT_TRUE(manifestA.open(QIODevice::WriteOnly));
+    manifestA.write(QJsonDocument(QJsonObject{{"main", mainFieldForPlatform("liba.dylib")}}).toJson());
+    manifestA.close();
+    
+    // Valid plugin B
+    ASSERT_TRUE(rootDir.mkpath("plugin_b"));
+    QFile libB(rootDir.filePath("plugin_b/libb.so"));
+    ASSERT_TRUE(libB.open(QIODevice::WriteOnly));
+    libB.close();
+    QFile manifestB(rootDir.filePath("plugin_b/manifest.json"));
+    ASSERT_TRUE(manifestB.open(QIODevice::WriteOnly));
+    manifestB.write(QJsonDocument(QJsonObject{{"main", mainFieldForPlatform("libb.so")}}).toJson());
+    manifestB.close();
+    
+    // Invalid: no manifest
+    ASSERT_TRUE(rootDir.mkpath("plugin_c"));
+    
+    QStringList plugins = PluginManager::findPlugins(tempDir.path());
+    
+    ASSERT_EQ(plugins.size(), 2);
 }
 
 // =============================================================================

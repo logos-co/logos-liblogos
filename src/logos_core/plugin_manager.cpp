@@ -415,6 +415,50 @@ namespace PluginManager {
         loadPlugin(pluginName);
     }
 
+    QString currentPlatformVariant() {
+#if defined(Q_OS_MAC)
+    #if defined(Q_PROCESSOR_ARM)
+        return "darwin-arm64";
+    #else
+        return "darwin-x86_64";
+    #endif
+#elif defined(Q_OS_LINUX)
+    #if defined(Q_PROCESSOR_X86_64)
+        return "linux-x86_64";
+    #elif defined(Q_PROCESSOR_ARM_64)
+        return "linux-arm64";
+    #else
+        return "linux-x86";
+    #endif
+#elif defined(Q_OS_WIN)
+    #if defined(Q_PROCESSOR_X86_64)
+        return "windows-x86_64";
+    #else
+        return "windows-x86";
+    #endif
+#else
+        return "unknown";
+#endif
+    }
+
+    QStringList platformVariantsToTry() {
+        QString primary = currentPlatformVariant();
+        QStringList variants;
+        variants << primary;
+
+        if (primary == "linux-x86_64") {
+            variants << "linux-amd64";
+        } else if (primary == "linux-amd64") {
+            variants << "linux-x86_64";
+        } else if (primary == "linux-arm64") {
+            variants << "linux-aarch64";
+        } else if (primary == "linux-aarch64") {
+            variants << "linux-arm64";
+        }
+
+        return variants;
+    }
+
     QStringList findPlugins(const QString &pluginsDir) {
         QDir dir(pluginsDir);
         QStringList plugins;
@@ -426,27 +470,62 @@ namespace PluginManager {
             return plugins;
         }
         
-        // Get all files in the directory
-        QStringList entries = dir.entryList(QDir::Files);
-        qDebug() << "Files found:" << entries;
+        QStringList subdirs = dir.entryList(QDir::Dirs | QDir::NoDotAndDotDot);
+        qDebug() << "Subdirectories found:" << subdirs;
         
-        // Filter for plugin files based on platform
-        QStringList nameFilters;
-    #ifdef Q_OS_WIN
-        nameFilters << "*.dll";
-    #elif defined(Q_OS_MAC)
-        nameFilters << "*.dylib";
-    #else
-        nameFilters << "*.so";
-    #endif
-        
-        dir.setNameFilters(nameFilters);
-        QStringList pluginFiles = dir.entryList(QDir::Files);
-        
-        for (const QString &fileName : pluginFiles) {
-            QString filePath = dir.absoluteFilePath(fileName);
-            plugins.append(filePath);
-            qDebug() << "Found plugin:" << filePath;
+        for (const QString &subdir : subdirs) {
+            QDir pluginDir(dir.absoluteFilePath(subdir));
+            QString manifestPath = pluginDir.absoluteFilePath("manifest.json");
+            
+            if (!QFile::exists(manifestPath)) {
+                qDebug() << "No manifest.json in" << pluginDir.absolutePath() << ", skipping";
+                continue;
+            }
+            
+            QFile manifestFile(manifestPath);
+            if (!manifestFile.open(QIODevice::ReadOnly)) {
+                qWarning() << "Failed to open manifest:" << manifestPath;
+                continue;
+            }
+            
+            QJsonParseError parseError;
+            QJsonDocument doc = QJsonDocument::fromJson(manifestFile.readAll(), &parseError);
+            manifestFile.close();
+            
+            if (parseError.error != QJsonParseError::NoError) {
+                qWarning() << "Failed to parse manifest:" << manifestPath << parseError.errorString();
+                continue;
+            }
+            
+            QJsonObject manifest = doc.object();
+            QJsonValue mainValue = manifest.value("main");
+            
+            if (!mainValue.isObject()) {
+                qWarning() << "Manifest 'main' field is not an object:" << manifestPath;
+                continue;
+            }
+            
+            QJsonObject mainObj = mainValue.toObject();
+            QStringList variants = platformVariantsToTry();
+            QString mainLib;
+            for (const QString &variant : variants) {
+                mainLib = mainObj.value(variant).toString();
+                if (!mainLib.isEmpty()) break;
+            }
+            
+            if (mainLib.isEmpty()) {
+                qDebug() << "No entry for platform variants" << variants << "in manifest:" << manifestPath;
+                continue;
+            }
+            
+            QString libPath = pluginDir.absoluteFilePath(mainLib);
+            if (!QFile::exists(libPath)) {
+                qWarning() << "Main library not found:" << libPath;
+                continue;
+            }
+            
+            plugins.append(libPath);
+            qDebug() << "Found plugin:" << libPath;
         }
         
         return plugins;
