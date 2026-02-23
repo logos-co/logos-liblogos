@@ -96,6 +96,24 @@
         "type": "github"
       }
     },
+    "logos-cpp-sdk_5": {
+      "inputs": {
+        "nixpkgs": "nixpkgs_5"
+      },
+      "locked": {
+        "lastModified": 1767724329,
+        "narHash": "sha256-UPkqxqxbKwU5Dmu00TnjiJVXUmfVylF3p1qziEuYwIE=",
+        "owner": "logos-co",
+        "repo": "logos-cpp-sdk",
+        "rev": "32f1d7080d784ff044d91d076ef2f0c7305d4784",
+        "type": "github"
+      },
+      "original": {
+        "owner": "logos-co",
+        "repo": "logos-cpp-sdk",
+        "type": "github"
+      }
+    },
     "logos-liblogos": {
       "inputs": {
         "logos-cpp-sdk": "logos-cpp-sdk_2",
@@ -207,6 +225,42 @@
         "type": "github"
       }
     },
+    "nixpkgs_5": {
+      "locked": {
+        "lastModified": 1759036355,
+        "narHash": "sha256-0m27AKv6ka+q270dw48KflE0LwQYrO7Fm4/2//KCVWg=",
+        "owner": "NixOS",
+        "repo": "nixpkgs",
+        "rev": "e9f00bd893984bc8ce46c895c3bf7cac95331127",
+        "type": "github"
+      },
+      "original": {
+        "owner": "NixOS",
+        "ref": "nixos-unstable",
+        "repo": "nixpkgs",
+        "type": "github"
+      }
+    },
+    "process-stats": {
+      "inputs": {
+        "logos-cpp-sdk": "logos-cpp-sdk_5",
+        "nixpkgs": [
+          "process-stats",
+          "logos-cpp-sdk",
+          "nixpkgs"
+        ]
+      },
+      "locked": {
+        "lastModified": 1770073550,
+        "narHash": "sha256-oIDNUUSt8l72Mj4Zthn270wQxjuATkBLJMwE6HqhcKE=",
+        "path": "/Users/iurimatias/Projects/Logos/process-stats",
+        "type": "path"
+      },
+      "original": {
+        "path": "/Users/iurimatias/Projects/Logos/process-stats",
+        "type": "path"
+      }
+    },
     "root": {
       "inputs": {
         "logos-capability-module": "logos-capability-module",
@@ -215,7 +269,8 @@
         "nixpkgs": [
           "logos-cpp-sdk",
           "nixpkgs"
-        ]
+        ],
+        "process-stats": "process-stats"
       }
     }
   },
