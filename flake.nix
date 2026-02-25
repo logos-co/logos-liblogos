@@ -7,20 +7,24 @@
     logos-cpp-sdk.url = "github:logos-co/logos-cpp-sdk";
     logos-capability-module.url = "github:logos-co/logos-capability-module";
     logos-module.url = "github:logos-co/logos-module";
+    nix-bundle-dir.url = "github:logos-co/nix-bundle-dir";
+    nix-bundle-appimage.url = "github:logos-co/nix-bundle-appimage";
   };
 
-  outputs = { self, nixpkgs, logos-cpp-sdk, logos-capability-module, logos-module }:
+  outputs = { self, nixpkgs, logos-cpp-sdk, logos-capability-module, logos-module, nix-bundle-dir, nix-bundle-appimage }:
     let
       systems = [ "aarch64-darwin" "x86_64-darwin" "aarch64-linux" "x86_64-linux" ];
       forAllSystems = f: nixpkgs.lib.genAttrs systems (system: f {
+        inherit system;
         pkgs = import nixpkgs { inherit system; };
         logosSdk = logos-cpp-sdk.packages.${system}.default;
         capabilityModule = logos-capability-module.packages.${system}.default;
         logosModule = logos-module.packages.${system}.default;
+        dirBundler = nix-bundle-dir.bundlers.${system}.qtApp;
       });
     in
     {
-      packages = forAllSystems ({ pkgs, logosSdk, capabilityModule, logosModule }: 
+      packages = forAllSystems ({ pkgs, system, logosSdk, capabilityModule, logosModule, dirBundler }:
         let
           # Common configuration
           common = import ./nix/default.nix { inherit pkgs logosSdk logosModule; };
@@ -53,12 +57,23 @@
           # Combined output
           logos-liblogos = liblogos;
           
+          # Bundle outputs
+          cli-bundle-dir = dirBundler bin;
+        } // pkgs.lib.optionalAttrs pkgs.stdenv.isLinux {
+          cli-appimage = nix-bundle-appimage.lib.${system}.mkAppImage {
+            drv = bin;
+            name = "logoscore";
+            bundle = dirBundler bin;
+            desktopFile = ./assets/logoscore.desktop;
+            icon = ./assets/logoscore.png;
+          };
+        } // {
           # Default package
           default = liblogos;
         }
       );
 
-      devShells = forAllSystems ({ pkgs }: {
+      devShells = forAllSystems ({ pkgs, ... }: {
         default = pkgs.mkShell {
           nativeBuildInputs = [
             pkgs.cmake
