@@ -8,12 +8,38 @@
 #include <QRemoteObjectRegistryHost>
 #include <QMetaType>
 #include <cassert>
+#include <csignal>
+#include <cstdlib>
 #ifndef Q_OS_IOS
 #include <QProcess>
 #endif
 
 // Declare QObject* as a metatype so it can be stored in QVariant
 Q_DECLARE_METATYPE(QObject*)
+
+// Signal handler for graceful shutdown
+static void signalHandler(int signum) {
+    qDebug() << "Received signal:" << signum << "- initiating cleanup";
+    AppLifecycle::cleanup();
+    // Exit with appropriate code: 128 + signal number is convention
+    std::_Exit(128 + signum);
+}
+
+// Flag to track if signal handlers have been registered
+static bool g_signal_handlers_registered = false;
+
+// Flag to track if atexit handler has been registered
+static bool g_atexit_registered = false;
+
+// atexit cleanup handler - safety net for normal exits
+static void atexitCleanup() {
+    // Only run cleanup if there's still an app to clean up
+    // (prevents double cleanup if cleanup() was already called)
+    if (AppLifecycle::isInitialized()) {
+        qDebug() << "atexit handler: performing cleanup";
+        AppLifecycle::cleanup();
+    }
+}
 
 namespace AppLifecycle {
 
@@ -32,6 +58,21 @@ namespace AppLifecycle {
         
         // Register QObject* as a metatype
         qRegisterMetaType<QObject*>("QObject*");
+        
+        // Register signal handlers for graceful shutdown
+        if (!g_signal_handlers_registered) {
+            std::signal(SIGTERM, signalHandler);
+            std::signal(SIGINT, signalHandler);
+            g_signal_handlers_registered = true;
+            qDebug() << "Signal handlers registered for SIGTERM and SIGINT";
+        }
+        
+        // Register atexit handler as a safety net for normal exits
+        if (!g_atexit_registered) {
+            std::atexit(atexitCleanup);
+            g_atexit_registered = true;
+            qDebug() << "atexit cleanup handler registered";
+        }
     }
 
     void setMode(int mode) {
