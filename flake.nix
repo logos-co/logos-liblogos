@@ -73,6 +73,24 @@
         }
       );
 
+      checks = forAllSystems ({ pkgs, system, ... }:
+        let
+          testsPkg = self.packages.${system}.logos-liblogos-tests;
+        in {
+          tests = pkgs.runCommand "logos-liblogos-tests" {
+            nativeBuildInputs = [ testsPkg ] ++ pkgs.lib.optionals pkgs.stdenv.isLinux [ pkgs.qt6.qtbase ];
+          } ''
+            export QT_QPA_PLATFORM=offscreen
+            ${pkgs.lib.optionalString pkgs.stdenv.isLinux ''
+              export QT_PLUGIN_PATH="${pkgs.qt6.qtbase}/${pkgs.qt6.qtbase.qtPluginPrefix}"
+            ''}
+            mkdir -p $out
+            echo "Running logos-liblogos tests..."
+            ${testsPkg}/bin/logos_core_tests --gtest_output=xml:$out/test-results.xml
+          '';
+        }
+      );
+
       devShells = forAllSystems ({ pkgs, ... }: {
         default = pkgs.mkShell {
           nativeBuildInputs = [
