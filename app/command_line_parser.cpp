@@ -103,6 +103,12 @@ CoreArgs parseCommandLineArgs(QCoreApplication& app) {
     );
     parser.addOption(callOption);
 
+    QCommandLineOption quitOnFinishOption(
+        QStringList() << "quit-on-finish",
+        "Exit after all -c calls complete (exit 0 on success, 1 on failure)"
+    );
+    parser.addOption(quitOnFinishOption);
+
     parser.process(app);
 
     if (parser.isSet(modulesDirOption)) {
@@ -126,6 +132,7 @@ CoreArgs parseCommandLineArgs(QCoreApplication& app) {
         }
     }
 
+    args.quitOnFinish = parser.isSet(quitOnFinishOption);
     args.valid = true;
     return args;
 }

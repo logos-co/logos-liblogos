@@ -77,10 +77,10 @@ int main(int argc, char *argv[]) {
     
     if (!args.calls.isEmpty()) {
         int callResult = CallExecutor::executeCalls(args.calls);
-        if (callResult != 0) {
+        if (args.quitOnFinish || callResult != 0) {
             return callResult;
         }
     }
-    
+
     return logos_core_exec();
 } 
