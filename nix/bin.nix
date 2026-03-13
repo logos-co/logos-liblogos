@@ -14,7 +14,13 @@ pkgs.stdenvNoCC.mkDerivation {
     pkgs.lib.optionals pkgs.stdenv.isLinux [ pkgs.autoPatchelfHook ];
   
   # Clear LD_LIBRARY_PATH to prevent external Qt installations from interfering
-  qtWrapperArgs = [ "--unset LD_LIBRARY_PATH" ];
+  # Set LOGOS_BUNDLED_MODULES_DIR so the binary can find bundled modules
+  # (needed because the Qt wrapper execs the binary from the build derivation,
+  #  so applicationDirPath() doesn't resolve to this package's directory)
+  qtWrapperArgs = [
+    "--unset LD_LIBRARY_PATH"
+    "--set LOGOS_BUNDLED_MODULES_DIR ${modules}/modules"
+  ];
   
   # Required for autoPatchelfHook (Linux) and wrapQtAppsNoGuiHook (both platforms)
   buildInputs = common.buildInputs;
