@@ -2,6 +2,7 @@
 #include "logos_core_internal.h"
 #include "plugin_manager.h"
 #include "logos_mode.h"
+#include "logos_instance.h"
 #include <QCoreApplication>
 #include <QDir>
 #include <QDebug>
@@ -65,7 +66,7 @@ namespace AppLifecycle {
         
         // Initialize Qt Remote Object registry host
         if (!g_registry_host) {
-            g_registry_host = new QRemoteObjectRegistryHost(QUrl(QStringLiteral("local:logos_core_manager")));
+          g_registry_host = new QRemoteObjectRegistryHost(QUrl(LogosInstance::id("core_manager")));
             qDebug() << "Qt Remote Object registry host initialized at: local:logos_core_manager";
         }
         
