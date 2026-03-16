@@ -16,7 +16,7 @@ struct ModuleCall {
 struct CoreArgs {
     bool valid;
     bool quitOnFinish;            // Exit after -c calls complete (--quit-on-finish)
-    QString modulesDir;           // Optional: custom modules directory
+    QStringList modulesDirs;      // Optional: custom modules directories (repeatable -m)
     QStringList loadModules;      // Optional: modules to load in order
     QList<ModuleCall> calls;      // Optional: module method calls to execute
 };

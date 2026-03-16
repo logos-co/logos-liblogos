@@ -76,13 +76,22 @@ namespace AppLifecycle {
         }
         
         // Define the plugins directories to scan
+        // Always include the default bundled modules directory (contains capability_module)
         QStringList pluginsDirs;
-        if (!g_plugins_dirs.isEmpty()) {
-            // Use the custom plugins directories if set
-            pluginsDirs = g_plugins_dirs;
-        } else {
-            // Use the default plugins directory
-            pluginsDirs << QDir::cleanPath(QCoreApplication::applicationDirPath() + "/../modules");
+        // Check for bundled modules dir set by the nix wrapper, then fall back to
+        // applicationDirPath()/../modules for non-nix installs
+        QString defaultDir = qEnvironmentVariable("LOGOS_BUNDLED_MODULES_DIR");
+        if (defaultDir.isEmpty()) {
+            defaultDir = QDir::cleanPath(QCoreApplication::applicationDirPath() + "/../modules");
+        }
+        if (!defaultDir.isEmpty() && QDir(defaultDir).exists()) {
+            pluginsDirs << defaultDir;
+        }
+        // Add any user-specified directories
+        for (const QString& dir : g_plugins_dirs) {
+            if (!pluginsDirs.contains(dir)) {
+                pluginsDirs << dir;
+            }
         }
         
         qDebug() << "Looking for modules in" << pluginsDirs.size() << "directories:" << pluginsDirs;

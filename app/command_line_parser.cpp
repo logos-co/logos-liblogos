@@ -84,7 +84,7 @@ CoreArgs parseCommandLineArgs(QCoreApplication& app) {
 
     QCommandLineOption modulesDirOption(
         QStringList() << "modules-dir" << "m",
-        "Directory to scan for modules",
+        "Directory to scan for modules (repeatable)",
         "path"
     );
     parser.addOption(modulesDirOption);
@@ -112,7 +112,7 @@ CoreArgs parseCommandLineArgs(QCoreApplication& app) {
     parser.process(app);
 
     if (parser.isSet(modulesDirOption)) {
-        args.modulesDir = parser.value(modulesDirOption);
+        args.modulesDirs = parser.values(modulesDirOption);
     }
 
     if (parser.isSet(loadModulesOption)) {
