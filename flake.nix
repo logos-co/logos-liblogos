@@ -4,7 +4,7 @@
   inputs = {
     # Follow the same nixpkgs as logos-cpp-sdk to ensure compatibility
     nixpkgs.follows = "logos-cpp-sdk/nixpkgs";
-    logos-cpp-sdk.url = "github:logos-co/logos-cpp-sdk?ref=feat/logos-instance-id";
+    logos-cpp-sdk.url = "github:logos-co/logos-cpp-sdk";
     logos-capability-module.url = "github:logos-co/logos-capability-module";
     logos-module.url = "github:logos-co/logos-module";
     nix-bundle-dir.url = "github:logos-co/nix-bundle-dir";

@@ -65,16 +65,15 @@
         "nixpkgs": "nixpkgs_3"
       },
       "locked": {
-        "lastModified": 1772190849,
+        "lastModified": 1773672219,
         "narHash": "sha256-p+kv2WHokT40rScnSFSIDp/EeFLaDUsTHW6QT6ejKuc=",
         "owner": "logos-co",
         "repo": "logos-cpp-sdk",
-        "rev": "33af269f645c7dd8e74a9d1d5c834f0ea5ec9447",
+        "rev": "a4bd66cd6eb04ee7140bb940b1d49d72d60248de",
         "type": "github"
       },
       "original": {
         "owner": "logos-co",
-        "ref": "feat/logos-instance-id",
         "repo": "logos-cpp-sdk",
         "type": "github"
       }
