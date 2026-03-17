@@ -31,10 +31,9 @@ protected:
         // Reset mode to default (Remote)
         LogosModeConfig::setMode(LogosMode::Remote);
         
-        // Ensure registry host is null at start
-        if (g_registry_host) {
-            delete g_registry_host;
-            g_registry_host = nullptr;
+        // Ensure registry is null at start
+        if (g_registry) {
+            g_registry.reset();
         }
         
         // Clear plugin processes (desktop only)
@@ -51,10 +50,9 @@ protected:
         // Note: We don't call AppLifecycle::cleanup() here because it deletes
         // the QCoreApplication which we need to keep for the test process
         
-        // Clean up registry host if it was created
-        if (g_registry_host) {
-            delete g_registry_host;
-            g_registry_host = nullptr;
+        // Clean up registry if it was created
+        if (g_registry) {
+            g_registry.reset();
         }
         
         // Clean up plugin processes (desktop only)
@@ -282,7 +280,7 @@ TEST_F(AppLifecycleTest, ProcessEvents_CallsAppProcessEvents) {
 // Start Function Tests (Limited testing without actual plugins)
 // =============================================================================
 
-// Verifies that start() creates the Qt Remote Object registry host for IPC
+// Verifies that start() initializes the registry for IPC
 TEST_F(AppLifecycleTest, Start_InitializesRegistryHost) {
     char* argv[] = {(char*)"test"};
     AppLifecycle::init(1, argv);

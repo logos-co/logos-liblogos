@@ -5,7 +5,7 @@
 #include <QList>
 #include <QPair>
 #include <QJsonObject>
-#include <QRemoteObjectRegistryHost>
+#include <memory>
 #ifndef Q_OS_IOS
 #include <QProcess>
 #endif
@@ -38,8 +38,8 @@ QHash<QString, QProcess*> g_plugin_processes;
 // Hash to store LogosAPI instances for Local mode plugins
 QHash<QString, LogosAPI*> g_local_plugin_apis;
 
-// Qt Remote Object registry host
-QRemoteObjectRegistryHost* g_registry_host = nullptr;
+// Registry (implementation-agnostic)
+std::unique_ptr<LogosRegistry> g_registry;
 
 // List to store registered event listeners
 QList<EventListener> g_event_listeners;

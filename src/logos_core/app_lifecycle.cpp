@@ -3,10 +3,10 @@
 #include "plugin_manager.h"
 #include "logos_mode.h"
 #include "logos_instance.h"
+#include "logos_registry_factory.h"
 #include <QCoreApplication>
 #include <QDir>
 #include <QDebug>
-#include <QRemoteObjectRegistryHost>
 #include <QMetaType>
 #include <cassert>
 #ifndef Q_OS_IOS
@@ -64,10 +64,10 @@ namespace AppLifecycle {
         // Clear the list of loaded plugins before loading new ones
         g_loaded_plugins.clear();
         
-        // Initialize Qt Remote Object registry host
-        if (!g_registry_host) {
-          g_registry_host = new QRemoteObjectRegistryHost(QUrl(LogosInstance::id("core_manager")));
-            qDebug() << "Qt Remote Object registry host initialized at: local:logos_core_manager";
+        // Initialize registry
+        if (!g_registry) {
+            g_registry = LogosRegistryFactory::create(LogosInstance::id("core_manager"));
+            qDebug() << "Registry initialized at: local:logos_core_manager";
         }
         
         // First initialize the core manager
@@ -170,11 +170,10 @@ namespace AppLifecycle {
     #endif
         g_loaded_plugins.clear();
         
-        // Clean up Qt Remote Object registry host
-        if (g_registry_host) {
-            delete g_registry_host;
-            g_registry_host = nullptr;
-            qDebug() << "Qt Remote Object registry host cleaned up";
+        // Clean up registry
+        if (g_registry) {
+            g_registry.reset();
+            qDebug() << "Registry cleaned up";
         }
         
         // Only delete the app if we created it
@@ -203,7 +202,7 @@ namespace AppLifecycle {
     }
 
     bool isRegistryHostInitialized() {
-        return g_registry_host != nullptr;
+        return g_registry && g_registry->isInitialized();
     }
 
 }
