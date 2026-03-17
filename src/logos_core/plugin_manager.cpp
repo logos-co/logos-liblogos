@@ -10,10 +10,8 @@
 #include <QUuid>
 #include <QTimer>
 #include <QThread>
-#ifndef Q_OS_IOS
 #include <QProcess>
 #include <QLocalSocket>
-#endif
 #include <QLocalServer>
 #include <cstring>
 #include <cassert>
@@ -189,20 +187,11 @@ namespace PluginManager {
             logosHostPath = QDir::cleanPath(QCoreApplication::applicationDirPath() + "/logos_host");
         }
 
-    #ifdef Q_OS_WIN
-        if (!logosHostPath.endsWith(".exe")) {
-            logosHostPath += ".exe";
-        }
-    #endif
-
         // 3) Fallback relative to plugins directory (../../logos-liblogos/build/bin/logos_host)
         if (!QFile::exists(logosHostPath)) {
             if (!g_plugins_dirs.isEmpty()) {
                 QDir pluginsDirCandidate(g_plugins_dirs.first());
                 QString candidate = QDir::cleanPath(pluginsDirCandidate.absoluteFilePath("../bin/logos_host"));
-    #ifdef Q_OS_WIN
-                if (!candidate.endsWith(".exe")) candidate += ".exe";
-    #endif
                 if (QFile::exists(candidate)) {
                     logosHostPath = candidate;
                 }
@@ -429,12 +418,6 @@ namespace PluginManager {
         return "linux-arm64";
     #else
         return "linux-x86";
-    #endif
-#elif defined(Q_OS_WIN)
-    #if defined(Q_PROCESSOR_X86_64)
-        return "windows-x86_64";
-    #else
-        return "windows-x86";
     #endif
 #else
         return "unknown";
@@ -824,11 +807,6 @@ namespace PluginManager {
     }
 
     bool unloadPlugin(const QString& pluginName) {
-    #ifdef Q_OS_IOS
-        // iOS doesn't support process-based plugins
-        qWarning() << "Plugin unloading not supported on iOS";
-        return false;
-    #else
         qDebug() << "Attempting to unload plugin by name:" << pluginName;
 
         // Check if plugin is loaded
@@ -866,7 +844,6 @@ namespace PluginManager {
         // The process will be cleaned up by the signal handler
         qDebug() << "Successfully unloaded plugin:" << pluginName;
         return true;
-    #endif // Q_OS_IOS
     }
 
     char** getLoadedPluginsCStr() {
@@ -1049,7 +1026,6 @@ namespace PluginManager {
         g_known_plugins.clear();
         g_plugin_metadata.clear();
         
-        #ifndef Q_OS_IOS
         // Terminate and clean up all plugin processes
         for (auto it = g_plugin_processes.begin(); it != g_plugin_processes.end(); ++it) {
             QProcess* process = it.value();
@@ -1060,7 +1036,6 @@ namespace PluginManager {
             }
         }
         g_plugin_processes.clear();
-        #endif
         
         // Clean up all local plugin API instances
         for (auto it = g_local_plugin_apis.begin(); it != g_local_plugin_apis.end(); ++it) {

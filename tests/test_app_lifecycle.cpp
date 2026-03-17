@@ -36,10 +36,7 @@ protected:
             g_registry.reset();
         }
         
-        // Clear plugin processes (desktop only)
-        #ifndef Q_OS_IOS
         g_plugin_processes.clear();
-        #endif
         
         // Clear local plugin APIs
         g_local_plugin_apis.clear();
@@ -55,8 +52,6 @@ protected:
             g_registry.reset();
         }
         
-        // Clean up plugin processes (desktop only)
-        #ifndef Q_OS_IOS
         for (auto it = g_plugin_processes.begin(); it != g_plugin_processes.end(); ++it) {
             QProcess* process = it.value();
             process->terminate();
@@ -64,7 +59,6 @@ protected:
             delete process;
         }
         g_plugin_processes.clear();
-        #endif
         
         // Clean up local plugin APIs
         for (auto it = g_local_plugin_apis.begin(); it != g_local_plugin_apis.end(); ++it) {

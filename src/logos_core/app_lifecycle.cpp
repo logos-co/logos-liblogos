@@ -9,9 +9,7 @@
 #include <QDebug>
 #include <QMetaType>
 #include <cassert>
-#ifndef Q_OS_IOS
 #include <QProcess>
-#endif
 
 // Declare QObject* as a metatype so it can be stored in QVariant
 Q_DECLARE_METATYPE(QObject*)
@@ -146,7 +144,6 @@ namespace AppLifecycle {
             qDebug() << "Local mode plugins cleaned up";
         }
 
-    #ifndef Q_OS_IOS
         // Terminate all plugin processes (Remote mode)
         if (!g_plugin_processes.isEmpty()) {
             qDebug() << "Terminating all plugin processes...";
@@ -167,7 +164,6 @@ namespace AppLifecycle {
             }
             g_plugin_processes.clear();
         }
-    #endif
         g_loaded_plugins.clear();
         
         // Clean up registry
