@@ -9,6 +9,7 @@
 #include <QJsonObject>
 #include "logos_api.h"
 #include "logos_api_client.h"
+#include "logos_object.h"
 #include "logos_mode.h"
 #include <cassert>
 
@@ -319,12 +320,11 @@ namespace ProxyAPI {
                 if (logosAPI->getClient(pluginNameStr)->isConnected()) {
                     qDebug() << "LogosAPI connected for event listener, setting up event listener for" << eventNameStr;
                     
-                    // Get the replica object to set up event listener
-                    QObject* replica = logosAPI->getClient(pluginNameStr)->requestObject(pluginNameStr);
+                    LogosObject* replica = logosAPI->getClient(pluginNameStr)->requestObject(pluginNameStr);
                     if (replica) {
-                        // Set up event listener for the specified event
-                        logosAPI->getClient(pluginNameStr)->onEvent(replica, nullptr, eventNameStr, [=](const QString& eventName, const QVariantList& eventData) {
-                            qDebug() << "Event listener captured event:" << eventName << "with data:" << eventData;
+                        qDebug() << "[LogosObject] proxy_api: subscribing to event" << eventNameStr << "via LogosObject::onEvent";
+                        logosAPI->getClient(pluginNameStr)->onEvent(replica, eventNameStr, [=](const QString& eventName, const QVariantList& eventData) {
+                            qDebug() << "[LogosObject] proxy_api: event received via LogosObject callback:" << eventName << "data:" << eventData;
                             
                             // Format the event data as JSON for the callback
                             QString eventResponse = QString("{\"event\":\"%1\",\"data\":[").arg(eventName);

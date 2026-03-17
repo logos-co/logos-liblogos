@@ -10,6 +10,7 @@
 #include "../logos_core.h"
 #include "logos_api.h"
 #include "logos_api_client.h"
+#include "logos_object.h"
 #include <module_lib/module_lib.h>
 
 using namespace ModuleLib;
@@ -132,8 +133,7 @@ QString CoreManagerPlugin::processPlugin(const QString& filePath) {
 QJsonArray CoreManagerPlugin::getPluginMethods(const QString& pluginName) {
     auto m_logosAPI = new LogosAPI("core_manager", this);
 
-    // Get the plugin using LogosAPI instead of PluginRegistry
-    QObject* plugin = nullptr;
+    LogosObject* plugin = nullptr;
     if (m_logosAPI && m_logosAPI->getClient(pluginName)->isConnected()) {
         plugin = m_logosAPI->getClient(pluginName)->requestObject(pluginName);
     }
@@ -143,11 +143,10 @@ QJsonArray CoreManagerPlugin::getPluginMethods(const QString& pluginName) {
         return QJsonArray();
     }
 
-    // Use module_lib for runtime introspection
-    QJsonArray methodsArray = LogosModule::getMethodsAsJson(plugin, true);
+    qDebug() << "[LogosObject] CoreManager: calling LogosObject::getMethods() for" << pluginName;
+    QJsonArray methodsArray = plugin->getMethods();
 
-    // Clean up the replica object when done
-    delete plugin;
+    plugin->release();
 
     return methodsArray;
 }
