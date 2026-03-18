@@ -131,8 +131,6 @@ namespace ProcessStats {
     }
 
     char* getModuleStats() {
-        qDebug() << "getModuleStats() called";
-        
         QJsonArray modulesArray;
         
         // Iterate through plugin processes
@@ -159,10 +157,6 @@ namespace ProcessStats {
             
             modulesArray.append(moduleObj);
             
-            qDebug() << "Module stats for" << pluginName 
-                    << "- CPU:" << stats.cpuPercent << "%" 
-                    << "(" << stats.cpuTimeSeconds << "s),"
-                    << "Memory:" << stats.memoryMB << "MB";
         }
         
         // Convert to JSON string
@@ -172,8 +166,6 @@ namespace ProcessStats {
         // Allocate memory for the result string
         char* result = new char[jsonData.size() + 1];
         strcpy(result, jsonData.constData());
-        
-        qDebug() << "Returning module stats JSON for" << modulesArray.size() << "modules";
         
         return result;
     }

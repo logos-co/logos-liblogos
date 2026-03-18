@@ -778,10 +778,6 @@ namespace PluginManager {
     }
 
     char** getKnownPluginsCStr() {
-        qDebug() << "getKnownPluginsCStr() called";
-        qDebug() << "g_known_plugins size:" << g_known_plugins.size();
-        qDebug() << "g_known_plugins keys:" << g_known_plugins.keys();
-        
         // Get the keys from the hash (plugin names)
         QStringList knownPlugins = g_known_plugins.keys();
         int count = knownPlugins.size();
@@ -794,8 +790,6 @@ namespace PluginManager {
             return result;
         }
         
-        qDebug() << "Returning" << count << "known plugins";
-        
         // Allocate memory for the array of strings
         char** result = new char*[count + 1];  // +1 for null terminator
         
@@ -804,7 +798,6 @@ namespace PluginManager {
             QByteArray utf8Data = knownPlugins[i].toUtf8();
             result[i] = new char[utf8Data.size() + 1];
             strcpy(result[i], utf8Data.constData());
-            qDebug() << "  -" << knownPlugins[i];
         }
         
         // Null-terminate the array
