@@ -27,6 +27,11 @@ target_include_directories(logos_core_tests PRIVATE
     ${CMAKE_SOURCE_DIR}/src/logos_core
 )
 
+# Propagate portable build flag to tests so manifest variant keys match
+if(LOGOS_PORTABLE_BUILD)
+    target_compile_definitions(logos_core_tests PRIVATE LOGOS_PORTABLE_BUILD=1)
+endif()
+
 # Add SDK include directory (same logic as src/CMakeLists.txt)
 if(EXISTS "${LOGOS_CPP_SDK_ROOT}/lib" AND EXISTS "${LOGOS_CPP_SDK_ROOT}/include")
   target_include_directories(logos_core_tests PRIVATE 

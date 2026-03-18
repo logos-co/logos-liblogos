@@ -26,24 +26,41 @@
     {
       packages = forAllSystems ({ pkgs, system, logosSdk, capabilityModule, logosModule, dirBundler }:
         let
-          # Common configuration
+          # Common configuration (dev, default)
           common = import ./nix/default.nix { inherit pkgs logosSdk logosModule; };
+          # Common configuration (portable)
+          commonPortable = import ./nix/default.nix { inherit pkgs logosSdk logosModule; portableBuild = true; };
           src = ./.;
-          
-          # Shared build that compiles everything
+
+          # Shared build that compiles everything (dev)
           build = import ./nix/build.nix { inherit pkgs common src; };
-          
+
+          # Shared build (portable)
+          buildPortable = import ./nix/build.nix { inherit pkgs src; common = commonPortable; };
+
           # Individual package components (reference the shared build)
           lib = import ./nix/lib.nix { inherit pkgs common build; };
           modules = import ./nix/modules.nix { inherit pkgs common capabilityModule; };
+          modulesPortable = import ./nix/modules.nix { inherit pkgs capabilityModule; common = commonPortable; portableBuild = true; };
           bin = import ./nix/bin.nix { inherit pkgs common build lib modules; };
           include = import ./nix/include.nix { inherit pkgs common src logosSdk; };
           tests = import ./nix/tests.nix { inherit pkgs common build; };
-          
-          # Combined package
+
+          # Portable package components
+          libPortable = import ./nix/lib.nix { inherit pkgs; common = commonPortable; build = buildPortable; };
+          binPortable = import ./nix/bin.nix { inherit pkgs; common = commonPortable; build = buildPortable; lib = libPortable; modules = modulesPortable; };
+          includePortable = import ./nix/include.nix { inherit pkgs src logosSdk; common = commonPortable; };
+
+          # Combined package (dev)
           liblogos = pkgs.symlinkJoin {
             name = "logos-liblogos";
             paths = [ bin lib include ];
+          };
+
+          # Combined package (portable)
+          liblogosPortable = pkgs.symlinkJoin {
+            name = "logos-liblogos-portable";
+            paths = [ binPortable libPortable includePortable ];
           };
         in
         {
@@ -53,10 +70,13 @@
           logos-liblogos-include = include;
           logos-liblogos-tests = tests;
           logos-liblogos-modules = modules;
-          
+
           # Combined output
           logos-liblogos = liblogos;
-          
+
+          # Portable output (compiled with LOGOS_PORTABLE_BUILD)
+          portable = liblogosPortable;
+
           # Bundle outputs
           cli-bundle-dir = dirBundler bin;
         } // pkgs.lib.optionalAttrs pkgs.stdenv.isLinux {
@@ -68,7 +88,7 @@
             icon = ./assets/logoscore.png;
           };
         } // {
-          # Default package
+          # Default package (dev)
           default = liblogos;
         }
       );

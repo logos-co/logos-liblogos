@@ -36,6 +36,9 @@ nix build '.#logos-liblogos-include'
 
 # Build and run tests
 nix build '.#logos-liblogos-tests'
+
+# Build portable variant (selects portable LGX variants instead of dev)
+nix build '.#portable'
 ```
 
 #### Running Tests
@@ -194,6 +197,15 @@ The `logoscore` binary is the main entry point for the Logos Core application fr
 - Qt6 (qtbase) or Qt5 (Core, RemoteObjects)
 - Qt6 Remote Objects (qtremoteobjects)
 - [logos-cpp-sdk](https://github.com/logos-co/logos-cpp-sdk)
+
+## Dev vs Portable Builds
+
+The library supports two build modes controlled by the `LOGOS_PORTABLE_BUILD` CMake flag:
+
+- **Dev build** (default): Plugin loading looks for LGX variants with `-dev` suffix (e.g., `linux-amd64-dev`). Used in Nix/development environments.
+- **Portable build** (`-DLOGOS_PORTABLE_BUILD=ON`): Looks for portable variants without suffix (e.g., `linux-amd64`). Used in self-contained distributed applications.
+
+Build the portable variant with `nix build '.#portable'`.
 
 ## Supported Platforms
 

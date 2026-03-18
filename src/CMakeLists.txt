@@ -110,6 +110,12 @@ endif()
 # Set the LOGOS_CORE_LIBRARY definition for the library
 target_compile_definitions(logos_core PRIVATE LOGOS_CORE_LIBRARY)
 
+# Portable build: selects portable LGX variants instead of dev variants
+option(LOGOS_PORTABLE_BUILD "Build for portable variant selection" OFF)
+if(LOGOS_PORTABLE_BUILD)
+    target_compile_definitions(logos_core PRIVATE LOGOS_PORTABLE_BUILD=1)
+endif()
+
 # Link Qt libraries, SDK and module library
 target_link_libraries(logos_core PUBLIC 
     Qt${QT_VERSION_MAJOR}::Core 
