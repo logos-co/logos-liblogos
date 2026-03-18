@@ -76,9 +76,6 @@ set(LOGOS_CORE_SOURCES
     logos_core/proxy_api.h
     logos_core/process_stats.cpp
     logos_core/process_stats.h
-    logos_core/core_manager/core_manager.cpp
-    logos_core/core_manager/core_manager.h
-    logos_core/core_manager/core_manager_interface.h
     common/interface.h
 )
 

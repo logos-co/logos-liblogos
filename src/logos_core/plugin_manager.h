@@ -25,10 +25,6 @@ namespace PluginManager {
     // Returns a list of full paths to plugin files
     QStringList findPlugins(const QString& pluginsDir);
     
-    // Initialize the core manager
-    // Returns true if successful, false otherwise
-    bool initializeCoreManager();
-    
     // Initialize the capability module if available
     // Returns true if successful, false otherwise
     bool initializeCapabilityModule();

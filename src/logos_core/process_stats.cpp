@@ -139,12 +139,7 @@ namespace ProcessStats {
         for (auto it = g_plugin_processes.begin(); it != g_plugin_processes.end(); ++it) {
             QString pluginName = it.key();
             QProcess* process = it.value();
-            
-            // Skip core_manager as it runs in-process
-            if (pluginName == "core_manager") {
-                continue;
-            }
-            
+
             // Get process ID
             qint64 pid = process->processId();
             if (pid <= 0) {

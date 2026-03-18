@@ -7,12 +7,10 @@
 #include <QList>
 #include <QPair>
 #include <QJsonObject>
-#include <memory>
 
 #include <QProcess>
 
 #include "logos_core.h"
-#include "logos_registry.h"
 
 // Forward declarations
 class LogosAPI;
@@ -40,9 +38,6 @@ extern QHash<QString, QProcess*> g_plugin_processes;
 
 // Global hash to store LogosAPI instances for Local mode plugins
 extern QHash<QString, LogosAPI*> g_local_plugin_apis;
-
-// Global registry (implementation-agnostic)
-extern std::unique_ptr<LogosRegistry> g_registry;
 
 // Structure to store event listener information
 struct EventListener {

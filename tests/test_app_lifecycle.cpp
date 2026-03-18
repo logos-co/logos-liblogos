@@ -31,11 +31,6 @@ protected:
         // Reset mode to default (Remote)
         LogosModeConfig::setMode(LogosMode::Remote);
         
-        // Ensure registry is null at start
-        if (g_registry) {
-            g_registry.reset();
-        }
-        
         g_plugin_processes.clear();
         
         // Clear local plugin APIs
@@ -46,11 +41,6 @@ protected:
         // Clean up after each test
         // Note: We don't call AppLifecycle::cleanup() here because it deletes
         // the QCoreApplication which we need to keep for the test process
-        
-        // Clean up registry if it was created
-        if (g_registry) {
-            g_registry.reset();
-        }
         
         for (auto it = g_plugin_processes.begin(); it != g_plugin_processes.end(); ++it) {
             QProcess* process = it.value();
@@ -273,20 +263,6 @@ TEST_F(AppLifecycleTest, ProcessEvents_CallsAppProcessEvents) {
 // =============================================================================
 // Start Function Tests (Limited testing without actual plugins)
 // =============================================================================
-
-// Verifies that start() initializes the registry for IPC
-TEST_F(AppLifecycleTest, Start_InitializesRegistryHost) {
-    char* argv[] = {(char*)"test"};
-    AppLifecycle::init(1, argv);
-    
-    // Registry host should be null before start
-    ASSERT_FALSE(AppLifecycle::isRegistryHostInitialized());
-    
-    AppLifecycle::start();
-    
-    // Registry host should be created
-    EXPECT_TRUE(AppLifecycle::isRegistryHostInitialized());
-}
 
 // Verifies that start() clears the loaded plugins list before discovering new plugins
 TEST_F(AppLifecycleTest, Start_ClearsLoadedPlugins) {

@@ -5,7 +5,6 @@
 #include <QList>
 #include <QPair>
 #include <QJsonObject>
-#include <memory>
 #include <QProcess>
 
 // === Core Context Definitions ===
@@ -33,9 +32,6 @@ QHash<QString, QProcess*> g_plugin_processes;
 
 // Hash to store LogosAPI instances for Local mode plugins
 QHash<QString, LogosAPI*> g_local_plugin_apis;
-
-// Registry (implementation-agnostic)
-std::unique_ptr<LogosRegistry> g_registry;
 
 // List to store registered event listeners
 QList<EventListener> g_event_listeners;

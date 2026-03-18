@@ -3,7 +3,6 @@
 #include "plugin_manager.h"
 #include "logos_mode.h"
 #include "logos_instance.h"
-#include "logos_registry_factory.h"
 #include <QCoreApplication>
 #include <QDir>
 #include <QDebug>
@@ -59,19 +58,12 @@ namespace AppLifecycle {
     }
 
     void start() {
+        // Generate the shared instance ID before launching any child processes
+        // so that logos_host processes inherit it via LOGOS_INSTANCE_ID env var.
+        LogosInstance::id();
+
         // Clear the list of loaded plugins before loading new ones
         g_loaded_plugins.clear();
-        
-        // Initialize registry
-        if (!g_registry) {
-            g_registry = LogosRegistryFactory::create(LogosInstance::id("core_manager"));
-            qDebug() << "Registry initialized at: local:logos_core_manager";
-        }
-        
-        // First initialize the core manager
-        if (!PluginManager::initializeCoreManager()) {
-            qWarning() << "Failed to initialize core manager, continuing with other modules...";
-        }
         
         // Define the plugins directories to scan
         // Always include the default bundled modules directory (contains capability_module)
@@ -166,12 +158,6 @@ namespace AppLifecycle {
         }
         g_loaded_plugins.clear();
         
-        // Clean up registry
-        if (g_registry) {
-            g_registry.reset();
-            qDebug() << "Registry cleaned up";
-        }
-        
         // Only delete the app if we created it
         if (g_app_created_by_us) {
             delete g_app;
@@ -195,10 +181,6 @@ namespace AppLifecycle {
 
     bool isAppOwnedByUs() {
         return g_app_created_by_us;
-    }
-
-    bool isRegistryHostInitialized() {
-        return g_registry && g_registry->isInitialized();
     }
 
 }
