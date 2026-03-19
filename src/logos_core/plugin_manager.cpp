@@ -456,6 +456,14 @@ namespace PluginManager {
             variants << "linux-arm64";
         }
 
+#ifndef LOGOS_PORTABLE_BUILD
+        QStringList devVariants;
+        for (const QString &variant : variants) {
+            devVariants << (variant + "-dev");
+        }
+        variants = devVariants;
+#endif
+
         return variants;
     }
 

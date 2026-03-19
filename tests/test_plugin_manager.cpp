@@ -40,7 +40,11 @@ QString testPlatformVariant() {
 }
 
 QJsonObject mainFieldForPlatform(const QString &libName) {
-    return QJsonObject{{testPlatformVariant(), libName}};
+    QString variant = testPlatformVariant();
+#ifndef LOGOS_PORTABLE_BUILD
+    variant += "-dev";
+#endif
+    return QJsonObject{{variant, libName}};
 }
 }
 

@@ -1,6 +1,8 @@
 # Bundles modules from external flake inputs into the logoscore modules directory.
 # logoscore expects: modules/<name>/manifest.json + <name>_plugin.{so,dylib}
-{ pkgs, common, capabilityModule }:
+# When portableBuild is false (default/dev), manifest keys get a "-dev" suffix
+# to match the dev variant lookup in platformVariantsToTry().
+{ pkgs, common, capabilityModule, portableBuild ? false }:
 
 pkgs.runCommand "${common.pname}-modules-${common.version}"
   {
@@ -44,17 +46,20 @@ pkgs.runCommand "${common.pname}-modules-${common.version}"
       aarch64|arm64) arch="aarch64" ;;
     esac
 
+    # Dev builds use "-dev" suffixed variant keys to match platformVariantsToTry()
+    suffix="${if portableBuild then "" else "-dev"}"
+
     # Create manifest.json for plugin discovery
     cat > $out/modules/capability_module/manifest.json <<EOF
     {
       "name": "capability_module",
       "version": "1.0.0",
       "main": {
-        "$platform-$arch": "$pluginFile",
-        "$platform-amd64": "$pluginFile",
-        "$platform-arm64": "$pluginFile",
-        "$platform-x86_64": "$pluginFile",
-        "$platform-aarch64": "$pluginFile"
+        "$platform-$arch$suffix": "$pluginFile",
+        "$platform-amd64$suffix": "$pluginFile",
+        "$platform-arm64$suffix": "$pluginFile",
+        "$platform-x86_64$suffix": "$pluginFile",
+        "$platform-aarch64$suffix": "$pluginFile"
       }
     }
     EOF
