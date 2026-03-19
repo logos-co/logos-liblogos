@@ -2,8 +2,8 @@
   description = "Logos liblogos core library";
 
   inputs = {
-    # Follow the same nixpkgs as logos-cpp-sdk to ensure compatibility
-    nixpkgs.follows = "logos-cpp-sdk/nixpkgs";
+    logos-nix.url = "github:logos-co/logos-nix";
+    nixpkgs.follows = "logos-nix/nixpkgs";
     logos-cpp-sdk.url = "github:logos-co/logos-cpp-sdk";
     logos-capability-module.url = "github:logos-co/logos-capability-module";
     logos-module.url = "github:logos-co/logos-module";
@@ -11,7 +11,7 @@
     nix-bundle-appimage.url = "github:logos-co/nix-bundle-appimage";
   };
 
-  outputs = { self, nixpkgs, logos-cpp-sdk, logos-capability-module, logos-module, nix-bundle-dir, nix-bundle-appimage }:
+  outputs = { self, nixpkgs, logos-nix, logos-cpp-sdk, logos-capability-module, logos-module, nix-bundle-dir, nix-bundle-appimage }:
     let
       systems = [ "aarch64-darwin" "x86_64-darwin" "aarch64-linux" "x86_64-linux" ];
       forAllSystems = f: nixpkgs.lib.genAttrs systems (system: f {
