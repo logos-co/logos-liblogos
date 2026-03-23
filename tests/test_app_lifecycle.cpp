@@ -31,16 +31,7 @@ protected:
         // Reset mode to default (Remote)
         LogosModeConfig::setMode(LogosMode::Remote);
         
-        // Ensure registry host is null at start
-        if (g_registry_host) {
-            delete g_registry_host;
-            g_registry_host = nullptr;
-        }
-        
-        // Clear plugin processes (desktop only)
-        #ifndef Q_OS_IOS
         g_plugin_processes.clear();
-        #endif
         
         // Clear local plugin APIs
         g_local_plugin_apis.clear();
@@ -51,14 +42,6 @@ protected:
         // Note: We don't call AppLifecycle::cleanup() here because it deletes
         // the QCoreApplication which we need to keep for the test process
         
-        // Clean up registry host if it was created
-        if (g_registry_host) {
-            delete g_registry_host;
-            g_registry_host = nullptr;
-        }
-        
-        // Clean up plugin processes (desktop only)
-        #ifndef Q_OS_IOS
         for (auto it = g_plugin_processes.begin(); it != g_plugin_processes.end(); ++it) {
             QProcess* process = it.value();
             process->terminate();
@@ -66,7 +49,6 @@ protected:
             delete process;
         }
         g_plugin_processes.clear();
-        #endif
         
         // Clean up local plugin APIs
         for (auto it = g_local_plugin_apis.begin(); it != g_local_plugin_apis.end(); ++it) {
@@ -281,20 +263,6 @@ TEST_F(AppLifecycleTest, ProcessEvents_CallsAppProcessEvents) {
 // =============================================================================
 // Start Function Tests (Limited testing without actual plugins)
 // =============================================================================
-
-// Verifies that start() creates the Qt Remote Object registry host for IPC
-TEST_F(AppLifecycleTest, Start_InitializesRegistryHost) {
-    char* argv[] = {(char*)"test"};
-    AppLifecycle::init(1, argv);
-    
-    // Registry host should be null before start
-    ASSERT_FALSE(AppLifecycle::isRegistryHostInitialized());
-    
-    AppLifecycle::start();
-    
-    // Registry host should be created
-    EXPECT_TRUE(AppLifecycle::isRegistryHostInitialized());
-}
 
 // Verifies that start() clears the loaded plugins list before discovering new plugins
 TEST_F(AppLifecycleTest, Start_ClearsLoadedPlugins) {

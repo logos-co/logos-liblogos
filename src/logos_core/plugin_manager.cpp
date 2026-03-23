@@ -10,15 +10,12 @@
 #include <QUuid>
 #include <QTimer>
 #include <QThread>
-#ifndef Q_OS_IOS
 #include <QProcess>
 #include <QLocalSocket>
-#endif
 #include <QLocalServer>
 #include <cstring>
 #include <cassert>
 #include "../common/interface.h"
-#include "core_manager/core_manager.h"
 #include "logos_api.h"
 #include "logos_api_provider.h"
 #include "logos_api_client.h"
@@ -134,7 +131,6 @@ namespace PluginManager {
 
         // Save auth tokens for core access
         logos_api->getTokenManager()->saveToken("core", authTokenString);
-        logos_api->getTokenManager()->saveToken("core_manager", authTokenString);
         logos_api->getTokenManager()->saveToken("capability_module", authTokenString);
         qDebug() << "Auth tokens saved for core access (Local mode)";
 
@@ -189,20 +185,11 @@ namespace PluginManager {
             logosHostPath = QDir::cleanPath(QCoreApplication::applicationDirPath() + "/logos_host");
         }
 
-    #ifdef Q_OS_WIN
-        if (!logosHostPath.endsWith(".exe")) {
-            logosHostPath += ".exe";
-        }
-    #endif
-
         // 3) Fallback relative to plugins directory (../../logos-liblogos/build/bin/logos_host)
         if (!QFile::exists(logosHostPath)) {
             if (!g_plugins_dirs.isEmpty()) {
                 QDir pluginsDirCandidate(g_plugins_dirs.first());
                 QString candidate = QDir::cleanPath(pluginsDirCandidate.absoluteFilePath("../bin/logos_host"));
-    #ifdef Q_OS_WIN
-                if (!candidate.endsWith(".exe")) candidate += ".exe";
-    #endif
                 if (QFile::exists(candidate)) {
                     logosHostPath = candidate;
                 }
@@ -430,12 +417,6 @@ namespace PluginManager {
     #else
         return "linux-x86";
     #endif
-#elif defined(Q_OS_WIN)
-    #if defined(Q_PROCESSOR_X86_64)
-        return "windows-x86_64";
-    #else
-        return "windows-x86";
-    #endif
 #else
         return "unknown";
 #endif
@@ -539,38 +520,6 @@ namespace PluginManager {
         return plugins;
     }
 
-    bool initializeCoreManager() {
-        qDebug() << "\n=== Initializing Core Manager ===";
-
-        // Create the core manager instance directly
-        CoreManagerPlugin* coreManager = new CoreManagerPlugin();
-
-        // Create LogosAPI instance for core manager registration
-        LogosAPI* coreAPI = new LogosAPI("core_manager");
-
-        // Register the core manager using the new API (which will wrap it with ModuleProxy)
-        bool success = coreAPI->getProvider()->registerObject(coreManager->name(), coreManager);
-        if (!success) {
-            qWarning() << "Failed to register core manager using new API";
-            delete coreAPI;
-            return false;
-        }
-        qDebug() << "Core manager registered using new API with name:" << coreManager->name();
-        // generate token
-        QUuid coreManagerToken = QUuid::createUuid();
-        QString coreManagerTokenString = coreManagerToken.toString(QUuid::WithoutBraces);
-        qDebug() << "Generated core manager token:" << coreManagerTokenString;
-        // TODO: replace this, using test token
-        coreAPI->getTokenManager()->saveToken("core_manager", coreManagerTokenString);
-        qDebug() << "Test token saved for core access";
-
-        // Add to loaded plugins list
-        g_loaded_plugins.append(coreManager->name());
-
-        qDebug() << "Core manager initialized successfully";
-        return true;
-    }
-
     bool initializeCapabilityModule() {
         qDebug() << "\n=== Initializing Capability Module ===";
 
@@ -585,65 +534,12 @@ namespace PluginManager {
         // Load the capability module
         bool success = loadPlugin("capability_module");
 
-
         if (!success) {
-            qDebug() << "Core manager not loaded, skipping token notification";
+            qDebug() << "Failed to load capability module";
             return false;
         }
 
         qDebug() << "Capability module loaded successfully";
-
-
-        if (!g_loaded_plugins.contains("core_manager")) {
-            qDebug() << "Core manager not loaded, skipping token notification";
-            return false;
-        }
-
-        qDebug() << "Informing capability module about core_manager token";
-
-        // Get the core_manager token from TokenManager
-        TokenManager &tokenManager = TokenManager::instance();
-        QString coreManagerToken = tokenManager.getToken("core_manager");
-
-        if (coreManagerToken.isEmpty()) {
-            qWarning() << "No token found for core_manager, skipping capability module notification";
-            return true;
-        }
-
-        // Create LogosAPI instance to connect to the capability module
-        LogosAPI *coreAPI = new LogosAPI("core");
-
-        // Use a timer to ensure the capability module is ready
-        QTimer *informTimer = new QTimer();
-        informTimer->setSingleShot(true);
-        informTimer->setInterval(1000); // 1 second delay to ensure connection is ready
-
-        // get token for capability_module
-        QString capabilityModuleToken = tokenManager.getToken("capability_module");
-        qDebug() << "Capability module token:" << capabilityModuleToken;
-        qDebug() << "Core manager token:" << coreManagerToken;
-
-        QObject::connect(informTimer, &QTimer::timeout, [=]() {
-                    if (coreAPI->getClient("capability_module")->isConnected()) {
-                        qDebug() << "Calling informModuleToken on capability module for core_manager";
-                        
-                        // Call informModuleToken with the core auth token, module name, and module token
-                        bool success = coreAPI->getClient("capability_module")->informModuleToken(capabilityModuleToken, "core_manager", coreManagerToken);
-                        if (success) {
-                            qDebug() << "Successfully informed capability module about core_manager token";
-                        } else {
-                            qWarning() << "Failed to inform capability module about core_manager token";
-                        }
-                    } else {
-                        qWarning() << "Failed to connect to capability module for core_manager token notification";
-                    }
-                    
-                    // Clean up
-                    coreAPI->deleteLater();
-                    informTimer->deleteLater();
-        });
-
-        informTimer->start();
 
         return true;
     }
@@ -678,13 +574,7 @@ namespace PluginManager {
             }
             
             QString pluginName = basePlugin->name();
-            
-            // Skip core_manager as it's handled separately
-            if (pluginName == "core_manager") {
-                qDebug() << "Skipping core_manager (already loaded)";
-                continue;
-            }
-            
+
             // Check if already loaded
             if (g_loaded_plugins.contains(pluginName)) {
                 qDebug() << "Static plugin already loaded:" << pluginName;
@@ -712,7 +602,6 @@ namespace PluginManager {
             QString authTokenString = authToken.toString(QUuid::WithoutBraces);
             
             logos_api->getTokenManager()->saveToken("core", authTokenString);
-            logos_api->getTokenManager()->saveToken("core_manager", authTokenString);
             logos_api->getTokenManager()->saveToken("capability_module", authTokenString);
             
             // Save in global TokenManager
@@ -786,7 +675,6 @@ namespace PluginManager {
         QString authTokenString = authToken.toString(QUuid::WithoutBraces);
 
         logos_api->getTokenManager()->saveToken("core", authTokenString);
-        logos_api->getTokenManager()->saveToken("core_manager", authTokenString);
         logos_api->getTokenManager()->saveToken("capability_module", authTokenString);
         logos_api->getTokenManager()->saveToken("package_manager", authTokenString);
 
@@ -824,11 +712,6 @@ namespace PluginManager {
     }
 
     bool unloadPlugin(const QString& pluginName) {
-    #ifdef Q_OS_IOS
-        // iOS doesn't support process-based plugins
-        qWarning() << "Plugin unloading not supported on iOS";
-        return false;
-    #else
         qDebug() << "Attempting to unload plugin by name:" << pluginName;
 
         // Check if plugin is loaded
@@ -866,7 +749,6 @@ namespace PluginManager {
         // The process will be cleaned up by the signal handler
         qDebug() << "Successfully unloaded plugin:" << pluginName;
         return true;
-    #endif // Q_OS_IOS
     }
 
     char** getLoadedPluginsCStr() {
@@ -896,10 +778,6 @@ namespace PluginManager {
     }
 
     char** getKnownPluginsCStr() {
-        qDebug() << "getKnownPluginsCStr() called";
-        qDebug() << "g_known_plugins size:" << g_known_plugins.size();
-        qDebug() << "g_known_plugins keys:" << g_known_plugins.keys();
-        
         // Get the keys from the hash (plugin names)
         QStringList knownPlugins = g_known_plugins.keys();
         int count = knownPlugins.size();
@@ -912,8 +790,6 @@ namespace PluginManager {
             return result;
         }
         
-        qDebug() << "Returning" << count << "known plugins";
-        
         // Allocate memory for the array of strings
         char** result = new char*[count + 1];  // +1 for null terminator
         
@@ -922,7 +798,6 @@ namespace PluginManager {
             QByteArray utf8Data = knownPlugins[i].toUtf8();
             result[i] = new char[utf8Data.size() + 1];
             strcpy(result[i], utf8Data.constData());
-            qDebug() << "  -" << knownPlugins[i];
         }
         
         // Null-terminate the array
@@ -1049,7 +924,6 @@ namespace PluginManager {
         g_known_plugins.clear();
         g_plugin_metadata.clear();
         
-        #ifndef Q_OS_IOS
         // Terminate and clean up all plugin processes
         for (auto it = g_plugin_processes.begin(); it != g_plugin_processes.end(); ++it) {
             QProcess* process = it.value();
@@ -1060,7 +934,6 @@ namespace PluginManager {
             }
         }
         g_plugin_processes.clear();
-        #endif
         
         // Clean up all local plugin API instances
         for (auto it = g_local_plugin_apis.begin(); it != g_local_plugin_apis.end(); ++it) {

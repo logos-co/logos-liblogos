@@ -7,11 +7,8 @@
 #include <QList>
 #include <QPair>
 #include <QJsonObject>
-#include <QRemoteObjectRegistryHost>
 
-#ifndef Q_OS_IOS
 #include <QProcess>
-#endif
 
 #include "logos_core.h"
 
@@ -37,15 +34,10 @@ extern QHash<QString, QString> g_known_plugins;
 extern QHash<QString, QJsonObject> g_plugin_metadata;
 
 // Global hash to store plugin processes
-#ifndef Q_OS_IOS
 extern QHash<QString, QProcess*> g_plugin_processes;
-#endif
 
 // Global hash to store LogosAPI instances for Local mode plugins
 extern QHash<QString, LogosAPI*> g_local_plugin_apis;
-
-// Global Qt Remote Object registry host
-extern QRemoteObjectRegistryHost* g_registry_host;
 
 // Structure to store event listener information
 struct EventListener {

@@ -107,7 +107,6 @@ LogosAPI* initializeLogosAPI(const QString& pluginName, QObject* plugin,
         qDebug() << "Plugin registered for remote access with name:" << basePlugin->name();
         // Save the auth token using the TokenManager
         logos_api->getTokenManager()->saveToken("core", authToken);
-        logos_api->getTokenManager()->saveToken("core_manager", authToken);
         logos_api->getTokenManager()->saveToken("capability_module", authToken);
         qDebug() << "Auth token saved for core access";
     } else {

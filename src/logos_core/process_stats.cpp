@@ -8,7 +8,7 @@
 #include <cstring>
 
 // Platform-specific includes for process monitoring
-#if (defined(Q_OS_MACOS) || defined(Q_OS_MAC)) && !defined(Q_OS_IOS)
+#if defined(Q_OS_MACOS) || defined(Q_OS_MAC)
 #include <libproc.h>
 #include <mach/mach.h>
 #include <mach/task_info.h>
@@ -30,7 +30,7 @@ namespace ProcessStats {
             return stats;
         }
         
-    #if (defined(Q_OS_MACOS) || defined(Q_OS_MAC)) && !defined(Q_OS_IOS)
+    #if defined(Q_OS_MACOS) || defined(Q_OS_MAC)
         // macOS implementation using libproc
         struct proc_taskinfo taskInfo;
         int ret = proc_pidinfo(pid, PROC_PIDTASKINFO, 0, &taskInfo, sizeof(taskInfo));
@@ -131,21 +131,13 @@ namespace ProcessStats {
     }
 
     char* getModuleStats() {
-        qDebug() << "getModuleStats() called";
-        
         QJsonArray modulesArray;
         
-    #ifndef Q_OS_IOS
         // Iterate through plugin processes
         for (auto it = g_plugin_processes.begin(); it != g_plugin_processes.end(); ++it) {
             QString pluginName = it.key();
             QProcess* process = it.value();
-            
-            // Skip core_manager as it runs in-process
-            if (pluginName == "core_manager") {
-                continue;
-            }
-            
+
             // Get process ID
             qint64 pid = process->processId();
             if (pid <= 0) {
@@ -165,12 +157,7 @@ namespace ProcessStats {
             
             modulesArray.append(moduleObj);
             
-            qDebug() << "Module stats for" << pluginName 
-                    << "- CPU:" << stats.cpuPercent << "%" 
-                    << "(" << stats.cpuTimeSeconds << "s),"
-                    << "Memory:" << stats.memoryMB << "MB";
         }
-    #endif // Q_OS_IOS
         
         // Convert to JSON string
         QJsonDocument doc(modulesArray);
@@ -179,8 +166,6 @@ namespace ProcessStats {
         // Allocate memory for the result string
         char* result = new char[jsonData.size() + 1];
         strcpy(result, jsonData.constData());
-        
-        qDebug() << "Returning module stats JSON for" << modulesArray.size() << "modules";
         
         return result;
     }

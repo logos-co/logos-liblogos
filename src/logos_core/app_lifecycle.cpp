@@ -6,12 +6,9 @@
 #include <QCoreApplication>
 #include <QDir>
 #include <QDebug>
-#include <QRemoteObjectRegistryHost>
 #include <QMetaType>
 #include <cassert>
-#ifndef Q_OS_IOS
 #include <QProcess>
-#endif
 
 // Declare QObject* as a metatype so it can be stored in QVariant
 Q_DECLARE_METATYPE(QObject*)
@@ -61,19 +58,12 @@ namespace AppLifecycle {
     }
 
     void start() {
+        // Generate the shared instance ID before launching any child processes
+        // so that logos_host processes inherit it via LOGOS_INSTANCE_ID env var.
+        LogosInstance::id();
+
         // Clear the list of loaded plugins before loading new ones
         g_loaded_plugins.clear();
-        
-        // Initialize Qt Remote Object registry host
-        if (!g_registry_host) {
-          g_registry_host = new QRemoteObjectRegistryHost(QUrl(LogosInstance::id("core_manager")));
-            qDebug() << "Qt Remote Object registry host initialized at: local:logos_core_manager";
-        }
-        
-        // First initialize the core manager
-        if (!PluginManager::initializeCoreManager()) {
-            qWarning() << "Failed to initialize core manager, continuing with other modules...";
-        }
         
         // Define the plugins directories to scan
         // Always include the default bundled modules directory (contains capability_module)
@@ -146,7 +136,6 @@ namespace AppLifecycle {
             qDebug() << "Local mode plugins cleaned up";
         }
 
-    #ifndef Q_OS_IOS
         // Terminate all plugin processes (Remote mode)
         if (!g_plugin_processes.isEmpty()) {
             qDebug() << "Terminating all plugin processes...";
@@ -167,15 +156,7 @@ namespace AppLifecycle {
             }
             g_plugin_processes.clear();
         }
-    #endif
         g_loaded_plugins.clear();
-        
-        // Clean up Qt Remote Object registry host
-        if (g_registry_host) {
-            delete g_registry_host;
-            g_registry_host = nullptr;
-            qDebug() << "Qt Remote Object registry host cleaned up";
-        }
         
         // Only delete the app if we created it
         if (g_app_created_by_us) {
@@ -200,10 +181,6 @@ namespace AppLifecycle {
 
     bool isAppOwnedByUs() {
         return g_app_created_by_us;
-    }
-
-    bool isRegistryHostInitialized() {
-        return g_registry_host != nullptr;
     }
 
 }

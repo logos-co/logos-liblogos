@@ -5,10 +5,7 @@
 #include <QList>
 #include <QPair>
 #include <QJsonObject>
-#include <QRemoteObjectRegistryHost>
-#ifndef Q_OS_IOS
 #include <QProcess>
-#endif
 
 // === Core Context Definitions ===
 
@@ -31,15 +28,10 @@ QHash<QString, QString> g_known_plugins;
 QHash<QString, QJsonObject> g_plugin_metadata;
 
 // Hash to store plugin processes
-#ifndef Q_OS_IOS
 QHash<QString, QProcess*> g_plugin_processes;
-#endif
 
 // Hash to store LogosAPI instances for Local mode plugins
 QHash<QString, LogosAPI*> g_local_plugin_apis;
-
-// Qt Remote Object registry host
-QRemoteObjectRegistryHost* g_registry_host = nullptr;
 
 // List to store registered event listeners
 QList<EventListener> g_event_listeners;

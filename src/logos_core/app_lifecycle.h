@@ -16,7 +16,7 @@ namespace AppLifecycle {
     // Add an additional plugins directory to scan
     void addPluginsDir(const char* plugins_dir);
     
-    // Start the logos core functionality (discover plugins, init core manager)
+    // Start the logos core functionality (discover plugins, init capability module)
     void start();
     
     // Run the event loop
@@ -32,7 +32,6 @@ namespace AppLifecycle {
     QStringList getPluginsDirs();
     bool isInitialized();           // returns true if g_app is set
     bool isAppOwnedByUs();          // returns true if we created the app
-    bool isRegistryHostInitialized(); // returns true if registry host exists
 }
 
 #endif // APP_LIFECYCLE_H

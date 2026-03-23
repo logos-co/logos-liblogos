@@ -28,12 +28,6 @@ QString testPlatformVariant() {
     #else
         return "linux-x86";
     #endif
-#elif defined(Q_OS_WIN)
-    #if defined(Q_PROCESSOR_X86_64)
-        return "windows-x86_64";
-    #else
-        return "windows-x86";
-    #endif
 #else
         return "unknown";
 #endif
@@ -57,23 +51,9 @@ protected:
         
         // Set to Local mode by default (most testable functions require it)
         LogosModeConfig::setMode(LogosMode::Local);
-        
-        // Ensure registry host is null at start
-        if (g_registry_host) {
-            delete g_registry_host;
-            g_registry_host = nullptr;
-        }
     }
-    
+
     void TearDown() override {
-        // Clean up after each test
-        
-        // Clean up registry host if it was created
-        if (g_registry_host) {
-            delete g_registry_host;
-            g_registry_host = nullptr;
-        }
-        
         // Clear plugin state using public API
         PluginManager::clearState();
     }
@@ -410,7 +390,6 @@ TEST_F(PluginManagerTest, LoadPlugin_ReturnsFalseForAlreadyLoadedLocal) {
     EXPECT_FALSE(result);
 }
 
-#ifndef Q_OS_IOS
 // Verifies that loadPlugin() returns false when attempting to load a plugin that is already running
 // in a separate process in Remote mode
 TEST_F(PluginManagerTest, LoadPlugin_ReturnsFalseForAlreadyLoadedRemote) {
@@ -429,19 +408,11 @@ TEST_F(PluginManagerTest, LoadPlugin_ReturnsFalseForAlreadyLoadedRemote) {
     bool result = PluginManager::loadPlugin("test_plugin");
     EXPECT_FALSE(result);
 }
-#endif
 
 // =============================================================================
 // unloadPlugin Error Cases Tests
 // =============================================================================
 
-#ifdef Q_OS_IOS
-// Verifies that unloadPlugin() is not supported on iOS (which doesn't support process-based plugins)
-TEST_F(PluginManagerTest, UnloadPlugin_NotSupportedOnIOS) {
-    bool result = PluginManager::unloadPlugin("any_plugin");
-    EXPECT_FALSE(result);
-}
-#else
 // Verifies that unloadPlugin() returns false when attempting to unload a plugin that is not loaded
 TEST_F(PluginManagerTest, UnloadPlugin_ReturnsFalseForNotLoaded) {
     bool result = PluginManager::unloadPlugin("nonexistent_plugin");
@@ -457,7 +428,6 @@ TEST_F(PluginManagerTest, UnloadPlugin_ReturnsFalseForNoProcess) {
     bool result = PluginManager::unloadPlugin("test_plugin");
     EXPECT_FALSE(result);
 }
-#endif
 
 // =============================================================================
 // Mode-Dependent Functions Tests

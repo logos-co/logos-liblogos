@@ -136,12 +136,6 @@ int logos_core_register_plugin_by_name(const char* plugin_name)
 
 int logos_core_unload_plugin(const char* plugin_name)
 {
-#ifdef Q_OS_IOS
-    // iOS doesn't support process-based plugins
-    qWarning() << "Plugin unloading not supported on iOS";
-    Q_UNUSED(plugin_name);
-    return 0;
-#else
     if (!plugin_name) {
         qWarning() << "Cannot unload plugin: name is null";
         return 0;
@@ -150,7 +144,6 @@ int logos_core_unload_plugin(const char* plugin_name)
     QString name = QString::fromUtf8(plugin_name);
     bool success = PluginManager::unloadPlugin(name);
     return success ? 1 : 0;
-#endif // Q_OS_IOS
 }
 
 char* logos_core_process_plugin(const char* plugin_path)
