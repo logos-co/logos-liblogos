@@ -48,7 +48,7 @@ protected:
     void SetUp() override {
         // Clear global state before each test using public API
         PluginManager::clearState();
-        
+
         // Set to Local mode by default (most testable functions require it)
         LogosModeConfig::setMode(LogosMode::Local);
     }
@@ -377,15 +377,15 @@ TEST_F(PluginManagerTest, LoadPlugin_ReturnsFalseForUnknownPlugin) {
 TEST_F(PluginManagerTest, LoadPlugin_ReturnsFalseForAlreadyLoadedLocal) {
     // Ensure we're in Local mode (default, but being explicit)
     LogosModeConfig::setMode(LogosMode::Local);
-    
+
     // Simulate a loaded plugin in Local mode
     PluginManager::addKnownPlugin("test_plugin", "/path/to/plugin");
     g_loaded_plugins.append("test_plugin");
-    
+
     // Create a dummy LogosAPI to simulate loaded plugin
     // Note: This is an implementation test verifying internal state checking
     g_local_plugin_apis.insert("test_plugin", nullptr);
-    
+
     bool result = PluginManager::loadPlugin("test_plugin");
     EXPECT_FALSE(result);
 }
@@ -395,16 +395,16 @@ TEST_F(PluginManagerTest, LoadPlugin_ReturnsFalseForAlreadyLoadedLocal) {
 TEST_F(PluginManagerTest, LoadPlugin_ReturnsFalseForAlreadyLoadedRemote) {
     // Set to Remote mode explicitly
     LogosModeConfig::setMode(LogosMode::Remote);
-    
+
     // Simulate a loaded plugin in Remote mode
     PluginManager::addKnownPlugin("test_plugin", "/path/to/plugin");
     g_loaded_plugins.append("test_plugin");
-    
+
     // Create a dummy process to simulate loaded plugin
     // Note: This is an implementation test verifying internal state checking
     QProcess* dummyProcess = new QProcess();
     g_plugin_processes.insert("test_plugin", dummyProcess);
-    
+
     bool result = PluginManager::loadPlugin("test_plugin");
     EXPECT_FALSE(result);
 }
@@ -426,42 +426,6 @@ TEST_F(PluginManagerTest, UnloadPlugin_ReturnsFalseForNoProcess) {
     g_loaded_plugins.append("test_plugin");
     
     bool result = PluginManager::unloadPlugin("test_plugin");
-    EXPECT_FALSE(result);
-}
-
-// =============================================================================
-// Mode-Dependent Functions Tests
-// =============================================================================
-
-// Verifies that loadStaticPlugins() returns 0 when no static plugins are registered
-// (requires Local mode for static plugin loading)
-TEST_F(PluginManagerTest, LoadStaticPlugins_ReturnsZeroWhenNoPlugins) {
-    // Set to Local mode (required for loadStaticPlugins)
-    LogosModeConfig::setMode(LogosMode::Local);
-    
-    // Should return 0 when no static plugins are registered
-    int result = PluginManager::loadStaticPlugins();
-    EXPECT_EQ(result, 0);
-}
-
-// Verifies that registerPluginInstance() returns false when given a null plugin instance pointer
-// (requires Local mode for direct plugin registration)
-TEST_F(PluginManagerTest, RegisterPluginInstance_ReturnsFalseForNullInstance) {
-    // Set to Local mode (required for registerPluginInstance)
-    LogosModeConfig::setMode(LogosMode::Local);
-    
-    bool result = PluginManager::registerPluginInstance("test_plugin", nullptr);
-    EXPECT_FALSE(result);
-}
-
-// Verifies that registerPluginByName() returns false when attempting to register a static plugin
-// that doesn't exist in the static plugin instances list (requires Local mode)
-TEST_F(PluginManagerTest, RegisterPluginByName_ReturnsFalseForUnfoundPlugin) {
-    // Set to Local mode (required for registerPluginByName)
-    LogosModeConfig::setMode(LogosMode::Local);
-    
-    // Try to register a non-existent plugin
-    bool result = PluginManager::registerPluginByName("nonexistent_plugin");
     EXPECT_FALSE(result);
 }
 

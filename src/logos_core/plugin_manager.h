@@ -13,11 +13,11 @@ namespace PluginManager {
     // Load a plugin by name (handles both Local and Remote modes)
     // Returns true if successful, false otherwise
     bool loadPlugin(const QString& pluginName);
-    
+
     // Load a plugin in Local mode (in-process)
     // Returns true if successful, false otherwise
     bool loadPluginLocal(const QString& pluginName, const QString& pluginPath);
-    
+
     // Load and process a plugin in one step
     void loadAndProcessPlugin(const QString& pluginPath);
     
@@ -29,19 +29,7 @@ namespace PluginManager {
     // Returns true if successful, false otherwise
     bool initializeCapabilityModule();
     
-    // Load all statically linked plugins (for iOS/mobile)
-    // Returns the number of plugins successfully loaded
-    int loadStaticPlugins();
-    
-    // Register a plugin instance directly (for iOS/mobile)
-    // Returns true if successful, false otherwise
-    bool registerPluginInstance(const QString& pluginName, void* pluginInstance);
-    
-    // Register a statically-linked plugin by name (Local mode only)
-    // Returns true if successful, false otherwise
-    bool registerPluginByName(const QString& pluginName);
-    
-    // Unload a plugin by name (Remote mode only)
+    // Unload a plugin by name
     // Returns true if successful, false otherwise
     bool unloadPlugin(const QString& pluginName);
     

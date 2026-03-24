@@ -128,7 +128,7 @@ namespace AppLifecycle {
             for (auto it = g_local_plugin_apis.begin(); it != g_local_plugin_apis.end(); ++it) {
                 QString pluginName = it.key();
                 LogosAPI* logos_api = it.value();
-                
+
                 qDebug() << "Cleaning up Local mode plugin:" << pluginName;
                 delete logos_api;
             }

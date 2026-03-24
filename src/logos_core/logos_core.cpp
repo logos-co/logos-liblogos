@@ -105,35 +105,6 @@ int logos_core_load_plugin_with_dependencies(const char* plugin_name)
     return allSucceeded ? 1 : 0;
 }
 
-int logos_core_load_static_plugins()
-{
-    return PluginManager::loadStaticPlugins();
-}
-
-int logos_core_register_plugin_instance(const char* plugin_name, void* plugin_instance)
-{
-    if (!plugin_name || !plugin_instance) {
-        qWarning() << "logos_core_register_plugin_instance: Invalid arguments (name or instance is null)";
-        return 0;
-    }
-    
-    QString pluginName = QString::fromUtf8(plugin_name);
-    bool success = PluginManager::registerPluginInstance(pluginName, plugin_instance);
-    return success ? 1 : 0;
-}
-
-int logos_core_register_plugin_by_name(const char* plugin_name)
-{
-    if (!plugin_name) {
-        qWarning() << "logos_core_register_plugin_by_name: plugin_name is null";
-        return 0;
-    }
-    
-    QString name = QString::fromUtf8(plugin_name);
-    bool success = PluginManager::registerPluginByName(name);
-    return success ? 1 : 0;
-}
-
 int logos_core_unload_plugin(const char* plugin_name)
 {
     if (!plugin_name) {
