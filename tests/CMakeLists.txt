@@ -16,6 +16,7 @@ add_executable(logos_core_tests
 
 target_link_libraries(logos_core_tests PRIVATE
     logos_core
+    process_stats
     GTest::gtest
     Qt${QT_VERSION_MAJOR}::Core
     Qt${QT_VERSION_MAJOR}::RemoteObjects
@@ -29,6 +30,11 @@ target_include_directories(logos_core_tests PRIVATE
 # Propagate portable build flag to tests so manifest variant keys match
 if(LOGOS_PORTABLE_BUILD)
     target_compile_definitions(logos_core_tests PRIVATE LOGOS_PORTABLE_BUILD=1)
+endif()
+
+# Add process-stats include directory
+if(DEFINED PROCESS_STATS_ROOT AND EXISTS "${PROCESS_STATS_ROOT}/include")
+  target_include_directories(logos_core_tests PRIVATE ${PROCESS_STATS_ROOT}/include)
 endif()
 
 # Add SDK include directory (same logic as src/CMakeLists.txt)

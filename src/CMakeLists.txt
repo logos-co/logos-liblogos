@@ -62,6 +62,29 @@ else()
   message(STATUS "LOGOS_MODULE_ROOT not set, logos-module will need to be provided")
 endif()
 
+# Find process-stats library
+if(DEFINED PROCESS_STATS_ROOT AND EXISTS "${PROCESS_STATS_ROOT}/lib")
+  message(STATUS "Using process-stats at ${PROCESS_STATS_ROOT}")
+
+  find_library(PROCESS_STATS_LIBRARY
+    NAMES process_stats
+    PATHS "${PROCESS_STATS_ROOT}/lib"
+    NO_DEFAULT_PATH
+  )
+
+  if(NOT PROCESS_STATS_LIBRARY)
+    message(FATAL_ERROR "process_stats library not found in ${PROCESS_STATS_ROOT}/lib")
+  endif()
+
+  add_library(process_stats STATIC IMPORTED)
+  set_target_properties(process_stats PROPERTIES
+    IMPORTED_LOCATION "${PROCESS_STATS_LIBRARY}"
+    INTERFACE_INCLUDE_DIRECTORIES "${PROCESS_STATS_ROOT}/include"
+  )
+else()
+  message(STATUS "PROCESS_STATS_ROOT not set, process-stats will need to be provided")
+endif()
+
 # Define the library sources
 set(LOGOS_CORE_SOURCES
     logos_core/logos_core.cpp
@@ -74,8 +97,6 @@ set(LOGOS_CORE_SOURCES
     logos_core/plugin_manager.h
     logos_core/proxy_api.cpp
     logos_core/proxy_api.h
-    logos_core/process_stats.cpp
-    logos_core/process_stats.h
     common/interface.h
 )
 
@@ -107,6 +128,7 @@ target_link_libraries(logos_core PUBLIC
     Qt${QT_VERSION_MAJOR}::RemoteObjects
     logos_sdk
     logos_module
+    process_stats
 )
 
 # Include directories for the library
@@ -119,6 +141,11 @@ target_include_directories(logos_core PRIVATE
 # Add logos_module include directory if available
 if(DEFINED LOGOS_MODULE_ROOT AND EXISTS "${LOGOS_MODULE_ROOT}/include")
   target_include_directories(logos_core PRIVATE ${LOGOS_MODULE_ROOT}/include)
+endif()
+
+# Add process-stats include directory if available
+if(DEFINED PROCESS_STATS_ROOT AND EXISTS "${PROCESS_STATS_ROOT}/include")
+  target_include_directories(logos_core PRIVATE ${PROCESS_STATS_ROOT}/include)
 endif()
 
 # Add SDK include directory if using built SDK

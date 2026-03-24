@@ -7,9 +7,10 @@
     logos-cpp-sdk.url = "github:logos-co/logos-cpp-sdk";
     logos-capability-module.url = "github:logos-co/logos-capability-module";
     logos-module.url = "github:logos-co/logos-module";
+    process-stats.url = "github:logos-co/process-stats";
   };
 
-  outputs = { self, nixpkgs, logos-nix, logos-cpp-sdk, logos-capability-module, logos-module }:
+  outputs = { self, nixpkgs, logos-nix, logos-cpp-sdk, logos-capability-module, logos-module, process-stats }:
     let
       systems = [ "aarch64-darwin" "x86_64-darwin" "aarch64-linux" "x86_64-linux" ];
       forAllSystems = f: nixpkgs.lib.genAttrs systems (system: f {
@@ -18,15 +19,16 @@
         logosSdk = logos-cpp-sdk.packages.${system}.default;
         capabilityModule = logos-capability-module.packages.${system}.default;
         logosModule = logos-module.packages.${system}.default;
+        processStats = process-stats.packages.${system}.default;
       });
     in
     {
-      packages = forAllSystems ({ pkgs, system, logosSdk, capabilityModule, logosModule }:
+      packages = forAllSystems ({ pkgs, system, logosSdk, capabilityModule, logosModule, processStats }:
         let
           # Common configuration (dev, default)
-          common = import ./nix/default.nix { inherit pkgs logosSdk logosModule; };
+          common = import ./nix/default.nix { inherit pkgs logosSdk logosModule processStats; };
           # Common configuration (portable)
-          commonPortable = import ./nix/default.nix { inherit pkgs logosSdk logosModule; portableBuild = true; };
+          commonPortable = import ./nix/default.nix { inherit pkgs logosSdk logosModule processStats; portableBuild = true; };
           src = ./.;
 
           # Shared build that compiles everything (dev)
