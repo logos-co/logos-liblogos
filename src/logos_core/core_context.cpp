@@ -35,6 +35,3 @@ QHash<QString, LogosAPI*> g_local_plugin_apis;
 
 // List to store registered event listeners
 QList<EventListener> g_event_listeners;
-
-// Hash to track previous CPU times for percentage calculation
-QHash<qint64, QPair<double, qint64>> g_previous_cpu_times;

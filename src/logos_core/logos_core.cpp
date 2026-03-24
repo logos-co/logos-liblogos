@@ -3,7 +3,7 @@
 #include "app_lifecycle.h"
 #include "plugin_manager.h"
 #include "proxy_api.h"
-#include "process_stats.h"
+#include <process_stats/process_stats.h>
 #include "token_manager.h"
 #include <QDebug>
 #include <QByteArray>
@@ -172,7 +172,13 @@ char* logos_core_get_token(const char* key)
 
 char* logos_core_get_module_stats()
 {
-    return ProcessStats::getModuleStats();
+    QHash<QString, qint64> processes;
+    for (auto it = g_plugin_processes.begin(); it != g_plugin_processes.end(); ++it) {
+        if (it.value()) {
+            processes.insert(it.key(), it.value()->processId());
+        }
+    }
+    return ProcessStats::getModuleStats(processes);
 }
 
 // === Async Callback API Implementation ===
