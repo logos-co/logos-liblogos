@@ -5,6 +5,7 @@
 #include "token_manager.h"
 #include <QDebug>
 #include <QByteArray>
+#include <QStringList>
 #include <cstring>
 
 // === C API Implementation (Thin Wrappers) ===
@@ -137,6 +138,13 @@ char* logos_core_get_module_stats() {
     return ProcessStats::getModuleStats(PluginManager::getPluginProcessIds());
 }
 
-void logos_core_process_events() {
+void logos_core_refresh_plugins()
+{
+    PluginManager::discoverInstalledModules();
+}
+
+
+void logos_core_process_events()
+{
     AppLifecycle::processEvents();
 }

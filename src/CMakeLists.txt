@@ -117,13 +117,37 @@ if(LOGOS_PORTABLE_BUILD)
     target_compile_definitions(logos_core PRIVATE LOGOS_PORTABLE_BUILD=1)
 endif()
 
-# Link Qt libraries, SDK and module library
+# Find logos-package-manager library
+if(DEFINED LOGOS_PACKAGE_MANAGER_ROOT AND EXISTS "${LOGOS_PACKAGE_MANAGER_ROOT}/lib")
+  message(STATUS "Using logos-package-manager at ${LOGOS_PACKAGE_MANAGER_ROOT}")
+
+  find_library(LOGOS_PACKAGE_MANAGER_LIBRARY
+    NAMES package_manager_lib
+    PATHS "${LOGOS_PACKAGE_MANAGER_ROOT}/lib"
+    NO_DEFAULT_PATH
+  )
+
+  if(NOT LOGOS_PACKAGE_MANAGER_LIBRARY)
+    message(FATAL_ERROR "package_manager_lib not found in ${LOGOS_PACKAGE_MANAGER_ROOT}/lib")
+  endif()
+
+  add_library(package_manager_lib SHARED IMPORTED)
+  set_target_properties(package_manager_lib PROPERTIES
+    IMPORTED_LOCATION "${LOGOS_PACKAGE_MANAGER_LIBRARY}"
+    INTERFACE_INCLUDE_DIRECTORIES "${LOGOS_PACKAGE_MANAGER_ROOT}/include"
+  )
+else()
+  message(FATAL_ERROR "LOGOS_PACKAGE_MANAGER_ROOT not set or ${LOGOS_PACKAGE_MANAGER_ROOT}/lib does not exist")
+endif()
+
+# Link Qt libraries, SDK, module library, and package-manager library
 target_link_libraries(logos_core PUBLIC
     Qt${QT_VERSION_MAJOR}::Core
     Qt${QT_VERSION_MAJOR}::RemoteObjects
     logos_sdk
     logos_module
     process_stats
+    package_manager_lib
 )
 
 # Include directories for the library

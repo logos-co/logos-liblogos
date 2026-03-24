@@ -8,9 +8,11 @@
     logos-capability-module.url = "github:logos-co/logos-capability-module";
     logos-module.url = "github:logos-co/logos-module";
     process-stats.url = "github:logos-co/process-stats";
+    logos-package-manager.url = "github:logos-co/logos-package-manager";
   };
 
-  outputs = { self, nixpkgs, logos-nix, logos-cpp-sdk, logos-capability-module, logos-module, process-stats }:
+  outputs = { self, nixpkgs, logos-nix, logos-cpp-sdk, logos-capability-module, logos-module, logos-package-manager, process-stats }:
+
     let
       systems = [ "aarch64-darwin" "x86_64-darwin" "aarch64-linux" "x86_64-linux" ];
       forAllSystems = f: nixpkgs.lib.genAttrs systems (system: f {
@@ -20,15 +22,17 @@
         capabilityModule = logos-capability-module.packages.${system}.default;
         logosModule = logos-module.packages.${system}.default;
         processStats = process-stats.packages.${system}.default;
+        logosPackageManager = logos-package-manager.packages.${system}.lib;
+        logosPackageManagerPortable = logos-package-manager.packages.${system}.lib-portable;
       });
     in
     {
-      packages = forAllSystems ({ pkgs, system, logosSdk, capabilityModule, logosModule, processStats }:
+      packages = forAllSystems ({ pkgs, system, logosSdk, capabilityModule, logosModule, processStats, logosPackageManager, logosPackageManagerPortable }:
         let
           # Common configuration (dev, default)
-          common = import ./nix/default.nix { inherit pkgs logosSdk logosModule processStats; };
+          common = import ./nix/default.nix { inherit pkgs logosSdk logosModule processStats logosPackageManager; };
           # Common configuration (portable)
-          commonPortable = import ./nix/default.nix { inherit pkgs logosSdk logosModule processStats; portableBuild = true; };
+          commonPortable = import ./nix/default.nix { inherit pkgs logosSdk logosModule processStats; logosPackageManager = logosPackageManagerPortable; portableBuild = true; };
           src = ./.;
 
           # Shared build that compiles everything (dev)

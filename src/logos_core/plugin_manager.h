@@ -13,11 +13,11 @@ namespace PluginManager {
     void addPluginsDir(const char* plugins_dir);
     QStringList getPluginsDirs();
 
-    void discoverPlugins();
+    void discoverInstalledModules();
 
     QString processPlugin(const QString& pluginPath);
     bool loadPlugin(const QString& pluginName);
-    QStringList findPlugins(const QString& pluginsDir);
+    void loadAndProcessPlugin(const QString& pluginPath);
     bool initializeCapabilityModule();
     bool unloadPlugin(const QString& pluginName);
     void terminateAll();

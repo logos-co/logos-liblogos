@@ -13,6 +13,11 @@ set(CMAKE_ARCHIVE_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR}/lib)
 set(CMAKE_LIBRARY_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR}/lib)
 set(CMAKE_RUNTIME_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR}/bin)
 
+# Add external library paths to build RPATH so test binaries can find them
+if(DEFINED LOGOS_PACKAGE_MANAGER_ROOT)
+    list(APPEND CMAKE_BUILD_RPATH "${LOGOS_PACKAGE_MANAGER_ROOT}/lib")
+endif()
+
 # Build src first to ensure logos_core is built before modules
 add_subdirectory(src)
 

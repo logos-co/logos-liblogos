@@ -65,6 +65,11 @@ LOGOS_CORE_EXPORT char* logos_core_get_token(const char* key);
 // The returned string must be freed by the caller
 LOGOS_CORE_EXPORT char* logos_core_get_module_stats();
 
+// Re-scan all plugin directories and update known plugins.
+// Call after installing new modules so they become discoverable.
+LOGOS_CORE_EXPORT void logos_core_refresh_plugins();
+
+
 // Process Qt events without blocking (for integration with other event loops)
 LOGOS_CORE_EXPORT void logos_core_process_events();
 

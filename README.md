@@ -109,16 +109,27 @@ void logos_core_start();
 int  logos_core_exec();
 void logos_core_cleanup();
 
-// Plugin management
+// Plugin directory management
+void logos_core_set_plugins_dir(const char* dir);
 void logos_core_add_plugins_dir(const char* dir);
+
+// Plugin management
 int  logos_core_load_plugin(const char* name);
 int  logos_core_load_plugin_with_dependencies(const char* name);
+int  logos_core_unload_plugin(const char* name);
+char* logos_core_process_plugin(const char* path);
+void logos_core_refresh_plugins();
 
-// Async callbacks
-typedef void (*AsyncCallback)(int result, const char* message, void* user_data);
-void logos_core_call_plugin_method_async(
-    const char* plugin_name, const char* method_name,
-    const char* params_json, AsyncCallback callback, void* user_data);
+// Plugin queries
+char** logos_core_get_loaded_plugins();
+char** logos_core_get_known_plugins();
+
+// Module stats and tokens
+char* logos_core_get_module_stats();
+char* logos_core_get_token(const char* key);
+
+// Event loop integration
+void logos_core_process_events();
 ```
 
 See `src/logos_core/logos_core.h` for the full API.

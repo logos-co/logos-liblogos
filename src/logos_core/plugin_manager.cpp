@@ -14,7 +14,9 @@
 #include "logos_api.h"
 #include "logos_api_client.h"
 #include "token_manager.h"
-#include "module_lib.h"
+#include "logos_mode.h"
+#include <module_lib/module_lib.h>
+#include <package_manager_lib.h>
 
 using namespace ModuleLib;
 
@@ -47,48 +49,44 @@ namespace PluginManager {
         return s_plugins_dirs;
     }
 
-    void discoverPlugins() {
-        s_loaded_plugins.clear();
+    // Delegate to PackageManagerLib for platform variant selection and plugin scanning
+    static PackageManagerLib& packageManagerInstance() {
+        static PackageManagerLib instance;
+        return instance;
+    }
 
-        QStringList pluginsDirs;
-
-        QString defaultDir = qEnvironmentVariable("LOGOS_BUNDLED_MODULES_DIR");
-        if (defaultDir.isEmpty()) {
-            defaultDir = QDir::cleanPath(QCoreApplication::applicationDirPath() + "/../modules");
-        }
-        if (!defaultDir.isEmpty() && QDir(defaultDir).exists()) {
-            pluginsDirs << defaultDir;
-        }
-
-        for (const QString& dir : s_plugins_dirs) {
-            if (!pluginsDirs.contains(dir)) {
-                pluginsDirs << dir;
+    void discoverInstalledModules() {
+        // Configure the package manager with the directories set via the C API
+        PackageManagerLib& pm = packageManagerInstance();
+        if (!s_plugins_dirs.isEmpty()) {
+            pm.setEmbeddedModulesDirectory(s_plugins_dirs.first().toStdString());
+            for (int i = 1; i < s_plugins_dirs.size(); ++i) {
+                pm.setUserModulesDirectory(s_plugins_dirs[i].toStdString());
             }
         }
 
-        qDebug() << "Looking for modules in" << pluginsDirs.size() << "directories:" << pluginsDirs;
+        std::string jsonStr = pm.getInstalledModules();
+        QJsonDocument doc = QJsonDocument::fromJson(QByteArray::fromStdString(jsonStr));
+        QJsonArray modules = doc.array();
 
-        for (const QString& pluginsDir : pluginsDirs) {
-            qDebug() << "Scanning directory:" << pluginsDir;
-            QStringList pluginPaths = findPlugins(pluginsDir);
+        for (const QJsonValue& val : modules) {
+            QJsonObject mod = val.toObject();
+            QString name = mod.value("name").toString();
+            QString mainFilePath = mod.value("mainFilePath").toString();
 
-            if (pluginPaths.isEmpty()) {
-                qDebug() << "No modules found in:" << pluginsDir;
+            if (name.isEmpty() || mainFilePath.isEmpty())
+                continue;
+
+            // Process plugin binary to extract Qt metadata and register
+            QString pluginName = processPlugin(mainFilePath);
+            if (pluginName.isEmpty()) {
+                qWarning() << "Failed to process plugin (no metadata or invalid):" << mainFilePath;
             } else {
-                qDebug() << "Found" << pluginPaths.size() << "modules in:" << pluginsDir;
-
-                for (const QString &pluginPath : pluginPaths) {
-                    QString pluginName = processPlugin(pluginPath);
-                    if (pluginName.isEmpty()) {
-                        qWarning() << "Failed to process plugin (no metadata or invalid):" << pluginPath;
-                    } else {
-                        qDebug() << "Successfully processed plugin:" << pluginName;
-                    }
-                }
+                qDebug() << "Discovered module:" << pluginName << "at" << mainFilePath;
             }
         }
 
-        qDebug() << "Total known plugins after processing:" << s_known_plugins.size();
+        qDebug() << "Total known plugins after discovery:" << s_known_plugins.size();
         qDebug() << "Known plugin names:" << s_known_plugins.keys();
     }
 
@@ -351,122 +349,15 @@ namespace PluginManager {
         return true;
     }
 
-    QString currentPlatformVariant() {
-#if defined(Q_OS_MAC)
-    #if defined(Q_PROCESSOR_ARM)
-        return "darwin-arm64";
-    #else
-        return "darwin-x86_64";
-    #endif
-#elif defined(Q_OS_LINUX)
-    #if defined(Q_PROCESSOR_X86_64)
-        return "linux-x86_64";
-    #elif defined(Q_PROCESSOR_ARM_64)
-        return "linux-arm64";
-    #else
-        return "linux-x86";
-    #endif
-#else
-        return "unknown";
-#endif
-    }
+    void loadAndProcessPlugin(const QString &pluginPath) {
+        QString pluginName = processPlugin(pluginPath);
 
-    QStringList platformVariantsToTry() {
-        QString primary = currentPlatformVariant();
-        QStringList variants;
-        variants << primary;
-
-        if (primary == "linux-x86_64") {
-            variants << "linux-amd64";
-        } else if (primary == "linux-amd64") {
-            variants << "linux-x86_64";
-        } else if (primary == "linux-arm64") {
-            variants << "linux-aarch64";
-        } else if (primary == "linux-aarch64") {
-            variants << "linux-arm64";
+        if (pluginName.isEmpty()) {
+            qWarning() << "Failed to process plugin:" << pluginPath;
+            return;
         }
 
-#ifndef LOGOS_PORTABLE_BUILD
-        QStringList devVariants;
-        for (const QString &variant : variants) {
-            devVariants << (variant + "-dev");
-        }
-        variants = devVariants;
-#endif
-
-        return variants;
-    }
-
-    QStringList findPlugins(const QString &pluginsDir) {
-        QDir dir(pluginsDir);
-        QStringList plugins;
-        
-        qDebug() << "Searching for plugins in:" << dir.absolutePath();
-        
-        if (!dir.exists()) {
-            qWarning() << "Plugins directory does not exist:" << dir.absolutePath();
-            return plugins;
-        }
-        
-        QStringList subdirs = dir.entryList(QDir::Dirs | QDir::NoDotAndDotDot);
-        qDebug() << "Subdirectories found:" << subdirs;
-        
-        for (const QString &subdir : subdirs) {
-            QDir pluginDir(dir.absoluteFilePath(subdir));
-            QString manifestPath = pluginDir.absoluteFilePath("manifest.json");
-            
-            if (!QFile::exists(manifestPath)) {
-                qDebug() << "No manifest.json in" << pluginDir.absolutePath() << ", skipping";
-                continue;
-            }
-            
-            QFile manifestFile(manifestPath);
-            if (!manifestFile.open(QIODevice::ReadOnly)) {
-                qWarning() << "Failed to open manifest:" << manifestPath;
-                continue;
-            }
-            
-            QJsonParseError parseError;
-            QJsonDocument doc = QJsonDocument::fromJson(manifestFile.readAll(), &parseError);
-            manifestFile.close();
-            
-            if (parseError.error != QJsonParseError::NoError) {
-                qWarning() << "Failed to parse manifest:" << manifestPath << parseError.errorString();
-                continue;
-            }
-            
-            QJsonObject manifest = doc.object();
-            QJsonValue mainValue = manifest.value("main");
-            
-            if (!mainValue.isObject()) {
-                qWarning() << "Manifest 'main' field is not an object:" << manifestPath;
-                continue;
-            }
-            
-            QJsonObject mainObj = mainValue.toObject();
-            QStringList variants = platformVariantsToTry();
-            QString mainLib;
-            for (const QString &variant : variants) {
-                mainLib = mainObj.value(variant).toString();
-                if (!mainLib.isEmpty()) break;
-            }
-            
-            if (mainLib.isEmpty()) {
-                qDebug() << "No entry for platform variants" << variants << "in manifest:" << manifestPath;
-                continue;
-            }
-            
-            QString libPath = pluginDir.absoluteFilePath(mainLib);
-            if (!QFile::exists(libPath)) {
-                qWarning() << "Main library not found:" << libPath;
-                continue;
-            }
-            
-            plugins.append(libPath);
-            qDebug() << "Found plugin:" << libPath;
-        }
-        
-        return plugins;
+        loadPlugin(pluginName);
     }
 
     bool initializeCapabilityModule() {

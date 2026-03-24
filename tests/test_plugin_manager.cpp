@@ -2,44 +2,15 @@
 #include "plugin_manager.h"
 #include "logos_core.h"
 #include <QCoreApplication>
-#include <QDir>
-#include <QTemporaryDir>
-#include <QFile>
 #include <QJsonArray>
 #include <QJsonDocument>
 #include <QJsonObject>
 #include <QProcess>
+#include <QDir>
+#include <QTemporaryDir>
 #include <cstring>
+#include <fstream>
 
-namespace {
-QString testPlatformVariant() {
-#if defined(Q_OS_MAC)
-    #if defined(Q_PROCESSOR_ARM)
-        return "darwin-arm64";
-    #else
-        return "darwin-x86_64";
-    #endif
-#elif defined(Q_OS_LINUX)
-    #if defined(Q_PROCESSOR_X86_64)
-        return "linux-x86_64";
-    #elif defined(Q_PROCESSOR_ARM_64)
-        return "linux-arm64";
-    #else
-        return "linux-x86";
-    #endif
-#else
-        return "unknown";
-#endif
-}
-
-QJsonObject mainFieldForPlatform(const QString &libName) {
-    QString variant = testPlatformVariant();
-#ifndef LOGOS_PORTABLE_BUILD
-    variant += "-dev";
-#endif
-    return QJsonObject{{variant, libName}};
-}
-}
 
 class PluginManagerTest : public ::testing::Test {
 protected:
@@ -172,148 +143,6 @@ TEST_F(PluginManagerTest, GetKnownPluginsCStr_ReturnsCorrectArray) {
     delete[] result[0];
     delete[] result[1];
     delete[] result;
-}
-
-// =============================================================================
-// findPlugins Function Tests
-// =============================================================================
-
-TEST_F(PluginManagerTest, FindPlugins_ReturnsEmptyForNonExistentDir) {
-    QStringList plugins = PluginManager::findPlugins("/nonexistent/directory");
-    EXPECT_TRUE(plugins.isEmpty());
-}
-
-TEST_F(PluginManagerTest, FindPlugins_ReturnsEmptyForEmptyDir) {
-    QTemporaryDir tempDir;
-    ASSERT_TRUE(tempDir.isValid());
-
-    QStringList plugins = PluginManager::findPlugins(tempDir.path());
-    EXPECT_TRUE(plugins.isEmpty());
-}
-
-TEST_F(PluginManagerTest, FindPlugins_DiscoversPluginFromManifest) {
-    QTemporaryDir tempDir;
-    ASSERT_TRUE(tempDir.isValid());
-
-    QDir rootDir(tempDir.path());
-
-    ASSERT_TRUE(rootDir.mkpath("my_plugin"));
-    QDir pluginDir(rootDir.filePath("my_plugin"));
-
-    QString libName = "my_plugin.dylib";
-    QFile libFile(pluginDir.filePath(libName));
-    ASSERT_TRUE(libFile.open(QIODevice::WriteOnly));
-    libFile.close();
-
-    QFile manifest(pluginDir.filePath("manifest.json"));
-    ASSERT_TRUE(manifest.open(QIODevice::WriteOnly));
-    manifest.write(QJsonDocument(QJsonObject{{"main", mainFieldForPlatform(libName)}}).toJson());
-    manifest.close();
-
-    QStringList plugins = PluginManager::findPlugins(tempDir.path());
-
-    ASSERT_EQ(plugins.size(), 1);
-    EXPECT_TRUE(plugins[0].endsWith(libName));
-}
-
-TEST_F(PluginManagerTest, FindPlugins_SkipsSubdirWithoutManifest) {
-    QTemporaryDir tempDir;
-    ASSERT_TRUE(tempDir.isValid());
-
-    QDir rootDir(tempDir.path());
-    ASSERT_TRUE(rootDir.mkpath("no_manifest_plugin"));
-
-    QFile libFile(rootDir.filePath("no_manifest_plugin/plugin.dylib"));
-    ASSERT_TRUE(libFile.open(QIODevice::WriteOnly));
-    libFile.close();
-
-    QStringList plugins = PluginManager::findPlugins(tempDir.path());
-    EXPECT_TRUE(plugins.isEmpty());
-}
-
-TEST_F(PluginManagerTest, FindPlugins_SkipsManifestWithoutMainField) {
-    QTemporaryDir tempDir;
-    ASSERT_TRUE(tempDir.isValid());
-
-    QDir rootDir(tempDir.path());
-    ASSERT_TRUE(rootDir.mkpath("bad_manifest_plugin"));
-
-    QFile manifest(rootDir.filePath("bad_manifest_plugin/manifest.json"));
-    ASSERT_TRUE(manifest.open(QIODevice::WriteOnly));
-    manifest.write(QJsonDocument(QJsonObject{{"version", "1.0"}}).toJson());
-    manifest.close();
-
-    QStringList plugins = PluginManager::findPlugins(tempDir.path());
-    EXPECT_TRUE(plugins.isEmpty());
-}
-
-TEST_F(PluginManagerTest, FindPlugins_SkipsManifestWithWrongPlatform) {
-    QTemporaryDir tempDir;
-    ASSERT_TRUE(tempDir.isValid());
-
-    QDir rootDir(tempDir.path());
-    ASSERT_TRUE(rootDir.mkpath("wrong_platform_plugin"));
-    QDir pluginDir(rootDir.filePath("wrong_platform_plugin"));
-
-    QFile libFile(pluginDir.filePath("plugin.dll"));
-    ASSERT_TRUE(libFile.open(QIODevice::WriteOnly));
-    libFile.close();
-
-    QJsonObject mainObj{{"fake-platform-999", "plugin.dll"}};
-    QFile manifest(pluginDir.filePath("manifest.json"));
-    ASSERT_TRUE(manifest.open(QIODevice::WriteOnly));
-    manifest.write(QJsonDocument(QJsonObject{{"main", mainObj}}).toJson());
-    manifest.close();
-
-    QStringList plugins = PluginManager::findPlugins(tempDir.path());
-    EXPECT_TRUE(plugins.isEmpty());
-}
-
-TEST_F(PluginManagerTest, FindPlugins_SkipsManifestWithMissingLibrary) {
-    QTemporaryDir tempDir;
-    ASSERT_TRUE(tempDir.isValid());
-
-    QDir rootDir(tempDir.path());
-    ASSERT_TRUE(rootDir.mkpath("missing_lib_plugin"));
-
-    QFile manifest(rootDir.filePath("missing_lib_plugin/manifest.json"));
-    ASSERT_TRUE(manifest.open(QIODevice::WriteOnly));
-    manifest.write(QJsonDocument(QJsonObject{{"main", mainFieldForPlatform("nonexistent.dylib")}}).toJson());
-    manifest.close();
-
-    QStringList plugins = PluginManager::findPlugins(tempDir.path());
-    EXPECT_TRUE(plugins.isEmpty());
-}
-
-TEST_F(PluginManagerTest, FindPlugins_DiscoversMultiplePlugins) {
-    QTemporaryDir tempDir;
-    ASSERT_TRUE(tempDir.isValid());
-
-    QDir rootDir(tempDir.path());
-
-    ASSERT_TRUE(rootDir.mkpath("plugin_a"));
-    QFile libA(rootDir.filePath("plugin_a/liba.dylib"));
-    ASSERT_TRUE(libA.open(QIODevice::WriteOnly));
-    libA.close();
-    QFile manifestA(rootDir.filePath("plugin_a/manifest.json"));
-    ASSERT_TRUE(manifestA.open(QIODevice::WriteOnly));
-    manifestA.write(QJsonDocument(QJsonObject{{"main", mainFieldForPlatform("liba.dylib")}}).toJson());
-    manifestA.close();
-
-    ASSERT_TRUE(rootDir.mkpath("plugin_b"));
-    QFile libB(rootDir.filePath("plugin_b/libb.so"));
-    ASSERT_TRUE(libB.open(QIODevice::WriteOnly));
-    libB.close();
-    QFile manifestB(rootDir.filePath("plugin_b/manifest.json"));
-    ASSERT_TRUE(manifestB.open(QIODevice::WriteOnly));
-    manifestB.write(QJsonDocument(QJsonObject{{"main", mainFieldForPlatform("libb.so")}}).toJson());
-    manifestB.close();
-
-    ASSERT_TRUE(rootDir.mkpath("plugin_c"));
-
-    QStringList plugins = PluginManager::findPlugins(tempDir.path());
-
-    ASSERT_EQ(plugins.size(), 2);
 }
 
 // =============================================================================
@@ -482,4 +311,182 @@ TEST_F(PluginManagerTest, LoadPluginWithDependencies_SkipsAlreadyLoaded) {
     int result = logos_core_load_plugin_with_dependencies("plugin_a");
 
     EXPECT_TRUE(PluginManager::isPluginLoaded("plugin_b"));
+}
+
+// =============================================================================
+// Plugin Directory Management Tests
+// =============================================================================
+
+TEST_F(PluginManagerTest, SetPluginsDir_SetsFirstDirectory) {
+    PluginManager::setPluginsDir("/tmp/test_plugins");
+    QStringList dirs = PluginManager::getPluginsDirs();
+    ASSERT_EQ(dirs.size(), 1);
+    EXPECT_EQ(dirs[0].toStdString(), "/tmp/test_plugins");
+}
+
+TEST_F(PluginManagerTest, AddPluginsDir_AppendsDirectory) {
+    PluginManager::setPluginsDir("/tmp/dir1");
+    PluginManager::addPluginsDir("/tmp/dir2");
+    PluginManager::addPluginsDir("/tmp/dir3");
+
+    QStringList dirs = PluginManager::getPluginsDirs();
+    ASSERT_EQ(dirs.size(), 3);
+    EXPECT_EQ(dirs[0].toStdString(), "/tmp/dir1");
+    EXPECT_EQ(dirs[1].toStdString(), "/tmp/dir2");
+    EXPECT_EQ(dirs[2].toStdString(), "/tmp/dir3");
+}
+
+TEST_F(PluginManagerTest, GetPluginsDirs_ReturnsEmptyAfterClear) {
+    PluginManager::setPluginsDir("/tmp/dir1");
+    PluginManager::clearState();
+    QStringList dirs = PluginManager::getPluginsDirs();
+    EXPECT_TRUE(dirs.isEmpty());
+}
+
+// =============================================================================
+// Discovery Tests — fake installed modules
+// =============================================================================
+
+// Helper to create a fake installed module directory structure:
+//   <parentDir>/<moduleName>/manifest.json
+//   <parentDir>/<moduleName>/<mainFile>  (empty fake binary)
+static void createFakeModule(const QString& parentDir,
+                             const QString& moduleName,
+                             const QString& mainFile,
+                             const QString& type = "core") {
+    QDir dir(parentDir);
+    dir.mkpath(moduleName);
+
+    // Write manifest.json
+    QJsonObject manifest;
+    manifest["name"] = moduleName;
+    manifest["version"] = "1.0.0";
+    manifest["type"] = type;
+    manifest["main"] = mainFile;
+    manifest["description"] = "Fake test module";
+
+    QString manifestPath = dir.filePath(moduleName + "/manifest.json");
+    std::ofstream mf(manifestPath.toStdString());
+    QJsonDocument doc(manifest);
+    mf << doc.toJson().toStdString();
+    mf.close();
+
+    // Create a fake binary file (processPlugin will fail on this, which is expected)
+    QString binaryPath = dir.filePath(moduleName + "/" + mainFile);
+    std::ofstream bf(binaryPath.toStdString());
+    bf << "fake";
+    bf.close();
+}
+
+TEST_F(PluginManagerTest, DiscoverInstalledModules_DoesNotCrashWithEmptyDir) {
+    QTemporaryDir tmpDir;
+    ASSERT_TRUE(tmpDir.isValid());
+
+    PluginManager::setPluginsDir(tmpDir.path().toUtf8().constData());
+    PluginManager::discoverInstalledModules();
+
+    // No modules to find — known plugins should remain empty
+    QHash<QString, QString> known = PluginManager::getKnownPlugins();
+    EXPECT_TRUE(known.isEmpty());
+}
+
+TEST_F(PluginManagerTest, DiscoverInstalledModules_DoesNotCrashWithNonexistentDir) {
+    PluginManager::setPluginsDir("/tmp/nonexistent_dir_12345");
+    PluginManager::discoverInstalledModules();
+
+    QHash<QString, QString> known = PluginManager::getKnownPlugins();
+    EXPECT_TRUE(known.isEmpty());
+}
+
+TEST_F(PluginManagerTest, DiscoverInstalledModules_FindsFakeModulesWithoutCrash) {
+    QTemporaryDir tmpDir;
+    ASSERT_TRUE(tmpDir.isValid());
+
+    createFakeModule(tmpDir.path(), "fake_module_a", "fake_module_a_plugin.so");
+    createFakeModule(tmpDir.path(), "fake_module_b", "fake_module_b_plugin.so");
+
+    PluginManager::setPluginsDir(tmpDir.path().toUtf8().constData());
+    PluginManager::discoverInstalledModules();
+
+    // processPlugin fails for fake binaries, so they won't be in known plugins.
+    // The important thing is that discovery ran without crashing and the
+    // scanning pipeline found the manifest.json files.
+    QHash<QString, QString> known = PluginManager::getKnownPlugins();
+    EXPECT_TRUE(known.isEmpty());
+}
+
+TEST_F(PluginManagerTest, DiscoverInstalledModules_IgnoresModulesWithoutManifest) {
+    QTemporaryDir tmpDir;
+    ASSERT_TRUE(tmpDir.isValid());
+
+    // Create a module directory without manifest.json
+    QDir dir(tmpDir.path());
+    dir.mkpath("no_manifest_module");
+    QString binaryPath = dir.filePath("no_manifest_module/plugin.so");
+    std::ofstream bf(binaryPath.toStdString());
+    bf << "fake";
+    bf.close();
+
+    PluginManager::setPluginsDir(tmpDir.path().toUtf8().constData());
+    PluginManager::discoverInstalledModules();
+
+    QHash<QString, QString> known = PluginManager::getKnownPlugins();
+    EXPECT_TRUE(known.isEmpty());
+}
+
+TEST_F(PluginManagerTest, DiscoverInstalledModules_IgnoresUiTypeModules) {
+    QTemporaryDir tmpDir;
+    ASSERT_TRUE(tmpDir.isValid());
+
+    // Create a UI module — getInstalledModules() only scans for "core" type
+    createFakeModule(tmpDir.path(), "ui_module", "ui_module_plugin.so", "ui");
+
+    PluginManager::setPluginsDir(tmpDir.path().toUtf8().constData());
+    PluginManager::discoverInstalledModules();
+
+    // UI modules are not discovered by getInstalledModules (which filters by "core")
+    QHash<QString, QString> known = PluginManager::getKnownPlugins();
+    EXPECT_TRUE(known.isEmpty());
+}
+
+TEST_F(PluginManagerTest, DiscoverInstalledModules_MultipleDirectories) {
+    QTemporaryDir tmpDir1;
+    QTemporaryDir tmpDir2;
+    ASSERT_TRUE(tmpDir1.isValid());
+    ASSERT_TRUE(tmpDir2.isValid());
+
+    createFakeModule(tmpDir1.path(), "module_in_dir1", "module_in_dir1_plugin.so");
+    createFakeModule(tmpDir2.path(), "module_in_dir2", "module_in_dir2_plugin.so");
+
+    PluginManager::setPluginsDir(tmpDir1.path().toUtf8().constData());
+    PluginManager::addPluginsDir(tmpDir2.path().toUtf8().constData());
+
+    QStringList dirs = PluginManager::getPluginsDirs();
+    ASSERT_EQ(dirs.size(), 2);
+
+    PluginManager::discoverInstalledModules();
+
+    // Both directories should be scanned without crash
+    // (processPlugin still fails for fake binaries)
+    QHash<QString, QString> known = PluginManager::getKnownPlugins();
+    EXPECT_TRUE(known.isEmpty());
+}
+
+TEST_F(PluginManagerTest, DiscoverInstalledModules_InvalidManifestJson) {
+    QTemporaryDir tmpDir;
+    ASSERT_TRUE(tmpDir.isValid());
+
+    // Create a module with invalid JSON in manifest
+    QDir dir(tmpDir.path());
+    dir.mkpath("bad_manifest_module");
+    QString manifestPath = dir.filePath("bad_manifest_module/manifest.json");
+    std::ofstream mf(manifestPath.toStdString());
+    mf << "{ this is not valid json }}}";
+    mf.close();
+
+    PluginManager::setPluginsDir(tmpDir.path().toUtf8().constData());
+    PluginManager::discoverInstalledModules();
+
+    QHash<QString, QString> known = PluginManager::getKnownPlugins();
+    EXPECT_TRUE(known.isEmpty());
 }

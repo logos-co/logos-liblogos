@@ -1,6 +1,8 @@
 #ifndef APP_LIFECYCLE_H
 #define APP_LIFECYCLE_H
 
+#include <QStringList>
+
 namespace AppLifecycle {
     void init(int argc, char* argv[]);
     void start();
