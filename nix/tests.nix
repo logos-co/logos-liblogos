@@ -34,12 +34,12 @@ pkgs.stdenv.mkDerivation {
     runHook postConfigure
   '';
   
-  # Build phase - build the test executable and logoscore binary
+  # Build phase - build the test executable
   buildPhase = ''
     runHook preBuild
     
     cd build
-    ninja logos_core_tests logoscore
+    ninja logos_core_tests
     
     runHook postBuild
   '';
@@ -50,7 +50,6 @@ pkgs.stdenv.mkDerivation {
     
     mkdir -p $out/bin
     cp bin/logos_core_tests $out/bin/
-    cp bin/logoscore $out/bin/
     
     # Copy the libraries so tests can run
     mkdir -p $out/lib
@@ -61,15 +60,11 @@ pkgs.stdenv.mkDerivation {
       install_name_tool \
         -change @rpath/liblogos_core.dylib $out/lib/liblogos_core.dylib \
         $out/bin/logos_core_tests || true
-      install_name_tool \
-        -change @rpath/liblogos_core.dylib $out/lib/liblogos_core.dylib \
-        $out/bin/logoscore || true
     ''}
     
     ${pkgs.lib.optionalString pkgs.stdenv.isLinux ''
       # Fix RPATH on Linux to avoid /build/ references and include all dependencies
       patchelf --set-rpath "$out/lib:${pkgs.gtest}/lib:${pkgs.qt6.qtbase}/lib:${pkgs.qt6.qtremoteobjects}/lib:${pkgs.stdenv.cc.cc.lib}/lib" $out/bin/logos_core_tests || true
-      patchelf --set-rpath "$out/lib:${pkgs.qt6.qtbase}/lib:${pkgs.qt6.qtremoteobjects}/lib:${pkgs.stdenv.cc.cc.lib}/lib" $out/bin/logoscore || true
     ''}
     
     runHook postInstall

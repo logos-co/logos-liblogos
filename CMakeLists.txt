@@ -46,7 +46,7 @@ if(CMAKE_SYSTEM_NAME STREQUAL "iOS")
     )
 else()
     # Desktop: install library and executables
-    install(TARGETS logos_core logoscore logos_host
+    install(TARGETS logos_core logos_host
         LIBRARY DESTINATION lib
         RUNTIME DESTINATION bin
         ARCHIVE DESTINATION lib

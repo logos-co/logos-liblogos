@@ -7,11 +7,9 @@
     logos-cpp-sdk.url = "github:logos-co/logos-cpp-sdk";
     logos-capability-module.url = "github:logos-co/logos-capability-module";
     logos-module.url = "github:logos-co/logos-module";
-    nix-bundle-dir.url = "github:logos-co/nix-bundle-dir";
-    nix-bundle-appimage.url = "github:logos-co/nix-bundle-appimage";
   };
 
-  outputs = { self, nixpkgs, logos-nix, logos-cpp-sdk, logos-capability-module, logos-module, nix-bundle-dir, nix-bundle-appimage }:
+  outputs = { self, nixpkgs, logos-nix, logos-cpp-sdk, logos-capability-module, logos-module }:
     let
       systems = [ "aarch64-darwin" "x86_64-darwin" "aarch64-linux" "x86_64-linux" ];
       forAllSystems = f: nixpkgs.lib.genAttrs systems (system: f {
@@ -20,11 +18,10 @@
         logosSdk = logos-cpp-sdk.packages.${system}.default;
         capabilityModule = logos-capability-module.packages.${system}.default;
         logosModule = logos-module.packages.${system}.default;
-        dirBundler = nix-bundle-dir.bundlers.${system}.qtApp;
       });
     in
     {
-      packages = forAllSystems ({ pkgs, system, logosSdk, capabilityModule, logosModule, dirBundler }:
+      packages = forAllSystems ({ pkgs, system, logosSdk, capabilityModule, logosModule }:
         let
           # Common configuration (dev, default)
           common = import ./nix/default.nix { inherit pkgs logosSdk logosModule; };
@@ -77,17 +74,6 @@
           # Portable output (compiled with LOGOS_PORTABLE_BUILD)
           portable = liblogosPortable;
 
-          # Bundle outputs
-          cli-bundle-dir = dirBundler bin;
-        } // pkgs.lib.optionalAttrs pkgs.stdenv.isLinux {
-          cli-appimage = nix-bundle-appimage.lib.${system}.mkAppImage {
-            drv = bin;
-            name = "logoscore";
-            bundle = dirBundler bin;
-            desktopFile = ./assets/logoscore.desktop;
-            icon = ./assets/logoscore.png;
-          };
-        } // {
           # Default package (dev)
           default = liblogos;
         }
