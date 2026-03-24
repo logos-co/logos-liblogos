@@ -8,9 +8,7 @@ The core runtime library for the Logos modular application platform. Provides `l
 
 ## How to Build
 
-### Using Nix (Recommended)
-
-The project includes a Nix flake for reproducible builds with a modular structure:
+The project uses a Nix flake for reproducible builds with a modular structure:
 
 #### Build Complete Library (Binaries + Libraries + Headers)
 
@@ -49,8 +47,6 @@ nix build '.#portable'
 
 #### Running Tests
 
-**Using Nix (Recommended):**
-
 ```bash
 # Build and run tests (tests run automatically during build)
 nix build '.#logos-liblogos-tests'
@@ -63,20 +59,6 @@ nix build '.#logos-liblogos-tests'
 
 # List all available tests
 ./result/bin/logos_core_tests --gtest_list_tests
-```
-
-**Manual Build:**
-
-```bash
-# From the build directory
-cd build-local
-ninja logos_core_tests
-
-# Run tests
-./bin/logos_core_tests
-
-# Or use CTest
-ctest --output-on-failure
 ```
 
 #### Development Shell
@@ -116,22 +98,6 @@ To use a local `logos-cpp-sdk` repo:
 nix build --override-input logos-cpp-sdk path:../logos-cpp-sdk
 ```
 
-### Manual Build
-
-First, initialize the git submodules:
-
-```bash
-git submodule update --init --recursive
-```
-
-Then build:
-
-```bash
-./scripts/compile.sh
-```
-
-The built libraries will be available in `build/lib/` and binaries in `build/bin/`.
-
 ## Library API
 
 `logos-liblogos` exposes a C API via `logos_core.h`:
@@ -156,18 +122,6 @@ void logos_core_call_plugin_method_async(
 ```
 
 See `src/logos_core/logos_core.h` for the full API.
-
-## Requirements
-
-### Build Tools
-- CMake (3.14 or later)
-- Ninja build system
-- pkg-config
-
-### Dependencies
-- Qt6 (qtbase, qtremoteobjects)
-- [logos-cpp-sdk](https://github.com/logos-co/logos-cpp-sdk)
-- [logos-module](https://github.com/logos-co/logos-module)
 
 ## Dev vs Portable Builds
 
