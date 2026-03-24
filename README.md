@@ -1,5 +1,11 @@
 # logos-liblogos
 
+The core runtime library for the Logos modular application platform. Provides `liblogos_core` (a C-API shared library) and `logos_host` (the module subprocess host binary).
+
+`logos-liblogos` is a **library**. It is consumed by two frontends:
+- **[logos-basecamp](https://github.com/logos-co/logos-basecamp)** — the desktop GUI application shell
+- **[logos-logoscore-cli](https://github.com/logos-co/logos-logoscore-cli)** — the headless CLI runtime (`logoscore`)
+
 ## How to Build
 
 ### Using Nix (Recommended)
@@ -18,9 +24,9 @@ nix build '.#default'
 ```
 
 The result will include:
-- `/bin/` - Core binaries (logoscore, logos_host)
-- `/lib/` - Core libraries (liblogos_core, liblogoscore, liblogos_host)
-- `/include/` - Headers (interface.h)
+- `/bin/` - Host binary (logos_host)
+- `/lib/` - Core library (liblogos_core)
+- `/include/` - Headers (logos_core.h, interface.h)
 
 #### Build Individual Components
 
@@ -95,12 +101,12 @@ The compiled artifacts can be found at `result/`
 The nix build system is organized into modular files in the `/nix` directory:
 - `nix/default.nix` - Common configuration (dependencies, flags, metadata)
 - `nix/build.nix` - Shared build that compiles everything once
-- `nix/bin.nix` - Extracts binaries (includes libraries for runtime linking)
+- `nix/bin.nix` - Extracts binaries (logos_host, includes libraries for runtime linking)
 - `nix/lib.nix` - Extracts libraries only
 - `nix/include.nix` - Header installation
 - `nix/tests.nix` - Test suite build and execution
 
-**Note:** The `logos-liblogos-bin` package includes both binaries and their required libraries to ensure proper runtime linking. This is necessary because the binaries dynamically link against the logos libraries.
+**Note:** The `logos-liblogos-bin` package includes both the `logos_host` binary and its required libraries to ensure proper runtime linking.
 
 #### Local Development
 
@@ -126,77 +132,42 @@ Then build:
 
 The built libraries will be available in `build/lib/` and binaries in `build/bin/`.
 
-## Usage
+## Library API
 
-### logoscore Command
+`logos-liblogos` exposes a C API via `logos_core.h`:
 
-The `logoscore` binary is the main entry point for the Logos Core application framework.
+```c
+// Lifecycle
+void logos_core_init(int argc, char *argv[]);
+void logos_core_start();
+int  logos_core_exec();
+void logos_core_cleanup();
 
-#### Command Line Options
+// Plugin management
+void logos_core_add_plugins_dir(const char* dir);
+int  logos_core_load_plugin(const char* name);
+int  logos_core_load_plugin_with_dependencies(const char* name);
 
-- `--modules-dir <path>`, `-m <path>` - Specify a custom directory to scan for modules. If not provided, defaults to `../modules` relative to the application binary.
-
-- `--load-modules <modules>`, `-l <modules>` - Comma-separated list of modules to load in order. Modules are loaded after the application starts. note: if not modules are left out they will automatically be loaded if there is a dependency specified between them. for example `--load-modules logos_irc` is the same as `--load-modules waku_module,chat,logos_irc`
-
-- `--call <call>`, `-c <call>` - Call a module method: `module.method(param1, param2)`. Use `@file` to read a parameter from a file. Can be repeated multiple times to execute calls sequentially. Calls execute synchronously and abort on error.
-
-- `--help`, `-h` - Display help information and available options.
-
-- `--version` - Display version information.
-
-#### Examples
-
-```bash
-# Run with default modules directory
-./result/bin/logoscore
-
-# Run with a custom modules directory
-./result/bin/logoscore --modules-dir /path/to/custom/modules
-# Or using the short form
-./result/bin/logoscore -m /path/to/custom/modules
-
-# Load specific modules
-./result/bin/logoscore --load-modules module1,module2,module3
-# Or using the short form
-./result/bin/logoscore -l module1,module2,module3
-
-# Combine options: custom modules directory and load specific modules
-./result/bin/logoscore -m /path/to/modules -l module1,module2
-
-# Call a module method with no parameters
-./result/bin/logoscore -l my_module --call "my_module.start()"
-# Or using the short form
-./result/bin/logoscore -l my_module -c "my_module.start()"
-
-# Call a module method with parameters
-./result/bin/logoscore -l storage --call "storage.init('config', 42, true)"
-
-# Read a parameter from a file (use @ prefix)
-./result/bin/logoscore -l storage --call "storage.loadConfig(@config.json)"
-
-# Multiple sequential calls
-./result/bin/logoscore -l storage --call "storage.init(@config.txt)" --call "storage.start()"
-
-# Combine all options: load modules and call methods
-./result/bin/logoscore -m ./modules -l storage,chat \
-  --call "storage.init(@config.json)" \
-  --call "chat.connect('localhost', 8080)"
-
-# Display help
-./result/bin/logoscore --help
+// Async callbacks
+typedef void (*AsyncCallback)(int result, const char* message, void* user_data);
+void logos_core_call_plugin_method_async(
+    const char* plugin_name, const char* method_name,
+    const char* params_json, AsyncCallback callback, void* user_data);
 ```
 
-### Requirements
+See `src/logos_core/logos_core.h` for the full API.
 
-#### Build Tools
+## Requirements
+
+### Build Tools
 - CMake (3.14 or later)
 - Ninja build system
 - pkg-config
 
-#### Dependencies
-- Qt6 (qtbase) or Qt5 (Core, RemoteObjects)
-- Qt6 Remote Objects (qtremoteobjects)
+### Dependencies
+- Qt6 (qtbase, qtremoteobjects)
 - [logos-cpp-sdk](https://github.com/logos-co/logos-cpp-sdk)
+- [logos-module](https://github.com/logos-co/logos-module)
 
 ## Dev vs Portable Builds
 

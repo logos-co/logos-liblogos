@@ -79,13 +79,6 @@ set(LOGOS_CORE_SOURCES
     common/interface.h
 )
 
-# Define the host application sources
-set(HOST_SOURCES
-    ${CMAKE_SOURCE_DIR}/app/main.cpp
-    ${CMAKE_SOURCE_DIR}/app/command_line_parser.cpp
-    ${CMAKE_SOURCE_DIR}/app/call_executor.cpp
-)
-
 # Define the logos host sources
 set(LOGOS_HOST_SOURCES
     logos_host/logos_host.cpp
@@ -166,19 +159,6 @@ if(NOT CMAKE_SYSTEM_NAME STREQUAL "iOS")
             BUILD_WITH_INSTALL_RPATH TRUE)
     endif()
 
-    # Create the host application
-    add_executable(logoscore ${HOST_SOURCES})
-
-    # Link the host application with the logos core library
-    target_link_libraries(logoscore PRIVATE logos_core)
-
-    # Include directories for the host application
-    target_include_directories(logoscore PRIVATE
-        ${CMAKE_SOURCE_DIR}/app
-        ${CMAKE_CURRENT_SOURCE_DIR}
-        ${CMAKE_CURRENT_SOURCE_DIR}/logos_core
-    )
-
     # Create the logos host application
     add_executable(logos_host ${LOGOS_HOST_SOURCES})
 
@@ -222,26 +202,8 @@ if(NOT CMAKE_SYSTEM_NAME STREQUAL "iOS")
         endif()
         list(REMOVE_DUPLICATES _qt_exec_runtime_paths)
 
-        set_target_properties(logoscore PROPERTIES
-            INSTALL_RPATH "${_qt_exec_runtime_paths}"
-            BUILD_WITH_INSTALL_RPATH TRUE)
-    else()
-        set_target_properties(logoscore PROPERTIES
-            INSTALL_RPATH "$ORIGIN/../lib"
-            BUILD_WITH_INSTALL_RPATH TRUE)
-    endif()
-
-    # Set RPATH settings for the logos host executable
-    if(APPLE)
-        set(_qt_host_runtime_paths "@loader_path/../lib")
-        if(DEFINED Qt${QT_VERSION_MAJOR}_DIR)
-            get_filename_component(_qt_host_lib_dir "${Qt${QT_VERSION_MAJOR}_DIR}/../.." REALPATH)
-            list(APPEND _qt_host_runtime_paths "${_qt_host_lib_dir}")
-        endif()
-        list(REMOVE_DUPLICATES _qt_host_runtime_paths)
-
         set_target_properties(logos_host PROPERTIES
-            INSTALL_RPATH "${_qt_host_runtime_paths}"
+            INSTALL_RPATH "${_qt_exec_runtime_paths}"
             BUILD_WITH_INSTALL_RPATH TRUE)
     else()
         set_target_properties(logos_host PROPERTIES
