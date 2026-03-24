@@ -39,19 +39,11 @@ include(GoogleTest)
 add_subdirectory(tests)
 
 # Install rules
-if(CMAKE_SYSTEM_NAME STREQUAL "iOS")
-    # iOS: only install the static library
-    install(TARGETS logos_core
-        ARCHIVE DESTINATION lib
-    )
-else()
-    # Desktop: install library and executables
-    install(TARGETS logos_core logos_host
-        LIBRARY DESTINATION lib
-        RUNTIME DESTINATION bin
-        ARCHIVE DESTINATION lib
-    )
-endif()
+install(TARGETS logos_core logos_host
+    LIBRARY DESTINATION lib
+    RUNTIME DESTINATION bin
+    ARCHIVE DESTINATION lib
+)
 
 # Install headers
 install(FILES src/common/interface.h src/logos_core/logos_core.h
