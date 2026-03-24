@@ -8,6 +8,7 @@
 #include <QJsonArray>
 #include <QTimer>
 #include <cstring>
+#include "logos_mode.h"
 
 // Helper callback that records if it was called
 static bool s_callback_called = false;
@@ -36,6 +37,10 @@ protected:
     }
     
     void TearDown() override {
+        // Drain any pending timers from async operations before clearing state
+        for (int i = 0; i < 10; ++i)
+            QCoreApplication::processEvents();
+
         // Clean up global state after each test
         g_loaded_plugins.clear();
         g_known_plugins.clear();
@@ -441,4 +446,215 @@ TEST_F(ProxyAPITest, RegisterEventListener_StoresUserData) {
     // User data should be stored
     ASSERT_EQ(g_event_listeners.size(), 1);
     EXPECT_EQ(g_event_listeners[0].userData, &userData);
+}
+
+// =============================================================================
+// Full JSON Array Pipeline Tests (baseline for refactoring)
+// These test the exact JSON format the JS SDK sends: [{name,value,type}, ...]
+// =============================================================================
+
+// Verifies the full JSON array pipeline: parse JSON string -> convert each param -> QVariantList
+// This mirrors the parsing logic in callPluginMethodAsync lines 181-210
+TEST_F(ProxyAPITest, JsonArrayPipeline_MixedTypes) {
+    QString paramsJson = R"([
+        {"name":"arg0","value":"hello","type":"string"},
+        {"name":"arg1","value":"42","type":"int"},
+        {"name":"arg2","value":"true","type":"bool"},
+        {"name":"arg3","value":"3.14","type":"double"}
+    ])";
+
+    QJsonParseError parseError;
+    QJsonDocument jsonDoc = QJsonDocument::fromJson(paramsJson.toUtf8(), &parseError);
+    ASSERT_EQ(parseError.error, QJsonParseError::NoError);
+
+    QJsonArray paramsArray = jsonDoc.array();
+    QVariantList args;
+    for (const QJsonValue& paramValue : paramsArray) {
+        ASSERT_TRUE(paramValue.isObject());
+        QJsonObject paramObj = paramValue.toObject();
+        QVariant variant = ProxyAPI::jsonParamToQVariant(paramObj);
+        ASSERT_TRUE(variant.isValid()) << "Failed for param: " << paramObj.value("name").toString().toStdString();
+        args.append(variant);
+    }
+
+    ASSERT_EQ(args.size(), 4);
+    EXPECT_EQ(args[0].toString(), "hello");
+    EXPECT_EQ(args[1].toInt(), 42);
+    EXPECT_EQ(args[2].toBool(), true);
+    EXPECT_NEAR(args[3].toDouble(), 3.14, 0.001);
+}
+
+// Verifies parsing of an empty JSON array (no params)
+TEST_F(ProxyAPITest, JsonArrayPipeline_EmptyArray) {
+    QString paramsJson = "[]";
+
+    QJsonParseError parseError;
+    QJsonDocument jsonDoc = QJsonDocument::fromJson(paramsJson.toUtf8(), &parseError);
+    ASSERT_EQ(parseError.error, QJsonParseError::NoError);
+
+    QJsonArray paramsArray = jsonDoc.array();
+    QVariantList args;
+    for (const QJsonValue& paramValue : paramsArray) {
+        if (paramValue.isObject()) {
+            args.append(ProxyAPI::jsonParamToQVariant(paramValue.toObject()));
+        }
+    }
+
+    EXPECT_EQ(args.size(), 0);
+}
+
+// Verifies single string param (common case from JS SDK)
+TEST_F(ProxyAPITest, JsonArrayPipeline_SingleStringParam) {
+    QString paramsJson = R"([{"name":"arg0","value":"test message","type":"string"}])";
+
+    QJsonParseError parseError;
+    QJsonDocument jsonDoc = QJsonDocument::fromJson(paramsJson.toUtf8(), &parseError);
+    ASSERT_EQ(parseError.error, QJsonParseError::NoError);
+
+    QJsonArray paramsArray = jsonDoc.array();
+    ASSERT_EQ(paramsArray.size(), 1);
+
+    QVariant result = ProxyAPI::jsonParamToQVariant(paramsArray[0].toObject());
+    ASSERT_TRUE(result.isValid());
+    EXPECT_EQ(result.toString(), "test message");
+}
+
+// Verifies that invalid JSON causes a parse error (not a crash)
+TEST_F(ProxyAPITest, JsonArrayPipeline_InvalidJson) {
+    QString paramsJson = "not valid json at all";
+
+    QJsonParseError parseError;
+    QJsonDocument jsonDoc = QJsonDocument::fromJson(paramsJson.toUtf8(), &parseError);
+    EXPECT_NE(parseError.error, QJsonParseError::NoError);
+}
+
+// Verifies that a param with invalid type value is rejected during pipeline
+TEST_F(ProxyAPITest, JsonArrayPipeline_InvalidParamInArray) {
+    QString paramsJson = R"([
+        {"name":"arg0","value":"hello","type":"string"},
+        {"name":"arg1","value":"not_a_number","type":"int"}
+    ])";
+
+    QJsonParseError parseError;
+    QJsonDocument jsonDoc = QJsonDocument::fromJson(paramsJson.toUtf8(), &parseError);
+    ASSERT_EQ(parseError.error, QJsonParseError::NoError);
+
+    QJsonArray paramsArray = jsonDoc.array();
+    bool hadInvalid = false;
+    QVariantList args;
+    for (const QJsonValue& paramValue : paramsArray) {
+        if (paramValue.isObject()) {
+            QVariant variant = ProxyAPI::jsonParamToQVariant(paramValue.toObject());
+            if (!variant.isValid()) {
+                hadInvalid = true;
+                break;
+            }
+            args.append(variant);
+        }
+    }
+
+    EXPECT_TRUE(hadInvalid);
+    EXPECT_EQ(args.size(), 1);
+    EXPECT_EQ(args[0].toString(), "hello");
+}
+
+// =============================================================================
+// callPluginMethodAsync JSON Error Handling Tests
+// =============================================================================
+
+// Verifies that callPluginMethodAsync reports JSON parse errors via callback
+TEST_F(ProxyAPITest, CallPluginMethodAsync_ReportsJsonParseError) {
+    g_loaded_plugins.append("test_plugin");
+    LogosModeConfig::setMode(LogosMode::Local);
+
+    // Use a dedicated callback to avoid interference from stale timers
+    static bool jsonErrorCalled = false;
+    static int jsonErrorSuccess = -1;
+    static QString jsonErrorMessage;
+    jsonErrorCalled = false;
+    jsonErrorSuccess = -1;
+    jsonErrorMessage.clear();
+
+    auto jsonErrorCallback = [](int success, const char* message, void* /*user_data*/) {
+        jsonErrorCalled = true;
+        jsonErrorSuccess = success;
+        jsonErrorMessage = message ? QString::fromUtf8(message) : QString();
+    };
+
+    ProxyAPI::callPluginMethodAsync("test_plugin", "method", "invalid json!", jsonErrorCallback, nullptr);
+
+    // With Local mode, initialDelay is 0 so the timer fires on next processEvents
+    for (int i = 0; i < 10; ++i)
+        QCoreApplication::processEvents();
+
+    EXPECT_TRUE(jsonErrorCalled);
+    EXPECT_EQ(jsonErrorSuccess, 0);
+    EXPECT_TRUE(jsonErrorMessage.contains("JSON parse error"));
+
+    LogosModeConfig::setMode(LogosMode::Remote);
+}
+
+// Verifies that callPluginMethodAsync reports invalid param errors via callback
+TEST_F(ProxyAPITest, CallPluginMethodAsync_ReportsInvalidParamError) {
+    g_loaded_plugins.append("test_plugin");
+    LogosModeConfig::setMode(LogosMode::Local);
+
+    static bool paramErrorCalled = false;
+    static int paramErrorSuccess = -1;
+    static QString paramErrorMessage;
+    paramErrorCalled = false;
+    paramErrorSuccess = -1;
+    paramErrorMessage.clear();
+
+    auto paramErrorCallback = [](int success, const char* message, void* /*user_data*/) {
+        paramErrorCalled = true;
+        paramErrorSuccess = success;
+        paramErrorMessage = message ? QString::fromUtf8(message) : QString();
+    };
+
+    QString paramsJson = R"([{"name":"arg0","value":"not_a_number","type":"int"}])";
+    ProxyAPI::callPluginMethodAsync("test_plugin", "method", paramsJson.toUtf8().constData(), paramErrorCallback, nullptr);
+
+    for (int i = 0; i < 10; ++i)
+        QCoreApplication::processEvents();
+
+    EXPECT_TRUE(paramErrorCalled);
+    EXPECT_EQ(paramErrorSuccess, 0);
+    EXPECT_TRUE(paramErrorMessage.contains("Invalid parameter"));
+
+    LogosModeConfig::setMode(LogosMode::Remote);
+}
+
+// =============================================================================
+// User data passthrough test
+// =============================================================================
+
+static void* s_received_user_data = nullptr;
+static void userDataCallback(int success, const char* message, void* user_data) {
+    s_callback_called = true;
+    s_callback_success = success;
+    s_callback_message = message ? QString::fromUtf8(message) : QString();
+    s_received_user_data = user_data;
+}
+
+// Verifies that user_data is correctly passed through to the callback
+TEST_F(ProxyAPITest, CallPluginMethodAsync_PassesThroughUserData) {
+    s_received_user_data = nullptr;
+
+    int myData = 123;
+    ProxyAPI::callPluginMethodAsync(nullptr, "method", "[]", userDataCallback, &myData);
+
+    EXPECT_TRUE(s_callback_called);
+    EXPECT_EQ(s_received_user_data, &myData);
+}
+
+// Verifies that loadPluginAsync passes user_data through on failure path
+TEST_F(ProxyAPITest, LoadPluginAsync_PassesThroughUserData) {
+    s_received_user_data = nullptr;
+
+    int myData = 456;
+    ProxyAPI::loadPluginAsync(nullptr, userDataCallback, &myData);
+
+    EXPECT_TRUE(s_callback_called);
+    EXPECT_EQ(s_received_user_data, &myData);
 }

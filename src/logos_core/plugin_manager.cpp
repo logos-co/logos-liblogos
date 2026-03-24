@@ -19,6 +19,7 @@
 #include "logos_api.h"
 #include "logos_api_provider.h"
 #include "logos_api_client.h"
+#include "logos_core_client.h"
 #include "token_manager.h"
 #include "logos_mode.h"
 #include <module_lib/module_lib.h>
@@ -280,39 +281,20 @@ namespace PluginManager {
         if (g_loaded_plugins.contains("capability_module")) {
             qDebug() << "Informing capability module about new module token for:" << pluginName;
 
-            // Create LogosAPI instance to connect to the capability module
-            LogosAPI* coreAPI = new LogosAPI("core");
-
-            // Use a timer to ensure the capability module is ready
-            QTimer* informTimer = new QTimer();
-            informTimer->setSingleShot(true);
-            informTimer->setInterval(1000); // 1 second delay to ensure connection is ready
-
-            // get token for capability_module
             QString capabilityModuleToken = tokenManager.getToken("capability_module");
             qDebug() << "Capability module token:" << capabilityModuleToken;
 
-            QObject::connect(informTimer, &QTimer::timeout, [=]() {
-                if (coreAPI->getClient("capability_module")->isConnected()) {
-                    qDebug() << "Calling informModuleToken on capability module";
-                    
-                    // Call informModuleToken with the core auth token, module name, and module token
-                    bool success = coreAPI->getClient("capability_module")->informModuleToken(capabilityModuleToken, pluginName, authTokenString);
-                    if (success) {
-                        qDebug() << "Successfully informed capability module about token for:" << pluginName;
-                    } else {
-                        qWarning() << "Failed to inform capability module about token for:" << pluginName;
-                    }
-                } else {
-                    qWarning() << "Failed to connect to capability module for token notification";
-                }
-                
-                // Clean up
-                coreAPI->deleteLater();
-                informTimer->deleteLater();
-            });
-            
-            informTimer->start();
+            static LogosCoreClient* s_coreClient = nullptr;
+            if (!s_coreClient)
+                s_coreClient = new LogosCoreClient();
+
+            LogosAPIClient* client = s_coreClient->clientFor("capability_module");
+            bool success = client->informModuleToken(capabilityModuleToken, pluginName, authTokenString);
+            if (success) {
+                qDebug() << "Successfully informed capability module about token for:" << pluginName;
+            } else {
+                qWarning() << "Failed to inform capability module about token for:" << pluginName;
+            }
         } else {
             qDebug() << "Capability module not loaded, skipping token notification";
         }
