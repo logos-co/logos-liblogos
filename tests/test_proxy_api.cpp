@@ -257,12 +257,6 @@ TEST_F(ProxyAPITest, JsonParamToQVariant_TreatsUnknownTypeAsString) {
 // asyncOperation Tests
 // =============================================================================
 
-// Verifies that asyncOperation() does not crash when called with a null callback
-TEST_F(ProxyAPITest, AsyncOperation_DoesNotCrashWithNullCallback) {
-    // Should not crash
-    EXPECT_NO_THROW(ProxyAPI::asyncOperation("test data", nullptr, nullptr));
-}
-
 // Verifies that asyncOperation() handles null data gracefully
 TEST_F(ProxyAPITest, AsyncOperation_HandlesNullData) {
     // Should not crash with null data
@@ -282,10 +276,9 @@ TEST_F(ProxyAPITest, AsyncOperation_AcceptsValidData) {
 // loadPluginAsync Tests
 // =============================================================================
 
-// Verifies that loadPluginAsync() does not crash when called with a null callback
-TEST_F(ProxyAPITest, LoadPluginAsync_DoesNotCrashWithNullCallback) {
-    // Should not crash
-    EXPECT_NO_THROW(ProxyAPI::loadPluginAsync("test_plugin", nullptr, nullptr));
+// Verifies that loadPluginAsync() asserts when called with a null callback
+TEST_F(ProxyAPITest, LoadPluginAsync_AssertsWithNullCallback) {
+    EXPECT_DEATH(ProxyAPI::loadPluginAsync("test_plugin", nullptr, nullptr), "");
 }
 
 // Verifies that loadPluginAsync() fails immediately when plugin name is null
@@ -324,10 +317,9 @@ TEST_F(ProxyAPITest, LoadPluginAsync_AcceptsKnownPlugin) {
 // callPluginMethodAsync Tests
 // =============================================================================
 
-// Verifies that callPluginMethodAsync() does not crash when called with a null callback
-TEST_F(ProxyAPITest, CallPluginMethodAsync_DoesNotCrashWithNullCallback) {
-    // Should not crash
-    EXPECT_NO_THROW(ProxyAPI::callPluginMethodAsync("plugin", "method", "[]", nullptr, nullptr));
+// Verifies that callPluginMethodAsync() asserts when called with a null callback
+TEST_F(ProxyAPITest, CallPluginMethodAsync_AssertsWithNullCallback) {
+    EXPECT_DEATH(ProxyAPI::callPluginMethodAsync("plugin", "method", "[]", nullptr, nullptr), "");
 }
 
 // Verifies that callPluginMethodAsync() fails when plugin name is null
@@ -385,13 +377,10 @@ TEST_F(ProxyAPITest, CallPluginMethodAsync_HandlesNullParamsJson) {
 // registerEventListener Tests
 // =============================================================================
 
-// Verifies that registerEventListener() does not crash with null parameters
-TEST_F(ProxyAPITest, RegisterEventListener_DoesNotCrashWithNullParams) {
-    // Test various null combinations - should not crash
+// Verifies that registerEventListener() does not crash with null plugin/event name
+TEST_F(ProxyAPITest, RegisterEventListener_DoesNotCrashWithNullNames) {
     EXPECT_NO_THROW(ProxyAPI::registerEventListener(nullptr, "event", testCallback, nullptr));
     EXPECT_NO_THROW(ProxyAPI::registerEventListener("plugin", nullptr, testCallback, nullptr));
-    EXPECT_NO_THROW(ProxyAPI::registerEventListener("plugin", "event", nullptr, nullptr));
-    EXPECT_NO_THROW(ProxyAPI::registerEventListener(nullptr, nullptr, nullptr, nullptr));
 }
 
 // Verifies that registerEventListener() does not register for unloaded plugins

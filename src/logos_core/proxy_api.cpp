@@ -3,14 +3,8 @@
 #include "plugin_manager.h"
 #include <QDebug>
 #include <QTimer>
-#include <QCoreApplication>
-#include <QJsonDocument>
-#include <QJsonArray>
-#include <QJsonObject>
 #include "logos_json_utils.h"
 #include "logos_sdk_c.h"
-#include "logos_mode.h"
-#include <cassert>
 
 namespace ProxyAPI {
 
@@ -19,10 +13,7 @@ namespace ProxyAPI {
     }
 
     void asyncOperation(const char* data, AsyncCallback callback, void* user_data) {
-        if (!callback) {
-            qWarning() << "asyncOperation: callback is null, returning early";
-            return;
-        }
+        if (!callback) qFatal("asyncOperation: callback must not be null");
         
         QString inputData = data ? QString::fromUtf8(data) : QString("no data");
         qDebug() << "Starting async operation with data:" << inputData;
@@ -44,10 +35,7 @@ namespace ProxyAPI {
     }
 
     void loadPluginAsync(const char* plugin_name, AsyncCallback callback, void* user_data) {
-        if (!callback) {
-            qWarning() << "loadPluginAsync: callback is null, returning early";
-            return;
-        }
+        if (!callback) qFatal("loadPluginAsync: callback must not be null");
         
         if (!plugin_name) {
             qWarning() << "loadPluginAsync: plugin_name is null";
@@ -90,10 +78,7 @@ namespace ProxyAPI {
     }
 
     void callPluginMethodAsync(const char* plugin_name, const char* method_name, const char* params_json, AsyncCallback callback, void* user_data) {
-        if (!callback) {
-            qWarning() << "callPluginMethodAsync: callback is null, returning early";
-            return;
-        }
+        if (!callback) qFatal("callPluginMethodAsync: callback must not be null");
         
         if (!plugin_name || !method_name) {
             qWarning() << "callPluginMethodAsync: plugin_name or method_name is null";
@@ -114,8 +99,10 @@ namespace ProxyAPI {
     }
 
     void registerEventListener(const char* plugin_name, const char* event_name, AsyncCallback callback, void* user_data) {
-        if (!plugin_name || !event_name || !callback) {
-            qWarning() << "registerEventListener: null parameter, returning early";
+        if (!callback) qFatal("registerEventListener: callback must not be null");
+        
+        if (!plugin_name || !event_name) {
+            qWarning() << "registerEventListener: plugin_name or event_name is null";
             return;
         }
         

@@ -1,8 +1,8 @@
 #ifndef PROXY_API_H
 #define PROXY_API_H
 
-#include <QString>
 #include <QVariant>
+#include <QJsonObject>
 #include "logos_core.h"
 
 namespace ProxyAPI {
