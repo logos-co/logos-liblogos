@@ -544,173 +544,6 @@ namespace PluginManager {
         return true;
     }
 
-    int loadStaticPlugins() {
-        if (!LogosModeConfig::isLocal()) {
-            qWarning() << "loadStaticPlugins() requires Local mode.";
-            return 0;
-        }
-
-        int loadedCount = 0;
-        
-        // Get all statically registered plugin instances using module_lib
-        auto staticModules = LogosModule::getStaticModules();
-        
-        qDebug() << "Found" << staticModules.size() << "static plugin instances";
-        
-        for (auto& module : staticModules) {
-            if (!module.isValid()) {
-                qWarning() << "Invalid static plugin instance, skipping";
-                continue;
-            }
-            
-            QObject* pluginObject = module.instance();
-            
-            // Cast to PluginInterface using module_lib
-            PluginInterface* basePlugin = module.as<PluginInterface>();
-            if (!basePlugin) {
-                qDebug() << "Static plugin" << module.getClassName()
-                        << "does not implement PluginInterface, skipping";
-                continue;
-            }
-            
-            QString pluginName = basePlugin->name();
-
-            // Check if already loaded
-            if (g_loaded_plugins.contains(pluginName)) {
-                qDebug() << "Static plugin already loaded:" << pluginName;
-                continue;
-            }
-            
-            qDebug() << "Loading static plugin:" << pluginName << "version:" << basePlugin->version();
-            
-            // Initialize LogosAPI for this plugin
-            LogosAPI* logos_api = new LogosAPI(pluginName, pluginObject);
-            
-            // Register the plugin with the provider
-            bool success = logos_api->getProvider()->registerObject(pluginName, pluginObject);
-
-            if (!success) {
-                qCritical() << "Failed to register static plugin:" << pluginName;
-                delete logos_api;
-                continue;
-            }
-
-            qDebug() << "Static plugin registered:" << pluginName;
-            
-            // Generate and save auth token
-            QUuid authToken = QUuid::createUuid();
-            QString authTokenString = authToken.toString(QUuid::WithoutBraces);
-            
-            logos_api->getTokenManager()->saveToken("core", authTokenString);
-            logos_api->getTokenManager()->saveToken("capability_module", authTokenString);
-            
-            // Save in global TokenManager
-            TokenManager& tokenManager = TokenManager::instance();
-            tokenManager.saveToken(pluginName, authTokenString);
-            
-            // Store for cleanup
-            g_local_plugin_apis.insert(pluginName, logos_api);
-            
-            // Add to loaded plugins list
-            g_loaded_plugins.append(pluginName);
-            
-            // Add to known plugins (with empty path since it's static)
-            g_known_plugins.insert(pluginName, QString("static:%1").arg(pluginName));
-            
-            loadedCount++;
-            qDebug() << "Static plugin" << pluginName << "loaded successfully";
-        }
-        
-        qDebug() << "Loaded" << loadedCount << "static plugins";
-        return loadedCount;
-    }
-
-    bool registerPluginInstance(const QString& pluginName, void* plugin_instance) {
-        assert(plugin_instance != nullptr && "registerPluginInstance: Invalid arguments (instance is null)");
-        assert(LogosModeConfig::isLocal() && "registerPluginInstance() requires Local mode.");
-        
-        QObject* pluginObject = static_cast<QObject*>(plugin_instance);
-        
-        qDebug() << "registerPluginInstance: Registering plugin:" << pluginName;
-        
-        // Wrap the existing plugin object using module_lib
-        LogosModule module = LogosModule::wrapExisting(pluginObject);
-        
-        PluginInterface* basePlugin = module.as<PluginInterface>();
-        if (!basePlugin) {
-            qCritical() << "Plugin" << pluginName << "does not implement PluginInterface";
-            return false;
-        }
-        
-        QString actualName = basePlugin->name();
-        QString nameToUse = pluginName;
-        if (actualName != pluginName) {
-            qWarning() << "Plugin name mismatch: expected" << pluginName << "but got" << actualName;
-            // Use the actual name from the plugin
-            nameToUse = actualName;
-        }
-        
-        // Check if already loaded
-        if (g_loaded_plugins.contains(nameToUse)) {
-            qDebug() << "Plugin already registered:" << nameToUse;
-            return true; // Already registered, consider success
-        }
-        
-        qDebug() << "Registering plugin:" << nameToUse << "version:" << basePlugin->version();
-        
-        // Initialize LogosAPI for this plugin
-        LogosAPI* logos_api = new LogosAPI(nameToUse, pluginObject);
-        
-        // Register the plugin with the provider
-        bool success = logos_api->getProvider()->registerObject(nameToUse, pluginObject);
-        if (!success) {
-            qCritical() << "Failed to register plugin with provider:" << nameToUse;
-            delete logos_api;
-            return false;
-        }
-        qDebug() << "Plugin registered with provider:" << nameToUse;
-
-        // Generate and save auth token
-        QUuid authToken = QUuid::createUuid();
-        QString authTokenString = authToken.toString(QUuid::WithoutBraces);
-
-        logos_api->getTokenManager()->saveToken("core", authTokenString);
-        logos_api->getTokenManager()->saveToken("capability_module", authTokenString);
-        logos_api->getTokenManager()->saveToken("package_manager", authTokenString);
-
-        // Save in global TokenManager
-        TokenManager& tokenManager = TokenManager::instance();
-        tokenManager.saveToken(nameToUse, authTokenString);
-
-        g_local_plugin_apis.insert(nameToUse, logos_api);
-        g_loaded_plugins.append(nameToUse);
-        g_known_plugins.insert(nameToUse, QString("app:%1").arg(nameToUse));
-
-        qDebug() << "Plugin" << nameToUse << "registered successfully";
-        return true;
-    }
-
-    bool registerPluginByName(const QString& pluginName) {
-        assert(LogosModeConfig::isLocal() && "registerPluginByName() requires Local mode.");
-        
-        qDebug() << "registerPluginByName: Looking for plugin:" << pluginName;
-        
-        // Use module_lib to get static plugins
-        auto staticModules = LogosModule::getStaticModules();
-        qDebug() << "Found" << staticModules.size() << "static plugin instances";
-        
-        for (auto& module : staticModules) {
-            if (!module.isValid()) continue;
-            
-            PluginInterface* plugin = module.as<PluginInterface>();
-            if (plugin && plugin->name() == pluginName) {
-                qDebug() << "Found matching static plugin:" << pluginName;
-                return registerPluginInstance(pluginName, module.instance());
-            }
-        }
-        return false;
-    }
-
     bool unloadPlugin(const QString& pluginName) {
         qDebug() << "Attempting to unload plugin by name:" << pluginName;
 
@@ -934,7 +767,7 @@ namespace PluginManager {
             }
         }
         g_plugin_processes.clear();
-        
+
         // Clean up all local plugin API instances
         for (auto it = g_local_plugin_apis.begin(); it != g_local_plugin_apis.end(); ++it) {
             if (it.value()) {
@@ -942,7 +775,7 @@ namespace PluginManager {
             }
         }
         g_local_plugin_apis.clear();
-        
+
         qDebug() << "Plugin state cleared";
     }
 
