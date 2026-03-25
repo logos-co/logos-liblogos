@@ -3,14 +3,9 @@
 #include "plugin_manager.h"
 #include <QDebug>
 #include <QTimer>
-#include "logos_json_utils.h"
 #include "logos_sdk_c.h"
 
 namespace ProxyAPI {
-
-    QVariant jsonParamToQVariant(const QJsonObject& param) {
-        return LogosJsonUtils::jsonParamToVariant(param);
-    }
 
     void asyncOperation(const char* data, AsyncCallback callback, void* user_data) {
         if (!callback) qFatal("asyncOperation: callback must not be null");

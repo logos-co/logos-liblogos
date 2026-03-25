@@ -1,15 +1,9 @@
 #ifndef PROXY_API_H
 #define PROXY_API_H
 
-#include <QVariant>
-#include <QJsonObject>
 #include "logos_core.h"
 
 namespace ProxyAPI {
-    // Convert JSON parameter to QVariant
-    QVariant jsonParamToQVariant(const QJsonObject& param);
-    
-    // Simple async operation example that uses a callback
     void asyncOperation(const char* data, AsyncCallback callback, void* user_data);
     
     // Async plugin loading with callback

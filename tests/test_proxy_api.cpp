@@ -9,6 +9,7 @@
 #include <QTimer>
 #include <cstring>
 #include "logos_mode.h"
+#include "logos_json_utils.h"
 
 // Helper callback that records if it was called
 static bool s_callback_called = false;
@@ -52,206 +53,6 @@ protected:
         s_callback_message.clear();
     }
 };
-
-// =============================================================================
-// jsonParamToQVariant Tests
-// =============================================================================
-
-// Verifies that jsonParamToQVariant() correctly converts string type parameters
-TEST_F(ProxyAPITest, JsonParamToQVariant_ConvertsStringType) {
-    QJsonObject param;
-    param["name"] = "testParam";
-    param["value"] = "Hello World";
-    param["type"] = "string";
-    
-    QVariant result = ProxyAPI::jsonParamToQVariant(param);
-    
-    EXPECT_TRUE(result.isValid());
-    EXPECT_TRUE(result.canConvert<QString>());
-    EXPECT_EQ(result.toString().toStdString(), "Hello World");
-}
-
-// Verifies that jsonParamToQVariant() correctly converts QString type parameters
-TEST_F(ProxyAPITest, JsonParamToQVariant_ConvertsQStringType) {
-    QJsonObject param;
-    param["name"] = "testParam";
-    param["value"] = "Qt String";
-    param["type"] = "QString";
-    
-    QVariant result = ProxyAPI::jsonParamToQVariant(param);
-    
-    EXPECT_TRUE(result.isValid());
-    EXPECT_TRUE(result.canConvert<QString>());
-    EXPECT_EQ(result.toString().toStdString(), "Qt String");
-}
-
-// Verifies that jsonParamToQVariant() correctly converts int type parameters
-TEST_F(ProxyAPITest, JsonParamToQVariant_ConvertsIntType) {
-    QJsonObject param;
-    param["name"] = "testParam";
-    param["value"] = "42";
-    param["type"] = "int";
-    
-    QVariant result = ProxyAPI::jsonParamToQVariant(param);
-    
-    EXPECT_TRUE(result.isValid());
-    EXPECT_TRUE(result.canConvert<int>());
-    EXPECT_EQ(result.toInt(), 42);
-}
-
-// Verifies that jsonParamToQVariant() correctly converts integer type parameters
-TEST_F(ProxyAPITest, JsonParamToQVariant_ConvertsIntegerType) {
-    QJsonObject param;
-    param["name"] = "testParam";
-    param["value"] = "123";
-    param["type"] = "integer";
-    
-    QVariant result = ProxyAPI::jsonParamToQVariant(param);
-    
-    EXPECT_TRUE(result.isValid());
-    EXPECT_TRUE(result.canConvert<int>());
-    EXPECT_EQ(result.toInt(), 123);
-}
-
-// Verifies that jsonParamToQVariant() correctly converts bool type to true
-TEST_F(ProxyAPITest, JsonParamToQVariant_ConvertsBoolTypeTrue) {
-    QJsonObject param1;
-    param1["name"] = "testParam";
-    param1["value"] = "true";
-    param1["type"] = "bool";
-    
-    QVariant result1 = ProxyAPI::jsonParamToQVariant(param1);
-    EXPECT_TRUE(result1.isValid());
-    EXPECT_TRUE(result1.canConvert<bool>());
-    EXPECT_TRUE(result1.toBool());
-    
-    // Test with "1"
-    QJsonObject param2;
-    param2["name"] = "testParam";
-    param2["value"] = "1";
-    param2["type"] = "bool";
-    
-    QVariant result2 = ProxyAPI::jsonParamToQVariant(param2);
-    EXPECT_TRUE(result2.isValid());
-    EXPECT_TRUE(result2.canConvert<bool>());
-    EXPECT_TRUE(result2.toBool());
-}
-
-// Verifies that jsonParamToQVariant() correctly converts bool type to false
-TEST_F(ProxyAPITest, JsonParamToQVariant_ConvertsBoolTypeFalse) {
-    QJsonObject param1;
-    param1["name"] = "testParam";
-    param1["value"] = "false";
-    param1["type"] = "bool";
-    
-    QVariant result1 = ProxyAPI::jsonParamToQVariant(param1);
-    EXPECT_TRUE(result1.isValid());
-    EXPECT_TRUE(result1.canConvert<bool>());
-    EXPECT_FALSE(result1.toBool());
-    
-    // Test with "0"
-    QJsonObject param2;
-    param2["name"] = "testParam";
-    param2["value"] = "0";
-    param2["type"] = "bool";
-    
-    QVariant result2 = ProxyAPI::jsonParamToQVariant(param2);
-    EXPECT_TRUE(result2.isValid());
-    EXPECT_TRUE(result2.canConvert<bool>());
-    EXPECT_FALSE(result2.toBool());
-}
-
-// Verifies that jsonParamToQVariant() correctly converts boolean type parameters
-TEST_F(ProxyAPITest, JsonParamToQVariant_ConvertsBooleanType) {
-    QJsonObject param;
-    param["name"] = "testParam";
-    param["value"] = "true";
-    param["type"] = "boolean";
-    
-    QVariant result = ProxyAPI::jsonParamToQVariant(param);
-    
-    EXPECT_TRUE(result.isValid());
-    EXPECT_TRUE(result.canConvert<bool>());
-    EXPECT_TRUE(result.toBool());
-}
-
-// Verifies that jsonParamToQVariant() correctly converts double type parameters
-TEST_F(ProxyAPITest, JsonParamToQVariant_ConvertsDoubleType) {
-    QJsonObject param;
-    param["name"] = "testParam";
-    param["value"] = "3.14159";
-    param["type"] = "double";
-    
-    QVariant result = ProxyAPI::jsonParamToQVariant(param);
-    
-    EXPECT_TRUE(result.isValid());
-    EXPECT_TRUE(result.canConvert<double>());
-    EXPECT_NEAR(result.toDouble(), 3.14159, 0.00001);
-}
-
-// Verifies that jsonParamToQVariant() correctly converts float type parameters
-TEST_F(ProxyAPITest, JsonParamToQVariant_ConvertsFloatType) {
-    QJsonObject param;
-    param["name"] = "testParam";
-    param["value"] = "2.718";
-    param["type"] = "float";
-    
-    QVariant result = ProxyAPI::jsonParamToQVariant(param);
-    
-    EXPECT_TRUE(result.isValid());
-    EXPECT_TRUE(result.canConvert<double>());
-    EXPECT_NEAR(result.toDouble(), 2.718, 0.001);
-}
-
-// Verifies that jsonParamToQVariant() returns invalid QVariant for bad int values
-TEST_F(ProxyAPITest, JsonParamToQVariant_ReturnsInvalidForBadInt) {
-    QJsonObject param;
-    param["name"] = "testParam";
-    param["value"] = "not_a_number";
-    param["type"] = "int";
-    
-    QVariant result = ProxyAPI::jsonParamToQVariant(param);
-    
-    EXPECT_FALSE(result.isValid());
-}
-
-// Verifies that jsonParamToQVariant() returns invalid QVariant for bad bool values
-TEST_F(ProxyAPITest, JsonParamToQVariant_ReturnsInvalidForBadBool) {
-    QJsonObject param;
-    param["name"] = "testParam";
-    param["value"] = "maybe";
-    param["type"] = "bool";
-    
-    QVariant result = ProxyAPI::jsonParamToQVariant(param);
-    
-    EXPECT_FALSE(result.isValid());
-}
-
-// Verifies that jsonParamToQVariant() returns invalid QVariant for bad double values
-TEST_F(ProxyAPITest, JsonParamToQVariant_ReturnsInvalidForBadDouble) {
-    QJsonObject param;
-    param["name"] = "testParam";
-    param["value"] = "not_a_number";
-    param["type"] = "double";
-    
-    QVariant result = ProxyAPI::jsonParamToQVariant(param);
-    
-    EXPECT_FALSE(result.isValid());
-}
-
-// Verifies that jsonParamToQVariant() treats unknown types as strings
-TEST_F(ProxyAPITest, JsonParamToQVariant_TreatsUnknownTypeAsString) {
-    QJsonObject param;
-    param["name"] = "testParam";
-    param["value"] = "some value";
-    param["type"] = "unknown_type";
-    
-    QVariant result = ProxyAPI::jsonParamToQVariant(param);
-    
-    EXPECT_TRUE(result.isValid());
-    EXPECT_TRUE(result.canConvert<QString>());
-    EXPECT_EQ(result.toString().toStdString(), "some value");
-}
 
 // =============================================================================
 // asyncOperation Tests
@@ -461,7 +262,7 @@ TEST_F(ProxyAPITest, JsonArrayPipeline_MixedTypes) {
     for (const QJsonValue& paramValue : paramsArray) {
         ASSERT_TRUE(paramValue.isObject());
         QJsonObject paramObj = paramValue.toObject();
-        QVariant variant = ProxyAPI::jsonParamToQVariant(paramObj);
+        QVariant variant = LogosJsonUtils::jsonParamToVariant(paramObj);
         ASSERT_TRUE(variant.isValid()) << "Failed for param: " << paramObj.value("name").toString().toStdString();
         args.append(variant);
     }
@@ -485,7 +286,7 @@ TEST_F(ProxyAPITest, JsonArrayPipeline_EmptyArray) {
     QVariantList args;
     for (const QJsonValue& paramValue : paramsArray) {
         if (paramValue.isObject()) {
-            args.append(ProxyAPI::jsonParamToQVariant(paramValue.toObject()));
+            args.append(LogosJsonUtils::jsonParamToVariant(paramValue.toObject()));
         }
     }
 
@@ -503,7 +304,7 @@ TEST_F(ProxyAPITest, JsonArrayPipeline_SingleStringParam) {
     QJsonArray paramsArray = jsonDoc.array();
     ASSERT_EQ(paramsArray.size(), 1);
 
-    QVariant result = ProxyAPI::jsonParamToQVariant(paramsArray[0].toObject());
+    QVariant result = LogosJsonUtils::jsonParamToVariant(paramsArray[0].toObject());
     ASSERT_TRUE(result.isValid());
     EXPECT_EQ(result.toString(), "test message");
 }
@@ -533,7 +334,7 @@ TEST_F(ProxyAPITest, JsonArrayPipeline_InvalidParamInArray) {
     QVariantList args;
     for (const QJsonValue& paramValue : paramsArray) {
         if (paramValue.isObject()) {
-            QVariant variant = ProxyAPI::jsonParamToQVariant(paramValue.toObject());
+            QVariant variant = LogosJsonUtils::jsonParamToVariant(paramValue.toObject());
             if (!variant.isValid()) {
                 hadInvalid = true;
                 break;
