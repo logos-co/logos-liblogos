@@ -537,10 +537,9 @@ TEST_F(PluginManagerTest, ResolveDependencies_HandlesTransitiveDeps) {
 // C API: logos_core_load_plugin_with_dependencies Tests
 // =============================================================================
 
-// Verifies that logos_core_load_plugin_with_dependencies() returns 0 for null plugin name
-TEST_F(PluginManagerTest, LoadPluginWithDependencies_ReturnsZeroForNull) {
-    int result = logos_core_load_plugin_with_dependencies(nullptr);
-    EXPECT_EQ(result, 0);
+// Verifies that logos_core_load_plugin_with_dependencies() aborts on null plugin name
+TEST_F(PluginManagerTest, LoadPluginWithDependencies_AbortsForNull) {
+    EXPECT_DEATH(logos_core_load_plugin_with_dependencies(nullptr), "");
 }
 
 // Verifies that logos_core_load_plugin_with_dependencies() returns 0 for unknown plugin

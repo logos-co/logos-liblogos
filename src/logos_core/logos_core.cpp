@@ -11,69 +11,52 @@
 
 // === C API Implementation (Thin Wrappers) ===
 
-void logos_core_init(int argc, char *argv[])
-{
+void logos_core_init(int argc, char *argv[]) {
     AppLifecycle::init(argc, argv);
 }
 
-void logos_core_set_mode(int mode)
-{
+void logos_core_set_mode(int mode) {
     AppLifecycle::setMode(mode);
 }
 
-void logos_core_set_plugins_dir(const char* plugins_dir)
-{
+void logos_core_set_plugins_dir(const char* plugins_dir) {
     AppLifecycle::setPluginsDir(plugins_dir);
 }
 
-void logos_core_add_plugins_dir(const char* plugins_dir)
-{
+void logos_core_add_plugins_dir(const char* plugins_dir) {
     AppLifecycle::addPluginsDir(plugins_dir);
 }
 
-void logos_core_start()
-{
+void logos_core_start() {
     AppLifecycle::start();
 }
 
-int logos_core_exec()
-{
+int logos_core_exec() {
     return AppLifecycle::exec();
 }
 
-void logos_core_cleanup()
-{
+void logos_core_cleanup() {
     AppLifecycle::cleanup();
 }
 
-char** logos_core_get_loaded_plugins()
-{
+char** logos_core_get_loaded_plugins() {
     return PluginManager::getLoadedPluginsCStr();
 }
 
-char** logos_core_get_known_plugins()
-{
+char** logos_core_get_known_plugins() {
     return PluginManager::getKnownPluginsCStr();
 }
 
-int logos_core_load_plugin(const char* plugin_name)
-{
-    if (!plugin_name) {
-        qWarning() << "Cannot load plugin: name is null";
-        return 0;
-    }
+int logos_core_load_plugin(const char* plugin_name) {
+    if (!plugin_name) qFatal("logos_core_load_plugin: plugin_name must not be null");
     
     QString name = QString::fromUtf8(plugin_name);
     bool success = PluginManager::loadPlugin(name);
     return success ? 1 : 0;
 }
 
-int logos_core_load_plugin_with_dependencies(const char* plugin_name)
-{
-    if (!plugin_name) {
-        qWarning() << "Cannot load plugin: name is null";
-        return 0;
-    }
+int logos_core_load_plugin_with_dependencies(const char* plugin_name) {
+    if (!plugin_name) qFatal("logos_core_load_plugin_with_dependencies: plugin_name must not be null");
     
     QString name = QString::fromUtf8(plugin_name);
     QStringList requestedModules;
@@ -86,9 +69,7 @@ int logos_core_load_plugin_with_dependencies(const char* plugin_name)
         qWarning() << "Cannot load plugin: plugin not found:" << name;
         return 0;
     }
-    
-    qDebug() << "Loading plugin with resolved dependencies:" << resolvedModules;
-    
+
     // Load all plugins in dependency order
     bool allSucceeded = true;
     for (const QString& moduleName : resolvedModules) {
@@ -105,24 +86,16 @@ int logos_core_load_plugin_with_dependencies(const char* plugin_name)
     return allSucceeded ? 1 : 0;
 }
 
-int logos_core_unload_plugin(const char* plugin_name)
-{
-    if (!plugin_name) {
-        qWarning() << "Cannot unload plugin: name is null";
-        return 0;
-    }
+int logos_core_unload_plugin(const char* plugin_name) {
+    if (!plugin_name) qFatal("logos_core_unload_plugin: plugin_name must not be null");
 
     QString name = QString::fromUtf8(plugin_name);
     bool success = PluginManager::unloadPlugin(name);
     return success ? 1 : 0;
 }
 
-char* logos_core_process_plugin(const char* plugin_path)
-{
-    if (!plugin_path) {
-        qWarning() << "Cannot process plugin: path is null";
-        return nullptr;
-    }
+char* logos_core_process_plugin(const char* plugin_path) {
+    if (!plugin_path) qFatal("logos_core_process_plugin: plugin_path must not be null");
 
     QString path = QString::fromUtf8(plugin_path);
     qDebug() << "Processing plugin file:" << path;
@@ -141,12 +114,8 @@ char* logos_core_process_plugin(const char* plugin_path)
     return result;
 }
 
-char* logos_core_get_token(const char* key)
-{
-    if (!key) {
-        qWarning() << "Cannot get token: key is null";
-        return nullptr;
-    }
+char* logos_core_get_token(const char* key) {
+    if (!key) qFatal("logos_core_get_token: key must not be null");
 
     QString keyStr = QString::fromUtf8(key);
     qDebug() << "Getting token for key:" << keyStr;
@@ -170,8 +139,7 @@ char* logos_core_get_token(const char* key)
     return result;
 }
 
-char* logos_core_get_module_stats()
-{
+char* logos_core_get_module_stats() {
     QHash<QString, qint64> processes;
     for (auto it = g_plugin_processes.begin(); it != g_plugin_processes.end(); ++it) {
         if (it.value()) {
@@ -183,36 +151,22 @@ char* logos_core_get_module_stats()
 
 // === Async Callback API Implementation ===
 
-void logos_core_async_operation(const char* data, AsyncCallback callback, void* user_data)
-{
+void logos_core_async_operation(const char* data, AsyncCallback callback, void* user_data) {
     ProxyAPI::asyncOperation(data, callback, user_data);
 }
 
-void logos_core_load_plugin_async(const char* plugin_name, AsyncCallback callback, void* user_data)
-{
+void logos_core_load_plugin_async(const char* plugin_name, AsyncCallback callback, void* user_data) {
     ProxyAPI::loadPluginAsync(plugin_name, callback, user_data);
 }
 
-void logos_core_call_plugin_method_async(
-    const char* plugin_name, 
-    const char* method_name, 
-    const char* params_json, 
-    AsyncCallback callback, 
-    void* user_data
-) {
+void logos_core_call_plugin_method_async(const char* plugin_name, const char* method_name, const char* params_json, AsyncCallback callback, void* user_data) {
     ProxyAPI::callPluginMethodAsync(plugin_name, method_name, params_json, callback, user_data);
 }
 
-void logos_core_register_event_listener(
-    const char* plugin_name,
-    const char* event_name, 
-    AsyncCallback callback,
-    void* user_data
-) {
+void logos_core_register_event_listener( const char* plugin_name, const char* event_name, AsyncCallback callback, void* user_data) {
     ProxyAPI::registerEventListener(plugin_name, event_name, callback, user_data);
 }
 
-void logos_core_process_events()
-{
+void logos_core_process_events() {
     AppLifecycle::processEvents();
 }
