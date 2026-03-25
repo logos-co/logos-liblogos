@@ -15,14 +15,14 @@
 #include <QLocalServer>
 #include <cstring>
 #include <cassert>
-#include "../common/interface.h"
+#include "interface.h"
 #include "logos_api.h"
 #include "logos_api_provider.h"
 #include "logos_api_client.h"
 #include "logos_core_client.h"
 #include "token_manager.h"
 #include "logos_mode.h"
-#include <module_lib/module_lib.h>
+#include "module_lib.h"
 
 using namespace ModuleLib;
 

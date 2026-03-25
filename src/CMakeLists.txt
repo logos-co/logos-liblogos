@@ -97,7 +97,6 @@ set(LOGOS_CORE_SOURCES
     logos_core/plugin_manager.h
     logos_core/proxy_api.cpp
     logos_core/proxy_api.h
-    common/interface.h
 )
 
 # Define the logos host sources
@@ -107,7 +106,6 @@ set(LOGOS_HOST_SOURCES
     logos_host/command_line_parser.h
     logos_host/plugin_initializer.cpp
     logos_host/plugin_initializer.h
-    common/interface.h
 )
 
 # Create the logos core library
@@ -140,7 +138,10 @@ target_include_directories(logos_core PRIVATE
 
 # Add logos_module include directory if available
 if(DEFINED LOGOS_MODULE_ROOT AND EXISTS "${LOGOS_MODULE_ROOT}/include")
-  target_include_directories(logos_core PRIVATE ${LOGOS_MODULE_ROOT}/include)
+  target_include_directories(logos_core PRIVATE
+    ${LOGOS_MODULE_ROOT}/include
+    ${LOGOS_MODULE_ROOT}/include/module_lib
+  )
 endif()
 
 # Add process-stats include directory if available
@@ -199,7 +200,10 @@ target_include_directories(logos_host PRIVATE
 
 # Add logos_module include directory if available
 if(DEFINED LOGOS_MODULE_ROOT AND EXISTS "${LOGOS_MODULE_ROOT}/include")
-    target_include_directories(logos_host PRIVATE ${LOGOS_MODULE_ROOT}/include)
+    target_include_directories(logos_host PRIVATE
+        ${LOGOS_MODULE_ROOT}/include
+        ${LOGOS_MODULE_ROOT}/include/module_lib
+    )
 endif()
 
 # Add SDK include directory if using built SDK
