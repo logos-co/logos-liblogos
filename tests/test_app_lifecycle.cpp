@@ -36,7 +36,6 @@ TEST_F(AppLifecycleTest, Init_CreatesNewApp) {
 
     if (beforeApp) {
         EXPECT_EQ(QCoreApplication::instance(), beforeApp);
-        EXPECT_FALSE(AppLifecycle::isAppOwnedByUs());
     }
 }
 
@@ -113,7 +112,8 @@ TEST_F(AppLifecycleTest, Cleanup_PreservesExternalApp) {
     char* argv[] = {(char*)"test"};
     AppLifecycle::init(1, argv);
 
-    EXPECT_FALSE(AppLifecycle::isAppOwnedByUs()) << "Should not claim ownership of external app";
+    EXPECT_EQ(QCoreApplication::instance(), AppLifecycle::app())
+        << "Should preserve external app instance";
 }
 
 // =============================================================================

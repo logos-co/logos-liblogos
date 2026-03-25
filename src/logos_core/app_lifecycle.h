@@ -11,7 +11,6 @@ namespace AppLifecycle {
     void processEvents();
 
     QCoreApplication* app();
-    bool isAppOwnedByUs();
 }
 
 #endif // APP_LIFECYCLE_H

@@ -8,7 +8,7 @@ Q_DECLARE_METATYPE(QObject*)
 
 namespace {
     QCoreApplication* s_app = nullptr;
-    bool s_app_created_by_us = false;
+    QCoreApplication* s_owned_app = nullptr;
 }
 
 namespace AppLifecycle {
@@ -16,10 +16,9 @@ namespace AppLifecycle {
     void init(int argc, char* argv[]) {
         if (QCoreApplication::instance()) {
             s_app = QCoreApplication::instance();
-            s_app_created_by_us = false;
         } else {
             s_app = new QCoreApplication(argc, argv);
-            s_app_created_by_us = true;
+            s_owned_app = s_app;
         }
 
         qRegisterMetaType<QObject*>("QObject*");
@@ -40,11 +39,9 @@ namespace AppLifecycle {
     void cleanup() {
         PluginManager::terminateAll();
 
-        if (s_app_created_by_us) {
-            delete s_app;
-        }
+        delete s_owned_app;
+        s_owned_app = nullptr;
         s_app = nullptr;
-        s_app_created_by_us = false;
     }
 
     void processEvents() {
@@ -54,10 +51,6 @@ namespace AppLifecycle {
 
     QCoreApplication* app() {
         return s_app;
-    }
-
-    bool isAppOwnedByUs() {
-        return s_app_created_by_us;
     }
 
 }
