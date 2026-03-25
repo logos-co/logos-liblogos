@@ -85,6 +85,7 @@ else()
   message(STATUS "PROCESS_STATS_ROOT not set, process-stats will need to be provided")
 endif()
 
+
 # Define the library sources
 set(LOGOS_CORE_SOURCES
     logos_core/logos_core.cpp
@@ -95,8 +96,6 @@ set(LOGOS_CORE_SOURCES
     logos_core/app_lifecycle.h
     logos_core/plugin_manager.cpp
     logos_core/plugin_manager.h
-    logos_core/proxy_api.cpp
-    logos_core/proxy_api.h
 )
 
 # Define the logos host sources
@@ -121,8 +120,8 @@ if(LOGOS_PORTABLE_BUILD)
 endif()
 
 # Link Qt libraries, SDK and module library
-target_link_libraries(logos_core PUBLIC 
-    Qt${QT_VERSION_MAJOR}::Core 
+target_link_libraries(logos_core PUBLIC
+    Qt${QT_VERSION_MAJOR}::Core
     Qt${QT_VERSION_MAJOR}::RemoteObjects
     logos_sdk
     logos_module
@@ -148,6 +147,7 @@ endif()
 if(DEFINED PROCESS_STATS_ROOT AND EXISTS "${PROCESS_STATS_ROOT}/include")
   target_include_directories(logos_core PRIVATE ${PROCESS_STATS_ROOT}/include)
 endif()
+
 
 # Add SDK include directory if using built SDK
 if(EXISTS "${LOGOS_CPP_SDK_ROOT}/lib" AND EXISTS "${LOGOS_CPP_SDK_ROOT}/include")

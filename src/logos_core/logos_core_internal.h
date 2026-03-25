@@ -10,8 +10,6 @@
 
 #include <QProcess>
 
-#include "logos_core.h"
-
 // Global application pointer
 extern QCoreApplication* g_app;
 
@@ -32,16 +30,5 @@ extern QHash<QString, QJsonObject> g_plugin_metadata;
 
 // Global hash to store plugin processes
 extern QHash<QString, QProcess*> g_plugin_processes;
-
-// Structure to store event listener information
-struct EventListener {
-    QString pluginName;
-    QString eventName;
-    AsyncCallback callback;
-    void* userData;
-};
-
-// Global list to store registered event listeners
-extern QList<EventListener> g_event_listeners;
 
 #endif // LOGOS_CORE_INTERNAL_H

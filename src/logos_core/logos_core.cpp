@@ -2,7 +2,6 @@
 #include "logos_core_internal.h"
 #include "app_lifecycle.h"
 #include "plugin_manager.h"
-#include "proxy_api.h"
 #include <process_stats/process_stats.h>
 #include "token_manager.h"
 #include <QDebug>
@@ -143,24 +142,6 @@ char* logos_core_get_module_stats() {
         }
     }
     return ProcessStats::getModuleStats(processes);
-}
-
-// === Async Callback API Implementation ===
-
-void logos_core_async_operation(const char* data, AsyncCallback callback, void* user_data) {
-    ProxyAPI::asyncOperation(data, callback, user_data);
-}
-
-void logos_core_load_plugin_async(const char* plugin_name, AsyncCallback callback, void* user_data) {
-    ProxyAPI::loadPluginAsync(plugin_name, callback, user_data);
-}
-
-void logos_core_call_plugin_method_async(const char* plugin_name, const char* method_name, const char* params_json, AsyncCallback callback, void* user_data) {
-    ProxyAPI::callPluginMethodAsync(plugin_name, method_name, params_json, callback, user_data);
-}
-
-void logos_core_register_event_listener( const char* plugin_name, const char* event_name, AsyncCallback callback, void* user_data) {
-    ProxyAPI::registerEventListener(plugin_name, event_name, callback, user_data);
 }
 
 void logos_core_process_events() {

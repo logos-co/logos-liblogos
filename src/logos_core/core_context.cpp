@@ -29,6 +29,3 @@ QHash<QString, QJsonObject> g_plugin_metadata;
 
 // Hash to store plugin processes
 QHash<QString, QProcess*> g_plugin_processes;
-
-// List to store registered event listeners
-QList<EventListener> g_event_listeners;
