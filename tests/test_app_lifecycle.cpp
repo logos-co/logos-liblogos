@@ -2,8 +2,6 @@
 #include "app_lifecycle.h"
 #include "plugin_manager.h"
 #include "logos_core_internal.h"
-#include "logos_mode.h"
-#include "logos_api.h"
 #include <QCoreApplication>
 #include <QDebug>
 
@@ -27,14 +25,7 @@ protected:
         g_plugins_dirs.clear();
         g_loaded_plugins.clear();
         g_known_plugins.clear();
-
-        // Reset mode to default (Remote)
-        LogosModeConfig::setMode(LogosMode::Remote);
-
         g_plugin_processes.clear();
-
-        // Clear local plugin APIs
-        g_local_plugin_apis.clear();
     }
 
     void TearDown() override {
@@ -49,12 +40,6 @@ protected:
             delete process;
         }
         g_plugin_processes.clear();
-
-        // Clean up local plugin APIs
-        for (auto it = g_local_plugin_apis.begin(); it != g_local_plugin_apis.end(); ++it) {
-            delete it.value();
-        }
-        g_local_plugin_apis.clear();
 
         // Clear global state
         g_plugins_dirs.clear();
@@ -101,38 +86,6 @@ TEST_F(AppLifecycleTest, Init_RegistersMetaType) {
     // Verify QObject* is registered as a metatype
     int typeId = QMetaType::fromName("QObject*").id();
     EXPECT_NE(typeId, QMetaType::UnknownType);
-}
-
-// =============================================================================
-// Mode Configuration Tests
-// =============================================================================
-
-// Verifies that setMode(1) correctly sets the SDK to Local mode (in-process plugins)
-TEST_F(AppLifecycleTest, SetMode_LocalMode) {
-    AppLifecycle::setMode(1);
-
-    EXPECT_EQ(LogosModeConfig::getMode(), LogosMode::Local);
-    EXPECT_TRUE(LogosModeConfig::isLocal());
-    EXPECT_FALSE(LogosModeConfig::isRemote());
-}
-
-// Verifies that setMode(0) correctly sets the SDK to Remote mode (separate processes)
-TEST_F(AppLifecycleTest, SetMode_RemoteMode) {
-    // First set to Local
-    AppLifecycle::setMode(1);
-
-    // Then set to Remote
-    AppLifecycle::setMode(0);
-
-    EXPECT_EQ(LogosModeConfig::getMode(), LogosMode::Remote);
-    EXPECT_TRUE(LogosModeConfig::isRemote());
-    EXPECT_FALSE(LogosModeConfig::isLocal());
-}
-
-// Verifies that the default mode is Remote (separate process communication)
-TEST_F(AppLifecycleTest, SetMode_DefaultIsRemote) {
-    // After SetUp, mode should be Remote (we reset it in SetUp)
-    EXPECT_EQ(LogosModeConfig::getMode(), LogosMode::Remote);
 }
 
 // =============================================================================

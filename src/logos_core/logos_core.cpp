@@ -15,10 +15,6 @@ void logos_core_init(int argc, char *argv[]) {
     AppLifecycle::init(argc, argv);
 }
 
-void logos_core_set_mode(int mode) {
-    AppLifecycle::setMode(mode);
-}
-
 void logos_core_set_plugins_dir(const char* plugins_dir) {
     AppLifecycle::setPluginsDir(plugins_dir);
 }

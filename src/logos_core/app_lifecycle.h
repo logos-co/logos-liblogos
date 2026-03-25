@@ -7,9 +7,6 @@ namespace AppLifecycle {
     // Initialize the logos core application
     void init(int argc, char* argv[]);
 
-    // Set the SDK communication mode (0=Remote, 1=Local)
-    void setMode(int mode);
-
     // Set the custom plugins directory (replaces existing)
     void setPluginsDir(const char* plugins_dir);
     

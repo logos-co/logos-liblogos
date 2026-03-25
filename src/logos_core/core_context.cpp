@@ -30,8 +30,5 @@ QHash<QString, QJsonObject> g_plugin_metadata;
 // Hash to store plugin processes
 QHash<QString, QProcess*> g_plugin_processes;
 
-// Hash to store LogosAPI instances for Local mode plugins
-QHash<QString, LogosAPI*> g_local_plugin_apis;
-
 // List to store registered event listeners
 QList<EventListener> g_event_listeners;

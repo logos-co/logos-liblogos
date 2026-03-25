@@ -10,13 +10,9 @@ namespace PluginManager {
     // Returns the plugin name if successful, empty string otherwise
     QString processPlugin(const QString& pluginPath);
     
-    // Load a plugin by name (handles both Local and Remote modes)
+    // Load a plugin by name (spawns logos_host process)
     // Returns true if successful, false otherwise
     bool loadPlugin(const QString& pluginName);
-
-    // Load a plugin in Local mode (in-process)
-    // Returns true if successful, false otherwise
-    bool loadPluginLocal(const QString& pluginName, const QString& pluginPath);
 
     // Load and process a plugin in one step
     void loadAndProcessPlugin(const QString& pluginPath);

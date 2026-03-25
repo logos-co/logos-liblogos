@@ -15,13 +15,9 @@
 #include <QLocalServer>
 #include <cstring>
 #include <cassert>
-#include "interface.h"
-#include "logos_api.h"
-#include "logos_api_provider.h"
 #include "logos_api_client.h"
 #include "logos_core_client.h"
 #include "token_manager.h"
-#include "logos_mode.h"
 #include "module_lib.h"
 
 using namespace ModuleLib;
@@ -72,86 +68,6 @@ namespace PluginManager {
         return metadata.name;
     }
 
-    bool loadPluginLocal(const QString &pluginName, const QString &pluginPath) {
-        qDebug() << "Loading plugin:" << pluginName << "from path:" << pluginPath << "in-process (Local mode)";
-
-        // Check if plugin is already loaded
-        if (g_local_plugin_apis.contains(pluginName)) {
-            qWarning() << "Plugin already loaded (Local mode):" << pluginName;
-            return false;
-        }
-
-        // Load the plugin using module_lib
-        QString errorString;
-        LogosModule module = LogosModule::loadFromPath(pluginPath, &errorString);
-
-        if (!module.isValid()) {
-            qCritical() << "Failed to load plugin (Local mode):" << errorString;
-            return false;
-        }
-
-        qDebug() << "Plugin loaded successfully (Local mode)";
-
-        QObject* plugin = module.instance();
-
-        // Cast to the base PluginInterface using module_lib
-        PluginInterface* basePlugin = module.as<PluginInterface>();
-        if (!basePlugin) {
-            qCritical() << "Plugin does not implement the PluginInterface (Local mode)";
-            return false;
-        }
-
-        // Verify that the plugin name matches
-        if (pluginName != basePlugin->name()) {
-            qWarning() << "Plugin name mismatch! Expected:" << pluginName << "Actual:" << basePlugin->name();
-        }
-
-        qDebug() << "Plugin name:" << basePlugin->name();
-        qDebug() << "Plugin version:" << basePlugin->version();
-
-        // Initialize LogosAPI for this plugin
-        LogosAPI* logos_api = new LogosAPI(pluginName, plugin);
-        logos_api->setProperty("modulePath", QFileInfo(pluginPath).absolutePath());
-        qDebug() << "LogosAPI initialized for plugin (Local mode):" << pluginName;
-
-        // Register the plugin for access using LogosAPI Provider
-        // In Local mode, this uses PluginRegistry instead of QRemoteObjects
-        bool success = logos_api->getProvider()->registerObject(basePlugin->name(), plugin);
-        if (!success) {
-            qCritical() << "Failed to register plugin (Local mode):" << basePlugin->name();
-            delete logos_api;
-            return false;
-        }
-
-        qDebug() << "Plugin registered with PluginRegistry (Local mode):" << basePlugin->name();
-
-        // Generate and save auth token
-        QUuid authToken = QUuid::createUuid();
-        QString authTokenString = authToken.toString(QUuid::WithoutBraces);
-        qDebug() << "Generated auth token (Local mode):" << authTokenString;
-
-        // Save auth tokens for core access
-        logos_api->getTokenManager()->saveToken("core", authTokenString);
-        logos_api->getTokenManager()->saveToken("capability_module", authTokenString);
-        qDebug() << "Auth tokens saved for core access (Local mode)";
-
-        // Also save the plugin token in the global TokenManager
-        TokenManager& tokenManager = TokenManager::instance();
-        tokenManager.saveToken(pluginName, authTokenString);
-
-        // Store the LogosAPI instance for cleanup
-        g_local_plugin_apis.insert(pluginName, logos_api);
-
-        // Add the plugin name to our loaded plugins list
-        g_loaded_plugins.append(pluginName);
-
-        // Release ownership from module so the plugin stays loaded
-        module.release();
-
-        qDebug() << "Plugin" << pluginName << "is now running in-process (Local mode)";
-        return true;
-    }
-
     bool loadPlugin(const QString &pluginName) {
         qDebug() << "Attempting to load plugin by name:" << pluginName;
 
@@ -161,10 +77,6 @@ namespace PluginManager {
         }
 
         QString pluginPath = g_known_plugins.value(pluginName);
-
-        if (LogosModeConfig::isLocal()) {
-            return loadPluginLocal(pluginName, pluginPath);
-        }
 
         qDebug() << "Loading plugin:" << pluginName << "from path:" << pluginPath << "in separate process";
 
@@ -749,14 +661,6 @@ namespace PluginManager {
             }
         }
         g_plugin_processes.clear();
-
-        // Clean up all local plugin API instances
-        for (auto it = g_local_plugin_apis.begin(); it != g_local_plugin_apis.end(); ++it) {
-            if (it.value()) {
-                delete it.value();
-            }
-        }
-        g_local_plugin_apis.clear();
 
         qDebug() << "Plugin state cleared";
     }

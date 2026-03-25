@@ -12,9 +12,6 @@
 
 #include "logos_core.h"
 
-// Forward declarations
-class LogosAPI;
-
 // Global application pointer
 extern QCoreApplication* g_app;
 
@@ -35,9 +32,6 @@ extern QHash<QString, QJsonObject> g_plugin_metadata;
 
 // Global hash to store plugin processes
 extern QHash<QString, QProcess*> g_plugin_processes;
-
-// Global hash to store LogosAPI instances for Local mode plugins
-extern QHash<QString, LogosAPI*> g_local_plugin_apis;
 
 // Structure to store event listener information
 struct EventListener {

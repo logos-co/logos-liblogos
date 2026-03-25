@@ -74,22 +74,22 @@ namespace ProxyAPI {
 
     void callPluginMethodAsync(const char* plugin_name, const char* method_name, const char* params_json, AsyncCallback callback, void* user_data) {
         if (!callback) qFatal("callPluginMethodAsync: callback must not be null");
-        
+
         if (!plugin_name || !method_name) {
             qWarning() << "callPluginMethodAsync: plugin_name or method_name is null";
             callback(0, "Plugin name or method name is null", user_data);
             return;
         }
-        
+
         QString pluginNameStr = QString::fromUtf8(plugin_name);
-        
+
         if (!g_loaded_plugins.contains(pluginNameStr)) {
             QString errorMsg = QString("Plugin not loaded: %1").arg(pluginNameStr);
             QByteArray errorBytes = errorMsg.toUtf8();
             callback(0, errorBytes.constData(), user_data);
             return;
         }
-        
+
         logos_sdk_call_method_async(plugin_name, method_name, params_json, callback, user_data);
     }
 

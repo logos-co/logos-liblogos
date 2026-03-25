@@ -1,7 +1,6 @@
 #include "app_lifecycle.h"
 #include "logos_core_internal.h"
 #include "plugin_manager.h"
-#include "logos_mode.h"
 #include "logos_instance.h"
 #include <QCoreApplication>
 #include <QDir>
@@ -30,16 +29,6 @@ namespace AppLifecycle {
         
         // Register QObject* as a metatype
         qRegisterMetaType<QObject*>("QObject*");
-    }
-
-    void setMode(int mode) {
-        if (mode == 1) {
-            LogosModeConfig::setMode(LogosMode::Local);
-            qDebug() << "Logos mode set to: Local (in-process)";
-            return;
-        }
-        LogosModeConfig::setMode(LogosMode::Remote);
-        qDebug() << "Logos mode set to: Remote (separate processes)";
     }
 
     void setPluginsDir(const char* plugins_dir) {
@@ -122,21 +111,7 @@ namespace AppLifecycle {
     }
 
     void cleanup() {
-        // Clean up Local mode plugins
-        if (!g_local_plugin_apis.isEmpty()) {
-            qDebug() << "Cleaning up Local mode plugins...";
-            for (auto it = g_local_plugin_apis.begin(); it != g_local_plugin_apis.end(); ++it) {
-                QString pluginName = it.key();
-                LogosAPI* logos_api = it.value();
-
-                qDebug() << "Cleaning up Local mode plugin:" << pluginName;
-                delete logos_api;
-            }
-            g_local_plugin_apis.clear();
-            qDebug() << "Local mode plugins cleaned up";
-        }
-
-        // Terminate all plugin processes (Remote mode)
+        // Terminate all plugin processes
         if (!g_plugin_processes.isEmpty()) {
             qDebug() << "Terminating all plugin processes...";
             for (auto it = g_plugin_processes.begin(); it != g_plugin_processes.end(); ++it) {
