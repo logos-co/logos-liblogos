@@ -32,7 +32,7 @@ TEST_F(AppLifecycleTest, Init_CreatesNewApp) {
 
     AppLifecycle::init(1, argv);
 
-    ASSERT_TRUE(AppLifecycle::app() != nullptr);
+    ASSERT_NE(QCoreApplication::instance(), nullptr);
 
     if (beforeApp) {
         EXPECT_EQ(QCoreApplication::instance(), beforeApp);
@@ -110,9 +110,12 @@ TEST_F(AppLifecycleTest, Cleanup_DeletesOwnedApp) {
 
 TEST_F(AppLifecycleTest, Cleanup_PreservesExternalApp) {
     char* argv[] = {(char*)"test"};
+    QCoreApplication* external = QCoreApplication::instance();
+    ASSERT_NE(external, nullptr) << "Test runner should provide QCoreApplication";
+
     AppLifecycle::init(1, argv);
 
-    EXPECT_EQ(QCoreApplication::instance(), AppLifecycle::app())
+    EXPECT_EQ(QCoreApplication::instance(), external)
         << "Should preserve external app instance";
 }
 
@@ -184,6 +187,5 @@ TEST_F(AppLifecycleTest, Exec_WithAppAvailable) {
     char* argv[] = {(char*)"test"};
     AppLifecycle::init(1, argv);
 
-    ASSERT_TRUE(AppLifecycle::app() != nullptr);
-    EXPECT_TRUE(AppLifecycle::app() != nullptr);
+    ASSERT_NE(QCoreApplication::instance(), nullptr);
 }

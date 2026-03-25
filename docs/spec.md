@@ -31,7 +31,7 @@ The platform is designed to:
 
 At a high level, the Logos Core consists of:
 
-**Core Library** — The C/C++ shared library (`liblogos_core`) that provides the API functions for lifecycle management, module loading/unloading, introspection, and async operations.
+**Core Library** — The C/C++ shared library (`liblogos_core`) that provides the API functions for lifecycle management, module loading/unloading, and introspection.
 
 **Core Manager** — A built-in module that runs in the core process and exposes core functionality as RPC methods, allowing remote modules to manage the core without linking against the C API directly.
 
@@ -137,17 +137,6 @@ Every module ships a `metadata.json` referenced by Qt's `Q_PLUGIN_METADATA` macr
 - Core Manager process is excluded from stats
 - Not available on iOS
 
-### Async Operations
-
-Async callback APIs allow integration with non-Qt event loops (e.g., Node.js/Electron):
-
-- Asynchronous plugin loading with success/failure callback
-- Remote method invocation on loaded plugins with JSON parameters and callback
-- Event listener registration for module-emitted events
-- Non-blocking event processing for external event loop integration
-
-Callbacks use the signature: `void (*AsyncCallback)(int result, const char* message, void* user_data)`
-
 ### Dev vs Portable Builds
 
 The platform supports two build variants:
@@ -167,6 +156,7 @@ The platform supports two build variants:
 | `logos_core_start()` | Scan plugin directories, process metadata, create Core Manager, load built-in modules, start remote object registry. |
 | `logos_core_exec()` | Run the Qt event loop. Returns when the application exits. |
 | `logos_core_cleanup()` | Unload all modules, stop processes, clean up global state. |
+| `logos_core_process_events()` | Process Qt events without blocking, for integration with external event loops. |
 
 ### Plugin Management
 
@@ -185,19 +175,6 @@ The platform supports two build variants:
 |----------|---------|
 | `logos_core_get_token(key) → char*` | Return the auth token for a key. Caller must free. NULL if not found. |
 | `logos_core_get_module_stats() → char*` | Return JSON array of CPU/memory stats per loaded module. Caller must free. Not available on iOS. |
-
-### Async Operations
-
-**note** These are experimental and used for experimental SDKs that currently cannot make direct calls to logos modules. As such these methods might be deprecated in the future.
-__These methods are not used by any of the logos modules or apps.__
-
-| Function | Purpose |
-|----------|---------|
-| `logos_core_async_operation(data, callback, user_data)` | Example async helper for bindings/language tests. |
-| `logos_core_load_plugin_async(name, callback, user_data)` | Asynchronously load a known plugin and report via callback. |
-| `logos_core_call_plugin_method_async(plugin, method, params_json, callback, user_data)` | Invoke a method on a loaded plugin asynchronously. `params_json` is an array of `{name, value, type}` objects. |
-| `logos_core_register_event_listener(plugin, event, callback, user_data)` | Register an event listener. Callback fires when the event is emitted. |
-| `logos_core_process_events()` | Process Qt events without blocking, for external event loop integration. |
 
 ### Core Manager Module (RPC Surface)
 

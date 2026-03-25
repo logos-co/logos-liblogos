@@ -17,7 +17,6 @@ namespace PluginManager {
 
     QString processPlugin(const QString& pluginPath);
     bool loadPlugin(const QString& pluginName);
-    void loadAndProcessPlugin(const QString& pluginPath);
     QStringList findPlugins(const QString& pluginsDir);
     bool initializeCapabilityModule();
     bool unloadPlugin(const QString& pluginName);

@@ -49,8 +49,4 @@ namespace AppLifecycle {
         s_app->processEvents();
     }
 
-    QCoreApplication* app() {
-        return s_app;
-    }
-
 }

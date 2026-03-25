@@ -351,17 +351,6 @@ namespace PluginManager {
         return true;
     }
 
-    void loadAndProcessPlugin(const QString &pluginPath) {
-        QString pluginName = processPlugin(pluginPath);
-
-        if (pluginName.isEmpty()) {
-            qWarning() << "Failed to process plugin:" << pluginPath;
-            return;
-        }
-
-        loadPlugin(pluginName);
-    }
-
     QString currentPlatformVariant() {
 #if defined(Q_OS_MAC)
     #if defined(Q_PROCESSOR_ARM)

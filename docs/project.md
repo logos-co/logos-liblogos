@@ -14,17 +14,11 @@ logos-liblogos/
 │   └── project.md                       # This document
 ├── src/
 │   ├── CMakeLists.txt                   # Source build configuration
-│   ├── common/
-│   │   └── interface.h                  # PluginInterface definition (all modules must implement)
 │   ├── logos_core/                      # Core library implementation
 │   │   ├── logos_core.h                 # C API header
 │   │   ├── logos_core.cpp               # C API implementation
-│   │   ├── logos_core_internal.h        # Internal global state definitions
 │   │   ├── app_lifecycle.h/cpp          # Application lifecycle management
-│   │   ├── plugin_manager.h/cpp         # Module discovery, loading, dependency resolution
-│   │   ├── proxy_api.h/cpp              # Async callback and event listener implementation
-│   │   ├── process_stats.h/cpp          # CPU and memory monitoring per module
-│   │   └── core_context.cpp             # Context management
+│   │   └── plugin_manager.h/cpp         # Module discovery, loading, dependency resolution
 │   └── logos_host/                      # Module subprocess host
 │       ├── logos_host.cpp               # Host entry point
 │       ├── command_line_parser.h/cpp    # CLI argument parsing (--name, --path)
@@ -33,8 +27,7 @@ logos-liblogos/
 │   ├── CMakeLists.txt                   # Test build configuration
 │   ├── test_app_lifecycle.cpp           # AppLifecycle tests
 │   ├── test_plugin_manager.cpp          # PluginManager tests
-│   ├── test_process_stats.cpp           # ProcessStats tests
-│   └── test_proxy_api.cpp              # ProxyAPI async callback tests
+│   └── test_process_stats.cpp           # ProcessStats tests (external process-stats lib)
 ├── nix/                                 # Nix build modules
 │   ├── default.nix                      # Common configuration (deps, flags, metadata)
 │   ├── build.nix                        # Shared build derivation
@@ -52,7 +45,7 @@ logos-liblogos/
 
 | Component | Purpose |
 |-----------|---------|
-| **C++11** | Implementation language |
+| **C++17** | Implementation language |
 | **CMake 3.14+** | Build system |
 | **Logos API (c++ sdk)** | Event loop, plugin system, IPC, meta-object system |
 | **zstd** | Compression (build dependency) |
@@ -81,11 +74,9 @@ logos-liblogos/
 | Method | Description |
 |--------|-------------|
 | `init(argc, argv)` | Initialize global state, create QCoreApplication if needed |
-| `setPluginsDir(path)` | Set the primary plugin directory |
-| `addPluginsDir(path)` | Add an additional plugin directory |
-| `start()` | Scan plugins, create Core Manager, load built-in modules, start registry |
+| `start()` | Discover plugins, initialize capability module |
 | `exec() → int` | Run the Qt event loop |
-| `cleanup()` | Unload all modules, stop processes, clean up state |
+| `cleanup()` | Terminate all module processes, clean up state |
 | `processEvents()` | Process Qt events without blocking |
 
 ### PluginManager
@@ -98,44 +89,37 @@ logos-liblogos/
 
 | Method | Description |
 |--------|-------------|
-| `processPlugin(path) → char*` | Extract metadata from a module file, register as known |
-| `loadPlugin(name) → int` | Load a module (spawns `logos_host` process) |
-| `loadPluginWithDependencies(name) → int` | Resolve dependency tree and load in correct order |
-| `unloadPlugin(name) → int` | Terminate module process and remove from loaded list |
-| `resolveDependencies(name) → list` | Topological sort with circular dependency detection |
-| `getLoadedPlugins() → char**` | Return loaded module names |
-| `getKnownPlugins() → char**` | Return all discovered module names |
+| `setPluginsDir(path)` | Set the primary plugin directory (clears existing) |
+| `addPluginsDir(path)` | Add an additional plugin directory |
+| `getPluginsDirs() → QStringList` | Return configured plugin directories |
+| `discoverPlugins()` | Scan all plugin directories and register discovered modules |
+| `processPlugin(path) → QString` | Extract metadata from a module file, register as known |
+| `loadPlugin(name) → bool` | Load a module (spawns `logos_host` process) |
+| `unloadPlugin(name) → bool` | Terminate module process and remove from loaded list |
+| `initializeCapabilityModule() → bool` | Load the built-in capability module if available |
+| `terminateAll()` | Terminate all running module processes |
+| `resolveDependencies(modules) → QStringList` | Topological sort with circular dependency detection |
+| `findPlugins(dir) → QStringList` | Scan a directory for plugins via manifest.json |
+| `getLoadedPlugins() → QStringList` | Return loaded module names |
+| `getKnownPlugins() → QHash` | Return all discovered module name→path mappings |
+| `getLoadedPluginsCStr() → char**` | Return loaded module names as C string array |
+| `getKnownPluginsCStr() → char**` | Return known module names as C string array |
+| `isPluginLoaded(name) → bool` | Check if a module is currently loaded |
+| `isPluginKnown(name) → bool` | Check if a module has been discovered |
+| `getPluginProcessIds() → QHash` | Return module name→process ID mappings |
 
-### ProxyAPI
+### ProcessStats (external dependency)
 
-**note** These are experimental and used for experimental SDKs that currently cannot make direct calls to logos modules. As such these methods might be deprecated in the future.
-__These methods are not used by any of the logos modules or apps.__
+**Source:** [process-stats](https://github.com/logos-co/process-stats) library (linked as a static dependency)
 
-**Files:** `src/logos_core/proxy_api.h`, `src/logos_core/proxy_api.cpp`
-
-**Purpose:** Async callback implementation for non-Qt consumers (e.g., Node.js/Electron). Provides async plugin loading, remote method invocation, and event listener registration.
-
-**API (namespace `ProxyAPI`):**
-
-| Method | Description |
-|--------|-------------|
-| `asyncOperation(data, callback, user_data)` | Example async helper for testing |
-| `loadPluginAsync(name, callback, user_data)` | Asynchronously load a plugin |
-| `callPluginMethodAsync(plugin, method, params_json, callback, user_data)` | Invoke a remote method with JSON parameters |
-| `registerEventListener(plugin, event, callback, user_data)` | Subscribe to module events |
-
-### ProcessStats
-
-**Files:** `src/logos_core/process_stats.h`, `src/logos_core/process_stats.cpp`
-
-**Purpose:** CPU and memory monitoring for loaded module processes.
+**Purpose:** CPU and memory monitoring for loaded module processes. Previously part of logos-liblogos source, now maintained as a separate library.
 
 **API (namespace `ProcessStats`):**
 
 | Method | Description |
 |--------|-------------|
-| `getProcessStats(pid) → stats` | Return CPU %, CPU time, and memory usage for a process |
-| `getModuleStats() → char*` | Return JSON array of stats for all loaded modules |
+| `getProcessStats(pid) → ProcessStatsData` | Return CPU %, CPU time, and memory usage for a process |
+| `getModuleStats(processIds) → char*` | Return JSON array of stats for all provided module processes |
 
 ### LogosHost
 
@@ -143,9 +127,9 @@ __These methods are not used by any of the logos modules or apps.__
 
 **Purpose:** Lightweight subprocess that loads a single module. Parses `--name` and `--path` arguments, loads the plugin, authenticates via token from the core, registers the module with the remote object registry, and runs the Qt event loop.
 
-### PluginInterface
+### PluginInterface (external dependency)
 
-**File:** `src/common/interface.h`
+**Source:** Provided by [logos-cpp-sdk](https://github.com/logos-co/logos-cpp-sdk) (`interface.h`)
 
 **Purpose:** Base interface that all modules must implement. Defines `name()`, `version()`, and `initLogos()` methods. Uses `Q_DECLARE_INTERFACE` for Qt's plugin system.
 
@@ -229,7 +213,7 @@ nix build --override-input logos-cpp-sdk path:../logos-cpp-sdk
 
 **Prerequisites:**
 - CMake 3.14+
-- C++11 compatible compiler
+- C++17 compatible compiler
 - Qt 6 with Core and RemoteObjects modules
 - Google Test (fetched via FetchContent if not system-installed)
 
@@ -298,28 +282,6 @@ int main(int argc, char *argv[]) {
 ```c
 // Resolves the dependency tree and loads in correct order
 logos_core_load_plugin_with_dependencies("my_module");
-```
-
-### Async Method Invocation (for Node.js/Electron)
-
-**note** These are experimental and used for experimental SDKs that currently cannot make direct calls to logos modules. As such these methods might be deprecated in the future.
-__These methods are not used by any of the logos modules or apps.__
-
-
-```c
-void on_result(int result, const char* message, void* user_data) {
-    printf("Result: %d, Message: %s\n", result, message);
-}
-
-logos_core_load_plugin_async("chat", on_result, NULL);
-
-logos_core_call_plugin_method_async(
-    "chat", "sendMessage",
-    "[{\"name\":\"channel\",\"value\":\"general\",\"type\":\"string\"}]",
-    on_result, NULL
-);
-
-logos_core_register_event_listener("chat", "chatMessage", on_result, NULL);
 ```
 
 ## Continuous Integration
