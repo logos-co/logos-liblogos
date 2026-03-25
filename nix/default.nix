@@ -1,5 +1,5 @@
 # Common build configuration shared across all packages
-{ pkgs, logosSdk, logosModule, processStats, portableBuild ? false }:
+{ pkgs, logosSdk, moduleClient, logosModule, processStats, portableBuild ? false }:
 
 {
   pname = "logos-liblogos";
@@ -19,6 +19,7 @@
     pkgs.qt6.qtremoteobjects
     pkgs.zstd
     pkgs.gtest
+    moduleClient
     logosModule
     processStats
   ];
@@ -27,6 +28,7 @@
   cmakeFlags = [
     "-GNinja"
     "-DLOGOS_CPP_SDK_ROOT=${logosSdk}"
+    "-DLOGOS_MODULE_CLIENT_ROOT=${moduleClient}"
     "-DLOGOS_MODULE_ROOT=${logosModule}"
     "-DPROCESS_STATS_ROOT=${processStats}"
   ] ++ pkgs.lib.optionals portableBuild [
@@ -36,6 +38,7 @@
   # Environment variables
   env = {
     LOGOS_CPP_SDK_ROOT = "${logosSdk}";
+    LOGOS_MODULE_CLIENT_ROOT = "${moduleClient}";
     LOGOS_MODULE_ROOT = "${logosModule}";
     PROCESS_STATS_ROOT = "${processStats}";
   };

@@ -11,7 +11,6 @@ add_executable(logos_core_tests
     test_app_lifecycle.cpp
     test_plugin_manager.cpp
     test_process_stats.cpp
-    test_proxy_api.cpp
 )
 
 target_link_libraries(logos_core_tests PRIVATE
@@ -46,6 +45,11 @@ if(EXISTS "${LOGOS_CPP_SDK_ROOT}/lib" AND EXISTS "${LOGOS_CPP_SDK_ROOT}/include"
   )
 else()
   target_include_directories(logos_core_tests PRIVATE ${LOGOS_CPP_SDK_ROOT}/cpp)
+endif()
+
+# Add logos-module-client include directory
+if(DEFINED LOGOS_MODULE_CLIENT_ROOT AND EXISTS "${LOGOS_MODULE_CLIENT_ROOT}/include")
+  target_include_directories(logos_core_tests PRIVATE ${LOGOS_MODULE_CLIENT_ROOT}/include)
 endif()
 
 gtest_discover_tests(logos_core_tests)

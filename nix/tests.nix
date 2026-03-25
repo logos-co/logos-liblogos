@@ -28,6 +28,7 @@ pkgs.stdenv.mkDerivation {
     cmake -B build -S ${build.src} \
       -GNinja \
       -DLOGOS_CPP_SDK_ROOT=${common.env.LOGOS_CPP_SDK_ROOT} \
+      -DLOGOS_MODULE_CLIENT_ROOT=${common.env.LOGOS_MODULE_CLIENT_ROOT} \
       -DLOGOS_MODULE_ROOT=${common.env.LOGOS_MODULE_ROOT} \
       -DPROCESS_STATS_ROOT=${common.env.PROCESS_STATS_ROOT} \
       -DCMAKE_BUILD_TYPE=Release \

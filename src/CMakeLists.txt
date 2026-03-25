@@ -85,6 +85,29 @@ else()
   message(STATUS "PROCESS_STATS_ROOT not set, process-stats will need to be provided")
 endif()
 
+# Find logos-module-client library
+if(DEFINED LOGOS_MODULE_CLIENT_ROOT AND EXISTS "${LOGOS_MODULE_CLIENT_ROOT}/lib")
+  message(STATUS "Using logos-module-client at ${LOGOS_MODULE_CLIENT_ROOT}")
+
+  find_library(LOGOS_MODULE_CLIENT_LIBRARY
+    NAMES logos_module_client
+    PATHS "${LOGOS_MODULE_CLIENT_ROOT}/lib"
+    NO_DEFAULT_PATH
+  )
+
+  if(NOT LOGOS_MODULE_CLIENT_LIBRARY)
+    message(FATAL_ERROR "logos_module_client library not found in ${LOGOS_MODULE_CLIENT_ROOT}/lib")
+  endif()
+
+  add_library(logos_module_client STATIC IMPORTED)
+  set_target_properties(logos_module_client PROPERTIES
+    IMPORTED_LOCATION "${LOGOS_MODULE_CLIENT_LIBRARY}"
+    INTERFACE_INCLUDE_DIRECTORIES "${LOGOS_MODULE_CLIENT_ROOT}/include"
+  )
+else()
+  message(STATUS "LOGOS_MODULE_CLIENT_ROOT not set, logos-module-client will need to be provided")
+endif()
+
 # Define the library sources
 set(LOGOS_CORE_SOURCES
     logos_core/logos_core.cpp
@@ -95,8 +118,6 @@ set(LOGOS_CORE_SOURCES
     logos_core/app_lifecycle.h
     logos_core/plugin_manager.cpp
     logos_core/plugin_manager.h
-    logos_core/proxy_api.cpp
-    logos_core/proxy_api.h
 )
 
 # Define the logos host sources
@@ -121,12 +142,13 @@ if(LOGOS_PORTABLE_BUILD)
 endif()
 
 # Link Qt libraries, SDK and module library
-target_link_libraries(logos_core PUBLIC 
-    Qt${QT_VERSION_MAJOR}::Core 
+target_link_libraries(logos_core PUBLIC
+    Qt${QT_VERSION_MAJOR}::Core
     Qt${QT_VERSION_MAJOR}::RemoteObjects
     logos_sdk
     logos_module
     process_stats
+    logos_module_client
 )
 
 # Include directories for the library
@@ -147,6 +169,11 @@ endif()
 # Add process-stats include directory if available
 if(DEFINED PROCESS_STATS_ROOT AND EXISTS "${PROCESS_STATS_ROOT}/include")
   target_include_directories(logos_core PRIVATE ${PROCESS_STATS_ROOT}/include)
+endif()
+
+# Add logos-module-client include directory if available
+if(DEFINED LOGOS_MODULE_CLIENT_ROOT AND EXISTS "${LOGOS_MODULE_CLIENT_ROOT}/include")
+  target_include_directories(logos_core PRIVATE ${LOGOS_MODULE_CLIENT_ROOT}/include)
 endif()
 
 # Add SDK include directory if using built SDK
