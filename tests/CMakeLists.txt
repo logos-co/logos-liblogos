@@ -47,9 +47,4 @@ else()
   target_include_directories(logos_core_tests PRIVATE ${LOGOS_CPP_SDK_ROOT}/cpp)
 endif()
 
-# Add logos-module-client include directory
-if(DEFINED LOGOS_MODULE_CLIENT_ROOT AND EXISTS "${LOGOS_MODULE_CLIENT_ROOT}/include")
-  target_include_directories(logos_core_tests PRIVATE ${LOGOS_MODULE_CLIENT_ROOT}/include)
-endif()
-
 gtest_discover_tests(logos_core_tests)

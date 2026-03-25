@@ -12,8 +12,8 @@
 #include <QLocalSocket>
 #include <cstring>
 #include <cassert>
+#include "logos_api.h"
 #include "logos_api_client.h"
-#include "logos_core_client.h"
 #include "token_manager.h"
 #include "module_lib.h"
 
@@ -168,11 +168,11 @@ namespace PluginManager {
             QString capabilityModuleToken = tokenManager.getToken("capability_module");
             qDebug() << "Capability module token:" << capabilityModuleToken;
 
-            static LogosCoreClient* s_coreClient = nullptr;
-            if (!s_coreClient)
-                s_coreClient = new LogosCoreClient();
+            static LogosAPI* s_coreApi = nullptr;
+            if (!s_coreApi)
+                s_coreApi = new LogosAPI("core");
 
-            LogosAPIClient* client = s_coreClient->clientFor("capability_module");
+            LogosAPIClient* client = s_coreApi->getClient("capability_module");
             bool success = client->informModuleToken(capabilityModuleToken, pluginName, authTokenString);
             if (success) {
                 qDebug() << "Successfully informed capability module about token for:" << pluginName;
