@@ -1,50 +1,23 @@
 #include <gtest/gtest.h>
 #include "app_lifecycle.h"
 #include "plugin_manager.h"
-#include "logos_core_internal.h"
 #include <QCoreApplication>
 #include <QDebug>
 
-// Custom main to ensure QCoreApplication exists for tests
 int main(int argc, char** argv) {
-    // Create QCoreApplication for the test environment
     QCoreApplication app(argc, argv);
-    
-    // Initialize GoogleTest
     ::testing::InitGoogleTest(&argc, argv);
-    
-    // Run all tests
     return RUN_ALL_TESTS();
 }
 
-// Test fixture for app lifecycle tests
 class AppLifecycleTest : public ::testing::Test {
 protected:
     void SetUp() override {
-        // Clear global state before each test
-        g_plugins_dirs.clear();
-        g_loaded_plugins.clear();
-        g_known_plugins.clear();
-        g_plugin_processes.clear();
+        PluginManager::clearState();
     }
 
     void TearDown() override {
-        // Clean up after each test
-        // Note: We don't call AppLifecycle::cleanup() here because it deletes
-        // the QCoreApplication which we need to keep for the test process
-        
-        for (auto it = g_plugin_processes.begin(); it != g_plugin_processes.end(); ++it) {
-            QProcess* process = it.value();
-            process->terminate();
-            process->waitForFinished(1000);
-            delete process;
-        }
-        g_plugin_processes.clear();
-
-        // Clear global state
-        g_plugins_dirs.clear();
-        g_loaded_plugins.clear();
-        g_known_plugins.clear();
+        PluginManager::clearState();
     }
 };
 
@@ -52,38 +25,25 @@ protected:
 // Initialization Tests
 // =============================================================================
 
-// Verifies that init() properly sets g_app to the existing QCoreApplication
-// and marks g_app_created_by_us as false when reusing an existing app
 TEST_F(AppLifecycleTest, Init_CreatesNewApp) {
-    // In a fresh environment with no existing QCoreApplication,
-    // init() should create one
-    // Note: We can't test this directly since our test main creates a QCoreApplication
-    // This test verifies that init() works when called
-    
     char* argv[] = {(char*)"test"};
-    
-    // If there's already an app, this will reuse it
+
     QCoreApplication* beforeApp = QCoreApplication::instance();
-    
+
     AppLifecycle::init(1, argv);
-    
-    // App should be initialized
-    ASSERT_TRUE(g_app != nullptr);
-    
-    // If there was an existing app, we should reuse it and not claim ownership
+
+    ASSERT_TRUE(AppLifecycle::app() != nullptr);
+
     if (beforeApp) {
         EXPECT_EQ(QCoreApplication::instance(), beforeApp);
-        EXPECT_FALSE(g_app_created_by_us);
+        EXPECT_FALSE(AppLifecycle::isAppOwnedByUs());
     }
 }
 
-// Verifies that init() registers QObject* as a Qt metatype,
-// which is required for signal/slot communication with QObject pointers
 TEST_F(AppLifecycleTest, Init_RegistersMetaType) {
     char* argv[] = {(char*)"test"};
     AppLifecycle::init(1, argv);
-    
-    // Verify QObject* is registered as a metatype
+
     int typeId = QMetaType::fromName("QObject*").id();
     EXPECT_NE(typeId, QMetaType::UnknownType);
 }
@@ -92,120 +52,88 @@ TEST_F(AppLifecycleTest, Init_RegistersMetaType) {
 // Plugin Directory Tests
 // =============================================================================
 
-// Verifies that setPluginsDir() correctly sets a single plugins directory
 TEST_F(AppLifecycleTest, SetPluginsDir_SetsDirectory) {
     const char* testDir = "/test/plugins";
 
     PluginManager::setPluginsDir(testDir);
 
-    ASSERT_EQ(g_plugins_dirs.size(), 1);
-    EXPECT_EQ(g_plugins_dirs[0].toStdString(), testDir);
+    QStringList dirs = PluginManager::getPluginsDirs();
+    ASSERT_EQ(dirs.size(), 1);
+    EXPECT_EQ(dirs[0].toStdString(), testDir);
 }
 
-// Verifies that setPluginsDir() clears any existing directories before setting the new one
 TEST_F(AppLifecycleTest, SetPluginsDir_ClearsExisting) {
     PluginManager::addPluginsDir("/dir1");
     PluginManager::addPluginsDir("/dir2");
-    ASSERT_EQ(g_plugins_dirs.size(), 2);
-    
+    ASSERT_EQ(PluginManager::getPluginsDirs().size(), 2);
+
     PluginManager::setPluginsDir("/new_dir");
-    
-    ASSERT_EQ(g_plugins_dirs.size(), 1);
-    EXPECT_EQ(g_plugins_dirs[0].toStdString(), "/new_dir");
+
+    QStringList dirs = PluginManager::getPluginsDirs();
+    ASSERT_EQ(dirs.size(), 1);
+    EXPECT_EQ(dirs[0].toStdString(), "/new_dir");
 }
 
-// Verifies that addPluginsDir() appends directories to the list without clearing existing ones
 TEST_F(AppLifecycleTest, AddPluginsDir_AppendsDirectory) {
     PluginManager::addPluginsDir("/dir1");
     PluginManager::addPluginsDir("/dir2");
-    
-    auto dirs = g_plugins_dirs;
+
+    QStringList dirs = PluginManager::getPluginsDirs();
     ASSERT_EQ(dirs.size(), 2);
     EXPECT_EQ(dirs[0].toStdString(), "/dir1");
     EXPECT_EQ(dirs[1].toStdString(), "/dir2");
 }
 
-// Verifies that addPluginsDir() prevents duplicate directory entries
 TEST_F(AppLifecycleTest, AddPluginsDir_NoDuplicates) {
     PluginManager::addPluginsDir("/test");
     PluginManager::addPluginsDir("/test");
-    
-    // Should only be added once
-    EXPECT_EQ(g_plugins_dirs.size(), 1);
+
+    EXPECT_EQ(PluginManager::getPluginsDirs().size(), 1);
 }
 
 // =============================================================================
 // Cleanup Tests
 // =============================================================================
 
-// Verifies that cleanup operations clear the global plugin state
-// Note: Can't call full cleanup() as it would delete the test's QCoreApplication
 TEST_F(AppLifecycleTest, Cleanup_ClearsGlobals) {
-    // Set up some state
-    g_loaded_plugins.append("test_plugin");
-    g_known_plugins["test"] = "/path/to/test";
-    g_plugins_dirs.append("/test");
-    
-    // Note: We can't actually call AppLifecycle::cleanup() because it would
-    // delete the QCoreApplication used by the test runner
-    // Instead, we'll test the individual cleanup operations
-    
-    // Manually clean up like cleanup() does
-    g_loaded_plugins.clear();
-    g_known_plugins.clear();
-    
-    EXPECT_TRUE(g_loaded_plugins.isEmpty());
-    EXPECT_TRUE(g_known_plugins.isEmpty());
+    PluginManager::addKnownPlugin("test", "/path/to/test");
+    PluginManager::addPluginsDir("/test");
+
+    PluginManager::clearState();
+
+    EXPECT_TRUE(PluginManager::getLoadedPlugins().isEmpty());
+    EXPECT_TRUE(PluginManager::getKnownPlugins().isEmpty());
 }
 
-// Documents that cleanup() deletes the QCoreApplication when we created it
-// Cannot be tested directly as it would kill the test runner's app
 TEST_F(AppLifecycleTest, Cleanup_DeletesOwnedApp) {
-    // We can't actually test this in the test environment because
-    // there's already a QCoreApplication instance from the test runner
-    // This test documents the expected behavior
-    
-    // Expected behavior (documented):
-    // - If g_app_created_by_us is true, delete g_app
-    // - Set g_app to nullptr
-    // - Set g_app_created_by_us to false
-    
     EXPECT_TRUE(true) << "This behavior is tested indirectly through integration tests";
 }
 
-// Verifies that init() sets g_app_created_by_us=false when reusing an existing app,
-// ensuring cleanup() won't delete an app it doesn't own
 TEST_F(AppLifecycleTest, Cleanup_PreservesExternalApp) {
-    // Verify that when we use an existing app, the flag is set correctly
     char* argv[] = {(char*)"test"};
     AppLifecycle::init(1, argv);
-    
-    EXPECT_FALSE(g_app_created_by_us) << "Should not claim ownership of external app";
+
+    EXPECT_FALSE(AppLifecycle::isAppOwnedByUs()) << "Should not claim ownership of external app";
 }
 
 // =============================================================================
 // ProcessEvents Test
 // =============================================================================
 
-// Verifies that processEvents() gracefully handles g_app being null without crashing
 TEST_F(AppLifecycleTest, ProcessEvents_HandlesNoApp) {
-    // Set g_app to nullptr temporarily
-    QCoreApplication* savedApp = g_app;
-    g_app = nullptr;
-    
-    // Should not crash
+    // cleanup() resets app state to null (won't delete the test runner's app
+    // since init() detected it as external and didn't claim ownership)
+    char* argv[] = {(char*)"test"};
+    AppLifecycle::init(1, argv);
+    AppLifecycle::cleanup();
+
     EXPECT_NO_THROW(AppLifecycle::processEvents());
-    
-    // Restore
-    g_app = savedApp;
 }
 
-// Verifies that processEvents() successfully processes Qt events when g_app is valid
 TEST_F(AppLifecycleTest, ProcessEvents_CallsAppProcessEvents) {
     char* argv[] = {(char*)"test"};
     AppLifecycle::init(1, argv);
-    
-    // Should not crash and should complete
+
     EXPECT_NO_THROW(AppLifecycle::processEvents());
 }
 
@@ -213,34 +141,27 @@ TEST_F(AppLifecycleTest, ProcessEvents_CallsAppProcessEvents) {
 // Start Function Tests (Limited testing without actual plugins)
 // =============================================================================
 
-// Verifies that start() clears the loaded plugins list before discovering new plugins
 TEST_F(AppLifecycleTest, Start_ClearsLoadedPlugins) {
-    // Add some plugins to the loaded list (using internal API for setup)
-    g_loaded_plugins.append("old_plugin");
+    PluginManager::registerLoadedPlugin("old_plugin");
     ASSERT_FALSE(PluginManager::getLoadedPlugins().isEmpty());
-    
+
     char* argv[] = {(char*)"test"};
     AppLifecycle::init(1, argv);
-    
+
     AppLifecycle::start();
-    
-    // Should clear the loaded plugins list at start
-    // Note: plugins might be loaded during start(), so we just verify
-    // that start() was called successfully
+
     EXPECT_TRUE(true);
 }
 
-// Verifies that start() uses custom plugin directories when configured
 TEST_F(AppLifecycleTest, Start_UsesCustomPluginsDirs) {
     char* argv[] = {(char*)"test"};
     AppLifecycle::init(1, argv);
-    
+
     PluginManager::setPluginsDir("/custom/plugins");
-    
-    // After start, plugins dir should still contain our custom dir
+
     AppLifecycle::start();
-    
-    auto dirs = g_plugins_dirs;
+
+    QStringList dirs = PluginManager::getPluginsDirs();
     ASSERT_EQ(dirs.size(), 1);
     EXPECT_EQ(dirs[0].toStdString(), "/custom/plugins");
 }
@@ -249,29 +170,20 @@ TEST_F(AppLifecycleTest, Start_UsesCustomPluginsDirs) {
 // Exec Test
 // =============================================================================
 
-// Verifies that exec() returns -1 when g_app is null (error condition)
 TEST_F(AppLifecycleTest, Exec_ReturnsNegativeWhenNoApp) {
-    // Set g_app to nullptr temporarily (need internal API for this edge case)
-    QCoreApplication* savedApp = g_app;
-    g_app = nullptr;
-    
+    char* argv[] = {(char*)"test"};
+    AppLifecycle::init(1, argv);
+    AppLifecycle::cleanup();
+
     int result = AppLifecycle::exec();
-    
+
     EXPECT_EQ(result, -1);
-    
-    // Restore
-    g_app = savedApp;
 }
 
-// Verifies that after init(), g_app is set and exec() would be callable
-// Note: Can't actually call exec() as it blocks on the event loop
 TEST_F(AppLifecycleTest, Exec_WithAppAvailable) {
     char* argv[] = {(char*)"test"};
     AppLifecycle::init(1, argv);
-    
-    ASSERT_TRUE(g_app != nullptr);
-    
-    // We can't actually call exec() as it would block
-    // Just verify the app exists and exec would be callable
-    EXPECT_TRUE(g_app != nullptr);
+
+    ASSERT_TRUE(AppLifecycle::app() != nullptr);
+    EXPECT_TRUE(AppLifecycle::app() != nullptr);
 }

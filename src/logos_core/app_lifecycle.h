@@ -1,21 +1,17 @@
 #ifndef APP_LIFECYCLE_H
 #define APP_LIFECYCLE_H
 
-namespace AppLifecycle {
-    // Initialize the logos core application
-    void init(int argc, char* argv[]);
+class QCoreApplication;
 
-    // Start the logos core functionality (discover plugins, init capability module)
+namespace AppLifecycle {
+    void init(int argc, char* argv[]);
     void start();
-    
-    // Run the event loop
     int exec();
-    
-    // Clean up all resources (plugins, processes, registry host, app)
     void cleanup();
-    
-    // Process Qt events without blocking
     void processEvents();
+
+    QCoreApplication* app();
+    bool isAppOwnedByUs();
 }
 
 #endif // APP_LIFECYCLE_H
