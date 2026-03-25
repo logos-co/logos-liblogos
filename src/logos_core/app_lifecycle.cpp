@@ -146,16 +146,4 @@ namespace AppLifecycle {
         g_app->processEvents();
     }
 
-    QStringList getPluginsDirs() {
-        return g_plugins_dirs;
-    }
-
-    bool isInitialized() {
-        return g_app != nullptr;
-    }
-
-    bool isAppOwnedByUs() {
-        return g_app_created_by_us;
-    }
-
 }

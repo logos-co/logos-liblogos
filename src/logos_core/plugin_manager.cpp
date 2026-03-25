@@ -3,16 +3,13 @@
 #include <QDebug>
 #include <QDir>
 #include <QFile>
-#include <QFileInfo>
 #include <QJsonObject>
 #include <QJsonDocument>
 #include <QJsonArray>
 #include <QUuid>
-#include <QTimer>
 #include <QThread>
 #include <QProcess>
 #include <QLocalSocket>
-#include <QLocalServer>
 #include <cstring>
 #include <cassert>
 #include "logos_api_client.h"
@@ -25,10 +22,6 @@ using namespace ModuleLib;
 namespace PluginManager {
 
     QString processPlugin(const QString &pluginPath) {
-        qDebug() << "\n------------------------------------------";
-        qDebug() << "Processing plugin from:" << pluginPath;
-
-        // Use module_lib to extract metadata
         auto metadataOpt = LogosModule::extractMetadata(pluginPath);
         if (!metadataOpt) {
             qWarning() << "No metadata found for plugin:" << pluginPath;
@@ -41,30 +34,9 @@ namespace PluginManager {
             return QString();
         }
 
-        qDebug() << "Plugin Metadata:";
-        qDebug() << " - Name:" << metadata.name;
-        qDebug() << " - Version:" << metadata.version;
-        qDebug() << " - Description:" << metadata.description;
-        qDebug() << " - Author:" << metadata.author;
-        qDebug() << " - Type:" << metadata.type;
-
-        if (!metadata.dependencies.isEmpty()) {
-            qDebug() << " - Dependencies:";
-            for (const QString &dependency : metadata.dependencies) {
-                qDebug() << "   *" << dependency;
-                if (!g_loaded_plugins.contains(dependency)) {
-                    qWarning() << "Required dependency not loaded:" << dependency;
-                }
-            }
-        }
-
         g_known_plugins.insert(metadata.name, pluginPath);
-        qDebug() << "Added to known plugins: " << metadata.name << " -> " << pluginPath;
-        
-        // Store the raw metadata for compatibility with existing code
         g_plugin_metadata.insert(metadata.name, metadata.rawMetadata);
-        qDebug() << "Stored metadata for plugin:" << metadata.name;
-        
+
         return metadata.name;
     }
 
@@ -120,10 +92,10 @@ namespace PluginManager {
 
         // Create a new process for the plugin
         QProcess* process = new QProcess();
-        
+
         // Set up the process to capture output (merge stdout and stderr)
         process->setProcessChannelMode(QProcess::MergedChannels);
-        
+
         // Set up arguments for logos_host
         QStringList arguments;
         arguments << "--name" << pluginName;
@@ -281,7 +253,7 @@ namespace PluginManager {
 
         qDebug() << "Plugin" << pluginName << "is now running in separate process";
         qDebug() << "Remote registry URL for this plugin: local:logos_" << pluginName;
-        
+
         return true;
     }
 
