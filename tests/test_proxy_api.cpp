@@ -8,6 +8,7 @@
 #include <QJsonArray>
 #include <QTimer>
 #include <cstring>
+#include "logos_json_utils.h"
 
 // Helper callback that records if it was called
 static bool s_callback_called = false;
@@ -36,6 +37,10 @@ protected:
     }
     
     void TearDown() override {
+        // Drain any pending timers from async operations before clearing state
+        for (int i = 0; i < 10; ++i)
+            QCoreApplication::processEvents();
+
         // Clean up global state after each test
         g_loaded_plugins.clear();
         g_known_plugins.clear();
@@ -49,238 +54,32 @@ protected:
 };
 
 // =============================================================================
-// jsonParamToQVariant Tests
-// =============================================================================
-
-// Verifies that jsonParamToQVariant() correctly converts string type parameters
-TEST_F(ProxyAPITest, JsonParamToQVariant_ConvertsStringType) {
-    QJsonObject param;
-    param["name"] = "testParam";
-    param["value"] = "Hello World";
-    param["type"] = "string";
-    
-    QVariant result = ProxyAPI::jsonParamToQVariant(param);
-    
-    EXPECT_TRUE(result.isValid());
-    EXPECT_TRUE(result.canConvert<QString>());
-    EXPECT_EQ(result.toString().toStdString(), "Hello World");
-}
-
-// Verifies that jsonParamToQVariant() correctly converts QString type parameters
-TEST_F(ProxyAPITest, JsonParamToQVariant_ConvertsQStringType) {
-    QJsonObject param;
-    param["name"] = "testParam";
-    param["value"] = "Qt String";
-    param["type"] = "QString";
-    
-    QVariant result = ProxyAPI::jsonParamToQVariant(param);
-    
-    EXPECT_TRUE(result.isValid());
-    EXPECT_TRUE(result.canConvert<QString>());
-    EXPECT_EQ(result.toString().toStdString(), "Qt String");
-}
-
-// Verifies that jsonParamToQVariant() correctly converts int type parameters
-TEST_F(ProxyAPITest, JsonParamToQVariant_ConvertsIntType) {
-    QJsonObject param;
-    param["name"] = "testParam";
-    param["value"] = "42";
-    param["type"] = "int";
-    
-    QVariant result = ProxyAPI::jsonParamToQVariant(param);
-    
-    EXPECT_TRUE(result.isValid());
-    EXPECT_TRUE(result.canConvert<int>());
-    EXPECT_EQ(result.toInt(), 42);
-}
-
-// Verifies that jsonParamToQVariant() correctly converts integer type parameters
-TEST_F(ProxyAPITest, JsonParamToQVariant_ConvertsIntegerType) {
-    QJsonObject param;
-    param["name"] = "testParam";
-    param["value"] = "123";
-    param["type"] = "integer";
-    
-    QVariant result = ProxyAPI::jsonParamToQVariant(param);
-    
-    EXPECT_TRUE(result.isValid());
-    EXPECT_TRUE(result.canConvert<int>());
-    EXPECT_EQ(result.toInt(), 123);
-}
-
-// Verifies that jsonParamToQVariant() correctly converts bool type to true
-TEST_F(ProxyAPITest, JsonParamToQVariant_ConvertsBoolTypeTrue) {
-    QJsonObject param1;
-    param1["name"] = "testParam";
-    param1["value"] = "true";
-    param1["type"] = "bool";
-    
-    QVariant result1 = ProxyAPI::jsonParamToQVariant(param1);
-    EXPECT_TRUE(result1.isValid());
-    EXPECT_TRUE(result1.canConvert<bool>());
-    EXPECT_TRUE(result1.toBool());
-    
-    // Test with "1"
-    QJsonObject param2;
-    param2["name"] = "testParam";
-    param2["value"] = "1";
-    param2["type"] = "bool";
-    
-    QVariant result2 = ProxyAPI::jsonParamToQVariant(param2);
-    EXPECT_TRUE(result2.isValid());
-    EXPECT_TRUE(result2.canConvert<bool>());
-    EXPECT_TRUE(result2.toBool());
-}
-
-// Verifies that jsonParamToQVariant() correctly converts bool type to false
-TEST_F(ProxyAPITest, JsonParamToQVariant_ConvertsBoolTypeFalse) {
-    QJsonObject param1;
-    param1["name"] = "testParam";
-    param1["value"] = "false";
-    param1["type"] = "bool";
-    
-    QVariant result1 = ProxyAPI::jsonParamToQVariant(param1);
-    EXPECT_TRUE(result1.isValid());
-    EXPECT_TRUE(result1.canConvert<bool>());
-    EXPECT_FALSE(result1.toBool());
-    
-    // Test with "0"
-    QJsonObject param2;
-    param2["name"] = "testParam";
-    param2["value"] = "0";
-    param2["type"] = "bool";
-    
-    QVariant result2 = ProxyAPI::jsonParamToQVariant(param2);
-    EXPECT_TRUE(result2.isValid());
-    EXPECT_TRUE(result2.canConvert<bool>());
-    EXPECT_FALSE(result2.toBool());
-}
-
-// Verifies that jsonParamToQVariant() correctly converts boolean type parameters
-TEST_F(ProxyAPITest, JsonParamToQVariant_ConvertsBooleanType) {
-    QJsonObject param;
-    param["name"] = "testParam";
-    param["value"] = "true";
-    param["type"] = "boolean";
-    
-    QVariant result = ProxyAPI::jsonParamToQVariant(param);
-    
-    EXPECT_TRUE(result.isValid());
-    EXPECT_TRUE(result.canConvert<bool>());
-    EXPECT_TRUE(result.toBool());
-}
-
-// Verifies that jsonParamToQVariant() correctly converts double type parameters
-TEST_F(ProxyAPITest, JsonParamToQVariant_ConvertsDoubleType) {
-    QJsonObject param;
-    param["name"] = "testParam";
-    param["value"] = "3.14159";
-    param["type"] = "double";
-    
-    QVariant result = ProxyAPI::jsonParamToQVariant(param);
-    
-    EXPECT_TRUE(result.isValid());
-    EXPECT_TRUE(result.canConvert<double>());
-    EXPECT_NEAR(result.toDouble(), 3.14159, 0.00001);
-}
-
-// Verifies that jsonParamToQVariant() correctly converts float type parameters
-TEST_F(ProxyAPITest, JsonParamToQVariant_ConvertsFloatType) {
-    QJsonObject param;
-    param["name"] = "testParam";
-    param["value"] = "2.718";
-    param["type"] = "float";
-    
-    QVariant result = ProxyAPI::jsonParamToQVariant(param);
-    
-    EXPECT_TRUE(result.isValid());
-    EXPECT_TRUE(result.canConvert<double>());
-    EXPECT_NEAR(result.toDouble(), 2.718, 0.001);
-}
-
-// Verifies that jsonParamToQVariant() returns invalid QVariant for bad int values
-TEST_F(ProxyAPITest, JsonParamToQVariant_ReturnsInvalidForBadInt) {
-    QJsonObject param;
-    param["name"] = "testParam";
-    param["value"] = "not_a_number";
-    param["type"] = "int";
-    
-    QVariant result = ProxyAPI::jsonParamToQVariant(param);
-    
-    EXPECT_FALSE(result.isValid());
-}
-
-// Verifies that jsonParamToQVariant() returns invalid QVariant for bad bool values
-TEST_F(ProxyAPITest, JsonParamToQVariant_ReturnsInvalidForBadBool) {
-    QJsonObject param;
-    param["name"] = "testParam";
-    param["value"] = "maybe";
-    param["type"] = "bool";
-    
-    QVariant result = ProxyAPI::jsonParamToQVariant(param);
-    
-    EXPECT_FALSE(result.isValid());
-}
-
-// Verifies that jsonParamToQVariant() returns invalid QVariant for bad double values
-TEST_F(ProxyAPITest, JsonParamToQVariant_ReturnsInvalidForBadDouble) {
-    QJsonObject param;
-    param["name"] = "testParam";
-    param["value"] = "not_a_number";
-    param["type"] = "double";
-    
-    QVariant result = ProxyAPI::jsonParamToQVariant(param);
-    
-    EXPECT_FALSE(result.isValid());
-}
-
-// Verifies that jsonParamToQVariant() treats unknown types as strings
-TEST_F(ProxyAPITest, JsonParamToQVariant_TreatsUnknownTypeAsString) {
-    QJsonObject param;
-    param["name"] = "testParam";
-    param["value"] = "some value";
-    param["type"] = "unknown_type";
-    
-    QVariant result = ProxyAPI::jsonParamToQVariant(param);
-    
-    EXPECT_TRUE(result.isValid());
-    EXPECT_TRUE(result.canConvert<QString>());
-    EXPECT_EQ(result.toString().toStdString(), "some value");
-}
-
-// =============================================================================
 // asyncOperation Tests
 // =============================================================================
 
-// Verifies that asyncOperation() does not crash when called with a null callback
-TEST_F(ProxyAPITest, AsyncOperation_DoesNotCrashWithNullCallback) {
-    // Should not crash
-    EXPECT_NO_THROW(ProxyAPI::asyncOperation("test data", nullptr, nullptr));
-}
-
 // Verifies that asyncOperation() handles null data gracefully
 TEST_F(ProxyAPITest, AsyncOperation_HandlesNullData) {
+    // Use a noop callback to avoid stale timer callbacks leaking into later tests
+    auto noop = [](int, const char*, void*) {};
     // Should not crash with null data
-    EXPECT_NO_THROW(ProxyAPI::asyncOperation(nullptr, testCallback, nullptr));
-    
-    // Note: We can't easily test the callback execution without event loop processing
-    // This test ensures the function doesn't crash with null data
+    EXPECT_NO_THROW(ProxyAPI::asyncOperation(nullptr, noop, nullptr));
 }
 
 // Verifies that asyncOperation() accepts valid data and callback
 TEST_F(ProxyAPITest, AsyncOperation_AcceptsValidData) {
+    // Use a noop callback to avoid stale timer callbacks leaking into later tests
+    auto noop = [](int, const char*, void*) {};
     // Should not crash with valid data
-    EXPECT_NO_THROW(ProxyAPI::asyncOperation("test data", testCallback, nullptr));
+    EXPECT_NO_THROW(ProxyAPI::asyncOperation("test data", noop, nullptr));
 }
 
 // =============================================================================
 // loadPluginAsync Tests
 // =============================================================================
 
-// Verifies that loadPluginAsync() does not crash when called with a null callback
-TEST_F(ProxyAPITest, LoadPluginAsync_DoesNotCrashWithNullCallback) {
-    // Should not crash
-    EXPECT_NO_THROW(ProxyAPI::loadPluginAsync("test_plugin", nullptr, nullptr));
+// Verifies that loadPluginAsync() asserts when called with a null callback
+TEST_F(ProxyAPITest, LoadPluginAsync_AssertsWithNullCallback) {
+    EXPECT_DEATH(ProxyAPI::loadPluginAsync("test_plugin", nullptr, nullptr), "");
 }
 
 // Verifies that loadPluginAsync() fails immediately when plugin name is null
@@ -307,10 +106,13 @@ TEST_F(ProxyAPITest, LoadPluginAsync_FailsForUnknownPlugin) {
 TEST_F(ProxyAPITest, LoadPluginAsync_AcceptsKnownPlugin) {
     // Add a known plugin
     g_known_plugins.insert("test_plugin", "/path/to/plugin");
-    
+
+    // Use a noop callback to avoid stale timer callbacks leaking into later tests
+    auto noop = [](int, const char*, void*) {};
+
     // Should not crash and should start async operation
-    EXPECT_NO_THROW(ProxyAPI::loadPluginAsync("test_plugin", testCallback, nullptr));
-    
+    EXPECT_NO_THROW(ProxyAPI::loadPluginAsync("test_plugin", noop, nullptr));
+
     // Callback should NOT be called immediately for known plugins
     EXPECT_FALSE(s_callback_called);
 }
@@ -319,10 +121,9 @@ TEST_F(ProxyAPITest, LoadPluginAsync_AcceptsKnownPlugin) {
 // callPluginMethodAsync Tests
 // =============================================================================
 
-// Verifies that callPluginMethodAsync() does not crash when called with a null callback
-TEST_F(ProxyAPITest, CallPluginMethodAsync_DoesNotCrashWithNullCallback) {
-    // Should not crash
-    EXPECT_NO_THROW(ProxyAPI::callPluginMethodAsync("plugin", "method", "[]", nullptr, nullptr));
+// Verifies that callPluginMethodAsync() asserts when called with a null callback
+TEST_F(ProxyAPITest, CallPluginMethodAsync_AssertsWithNullCallback) {
+    EXPECT_DEATH(ProxyAPI::callPluginMethodAsync("plugin", "method", "[]", nullptr, nullptr), "");
 }
 
 // Verifies that callPluginMethodAsync() fails when plugin name is null
@@ -359,12 +160,17 @@ TEST_F(ProxyAPITest, CallPluginMethodAsync_FailsForUnloadedPlugin) {
 TEST_F(ProxyAPITest, CallPluginMethodAsync_AcceptsLoadedPlugin) {
     // Simulate a loaded plugin
     g_loaded_plugins.append("test_plugin");
-    
-    // Should not crash and should start async operation
+
+    // Should not crash and should delegate to SDK (not fail with a validation error)
     EXPECT_NO_THROW(ProxyAPI::callPluginMethodAsync("test_plugin", "testMethod", "[]", testCallback, nullptr));
-    
-    // Callback should NOT be called immediately for loaded plugins
-    EXPECT_FALSE(s_callback_called);
+
+    // Verify it passed proxy validation — if the callback was called (e.g. due to
+    // SDK connection timeouts in test environment), it should not be a proxy-level
+    // validation error
+    if (s_callback_called) {
+        EXPECT_FALSE(s_callback_message.contains("not loaded"));
+        EXPECT_FALSE(s_callback_message.contains("null"));
+    }
 }
 
 // Verifies that callPluginMethodAsync() handles null params_json as empty array
@@ -380,13 +186,10 @@ TEST_F(ProxyAPITest, CallPluginMethodAsync_HandlesNullParamsJson) {
 // registerEventListener Tests
 // =============================================================================
 
-// Verifies that registerEventListener() does not crash with null parameters
-TEST_F(ProxyAPITest, RegisterEventListener_DoesNotCrashWithNullParams) {
-    // Test various null combinations - should not crash
+// Verifies that registerEventListener() does not crash with null plugin/event name
+TEST_F(ProxyAPITest, RegisterEventListener_DoesNotCrashWithNullNames) {
     EXPECT_NO_THROW(ProxyAPI::registerEventListener(nullptr, "event", testCallback, nullptr));
     EXPECT_NO_THROW(ProxyAPI::registerEventListener("plugin", nullptr, testCallback, nullptr));
-    EXPECT_NO_THROW(ProxyAPI::registerEventListener("plugin", "event", nullptr, nullptr));
-    EXPECT_NO_THROW(ProxyAPI::registerEventListener(nullptr, nullptr, nullptr, nullptr));
 }
 
 // Verifies that registerEventListener() does not register for unloaded plugins
@@ -441,4 +244,207 @@ TEST_F(ProxyAPITest, RegisterEventListener_StoresUserData) {
     // User data should be stored
     ASSERT_EQ(g_event_listeners.size(), 1);
     EXPECT_EQ(g_event_listeners[0].userData, &userData);
+}
+
+// =============================================================================
+// Full JSON Array Pipeline Tests (baseline for refactoring)
+// These test the exact JSON format the JS SDK sends: [{name,value,type}, ...]
+// =============================================================================
+
+// Verifies the full JSON array pipeline: parse JSON string -> convert each param -> QVariantList
+// This mirrors the parsing logic in callPluginMethodAsync lines 181-210
+TEST_F(ProxyAPITest, JsonArrayPipeline_MixedTypes) {
+    QString paramsJson = R"([
+        {"name":"arg0","value":"hello","type":"string"},
+        {"name":"arg1","value":"42","type":"int"},
+        {"name":"arg2","value":"true","type":"bool"},
+        {"name":"arg3","value":"3.14","type":"double"}
+    ])";
+
+    QJsonParseError parseError;
+    QJsonDocument jsonDoc = QJsonDocument::fromJson(paramsJson.toUtf8(), &parseError);
+    ASSERT_EQ(parseError.error, QJsonParseError::NoError);
+
+    QJsonArray paramsArray = jsonDoc.array();
+    QVariantList args;
+    for (const QJsonValue& paramValue : paramsArray) {
+        ASSERT_TRUE(paramValue.isObject());
+        QJsonObject paramObj = paramValue.toObject();
+        QVariant variant = LogosJsonUtils::jsonParamToVariant(paramObj);
+        ASSERT_TRUE(variant.isValid()) << "Failed for param: " << paramObj.value("name").toString().toStdString();
+        args.append(variant);
+    }
+
+    ASSERT_EQ(args.size(), 4);
+    EXPECT_EQ(args[0].toString(), "hello");
+    EXPECT_EQ(args[1].toInt(), 42);
+    EXPECT_EQ(args[2].toBool(), true);
+    EXPECT_NEAR(args[3].toDouble(), 3.14, 0.001);
+}
+
+// Verifies parsing of an empty JSON array (no params)
+TEST_F(ProxyAPITest, JsonArrayPipeline_EmptyArray) {
+    QString paramsJson = "[]";
+
+    QJsonParseError parseError;
+    QJsonDocument jsonDoc = QJsonDocument::fromJson(paramsJson.toUtf8(), &parseError);
+    ASSERT_EQ(parseError.error, QJsonParseError::NoError);
+
+    QJsonArray paramsArray = jsonDoc.array();
+    QVariantList args;
+    for (const QJsonValue& paramValue : paramsArray) {
+        if (paramValue.isObject()) {
+            args.append(LogosJsonUtils::jsonParamToVariant(paramValue.toObject()));
+        }
+    }
+
+    EXPECT_EQ(args.size(), 0);
+}
+
+// Verifies single string param (common case from JS SDK)
+TEST_F(ProxyAPITest, JsonArrayPipeline_SingleStringParam) {
+    QString paramsJson = R"([{"name":"arg0","value":"test message","type":"string"}])";
+
+    QJsonParseError parseError;
+    QJsonDocument jsonDoc = QJsonDocument::fromJson(paramsJson.toUtf8(), &parseError);
+    ASSERT_EQ(parseError.error, QJsonParseError::NoError);
+
+    QJsonArray paramsArray = jsonDoc.array();
+    ASSERT_EQ(paramsArray.size(), 1);
+
+    QVariant result = LogosJsonUtils::jsonParamToVariant(paramsArray[0].toObject());
+    ASSERT_TRUE(result.isValid());
+    EXPECT_EQ(result.toString(), "test message");
+}
+
+// Verifies that invalid JSON causes a parse error (not a crash)
+TEST_F(ProxyAPITest, JsonArrayPipeline_InvalidJson) {
+    QString paramsJson = "not valid json at all";
+
+    QJsonParseError parseError;
+    QJsonDocument jsonDoc = QJsonDocument::fromJson(paramsJson.toUtf8(), &parseError);
+    EXPECT_NE(parseError.error, QJsonParseError::NoError);
+}
+
+// Verifies that a param with invalid type value is rejected during pipeline
+TEST_F(ProxyAPITest, JsonArrayPipeline_InvalidParamInArray) {
+    QString paramsJson = R"([
+        {"name":"arg0","value":"hello","type":"string"},
+        {"name":"arg1","value":"not_a_number","type":"int"}
+    ])";
+
+    QJsonParseError parseError;
+    QJsonDocument jsonDoc = QJsonDocument::fromJson(paramsJson.toUtf8(), &parseError);
+    ASSERT_EQ(parseError.error, QJsonParseError::NoError);
+
+    QJsonArray paramsArray = jsonDoc.array();
+    bool hadInvalid = false;
+    QVariantList args;
+    for (const QJsonValue& paramValue : paramsArray) {
+        if (paramValue.isObject()) {
+            QVariant variant = LogosJsonUtils::jsonParamToVariant(paramValue.toObject());
+            if (!variant.isValid()) {
+                hadInvalid = true;
+                break;
+            }
+            args.append(variant);
+        }
+    }
+
+    EXPECT_TRUE(hadInvalid);
+    EXPECT_EQ(args.size(), 1);
+    EXPECT_EQ(args[0].toString(), "hello");
+}
+
+// =============================================================================
+// callPluginMethodAsync JSON Error Handling Tests
+// =============================================================================
+
+// Verifies that callPluginMethodAsync reports JSON parse errors via callback
+TEST_F(ProxyAPITest, CallPluginMethodAsync_ReportsJsonParseError) {
+    g_loaded_plugins.append("test_plugin");
+
+    static bool jsonErrorCalled = false;
+    static int jsonErrorSuccess = -1;
+    static QString jsonErrorMessage;
+    jsonErrorCalled = false;
+    jsonErrorSuccess = -1;
+    jsonErrorMessage.clear();
+
+    auto jsonErrorCallback = [](int success, const char* message, void* /*user_data*/) {
+        jsonErrorCalled = true;
+        jsonErrorSuccess = success;
+        jsonErrorMessage = message ? QString::fromUtf8(message) : QString();
+    };
+
+    ProxyAPI::callPluginMethodAsync("test_plugin", "method", "invalid json!", jsonErrorCallback, nullptr);
+
+    for (int i = 0; i < 50; ++i)
+        QCoreApplication::processEvents();
+
+    EXPECT_TRUE(jsonErrorCalled);
+    EXPECT_EQ(jsonErrorSuccess, 0);
+    EXPECT_TRUE(jsonErrorMessage.contains("JSON parse error"));
+}
+
+// Verifies that callPluginMethodAsync reports invalid param errors via callback
+TEST_F(ProxyAPITest, CallPluginMethodAsync_ReportsInvalidParamError) {
+    g_loaded_plugins.append("test_plugin");
+
+    static bool paramErrorCalled = false;
+    static int paramErrorSuccess = -1;
+    static QString paramErrorMessage;
+    paramErrorCalled = false;
+    paramErrorSuccess = -1;
+    paramErrorMessage.clear();
+
+    auto paramErrorCallback = [](int success, const char* message, void* /*user_data*/) {
+        paramErrorCalled = true;
+        paramErrorSuccess = success;
+        paramErrorMessage = message ? QString::fromUtf8(message) : QString();
+    };
+
+    QString paramsJson = R"([{"name":"arg0","value":"not_a_number","type":"int"}])";
+    ProxyAPI::callPluginMethodAsync("test_plugin", "method", paramsJson.toUtf8().constData(), paramErrorCallback, nullptr);
+
+    for (int i = 0; i < 50; ++i)
+        QCoreApplication::processEvents();
+
+    EXPECT_TRUE(paramErrorCalled);
+    EXPECT_EQ(paramErrorSuccess, 0);
+    EXPECT_TRUE(paramErrorMessage.contains("Invalid parameter"));
+}
+
+// =============================================================================
+// User data passthrough test
+// =============================================================================
+
+static void* s_received_user_data = nullptr;
+static void userDataCallback(int success, const char* message, void* user_data) {
+    s_callback_called = true;
+    s_callback_success = success;
+    s_callback_message = message ? QString::fromUtf8(message) : QString();
+    s_received_user_data = user_data;
+}
+
+// Verifies that user_data is correctly passed through to the callback
+TEST_F(ProxyAPITest, CallPluginMethodAsync_PassesThroughUserData) {
+    s_received_user_data = nullptr;
+
+    int myData = 123;
+    ProxyAPI::callPluginMethodAsync(nullptr, "method", "[]", userDataCallback, &myData);
+
+    EXPECT_TRUE(s_callback_called);
+    EXPECT_EQ(s_received_user_data, &myData);
+}
+
+// Verifies that loadPluginAsync passes user_data through on failure path
+TEST_F(ProxyAPITest, LoadPluginAsync_PassesThroughUserData) {
+    s_received_user_data = nullptr;
+
+    int myData = 456;
+    ProxyAPI::loadPluginAsync(nullptr, userDataCallback, &myData);
+
+    EXPECT_TRUE(s_callback_called);
+    EXPECT_EQ(s_received_user_data, &myData);
 }

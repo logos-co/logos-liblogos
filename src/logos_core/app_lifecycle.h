@@ -1,14 +1,9 @@
 #ifndef APP_LIFECYCLE_H
 #define APP_LIFECYCLE_H
 
-#include <QStringList>
-
 namespace AppLifecycle {
     // Initialize the logos core application
     void init(int argc, char* argv[]);
-
-    // Set the SDK communication mode (0=Remote, 1=Local)
-    void setMode(int mode);
 
     // Set the custom plugins directory (replaces existing)
     void setPluginsDir(const char* plugins_dir);
@@ -27,11 +22,6 @@ namespace AppLifecycle {
     
     // Process Qt events without blocking
     void processEvents();
-    
-    // Query methods
-    QStringList getPluginsDirs();
-    bool isInitialized();           // returns true if g_app is set
-    bool isAppOwnedByUs();          // returns true if we created the app
 }
 
 #endif // APP_LIFECYCLE_H

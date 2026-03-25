@@ -37,6 +37,7 @@
   env = {
     LOGOS_CPP_SDK_ROOT = "${logosSdk}";
     LOGOS_MODULE_ROOT = "${logosModule}";
+    PROCESS_STATS_ROOT = "${processStats}";
   };
 
   # Metadata

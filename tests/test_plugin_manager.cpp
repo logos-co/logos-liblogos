@@ -2,7 +2,6 @@
 #include "plugin_manager.h"
 #include "logos_core_internal.h"
 #include "logos_core.h"
-#include "logos_mode.h"
 #include <QCoreApplication>
 #include <QDir>
 #include <QTemporaryDir>
@@ -48,9 +47,6 @@ protected:
     void SetUp() override {
         // Clear global state before each test using public API
         PluginManager::clearState();
-
-        // Set to Local mode by default (most testable functions require it)
-        LogosModeConfig::setMode(LogosMode::Local);
     }
 
     void TearDown() override {
@@ -373,35 +369,11 @@ TEST_F(PluginManagerTest, LoadPlugin_ReturnsFalseForUnknownPlugin) {
     EXPECT_FALSE(result);
 }
 
-// Verifies that loadPlugin() returns false when attempting to load a plugin that is already loaded in Local mode
-TEST_F(PluginManagerTest, LoadPlugin_ReturnsFalseForAlreadyLoadedLocal) {
-    // Ensure we're in Local mode (default, but being explicit)
-    LogosModeConfig::setMode(LogosMode::Local);
-
-    // Simulate a loaded plugin in Local mode
-    PluginManager::addKnownPlugin("test_plugin", "/path/to/plugin");
-    g_loaded_plugins.append("test_plugin");
-
-    // Create a dummy LogosAPI to simulate loaded plugin
-    // Note: This is an implementation test verifying internal state checking
-    g_local_plugin_apis.insert("test_plugin", nullptr);
-
-    bool result = PluginManager::loadPlugin("test_plugin");
-    EXPECT_FALSE(result);
-}
-
 // Verifies that loadPlugin() returns false when attempting to load a plugin that is already running
-// in a separate process in Remote mode
-TEST_F(PluginManagerTest, LoadPlugin_ReturnsFalseForAlreadyLoadedRemote) {
-    // Set to Remote mode explicitly
-    LogosModeConfig::setMode(LogosMode::Remote);
-
-    // Simulate a loaded plugin in Remote mode
+TEST_F(PluginManagerTest, LoadPlugin_ReturnsFalseForAlreadyLoaded) {
     PluginManager::addKnownPlugin("test_plugin", "/path/to/plugin");
     g_loaded_plugins.append("test_plugin");
 
-    // Create a dummy process to simulate loaded plugin
-    // Note: This is an implementation test verifying internal state checking
     QProcess* dummyProcess = new QProcess();
     g_plugin_processes.insert("test_plugin", dummyProcess);
 
@@ -537,10 +509,9 @@ TEST_F(PluginManagerTest, ResolveDependencies_HandlesTransitiveDeps) {
 // C API: logos_core_load_plugin_with_dependencies Tests
 // =============================================================================
 
-// Verifies that logos_core_load_plugin_with_dependencies() returns 0 for null plugin name
-TEST_F(PluginManagerTest, LoadPluginWithDependencies_ReturnsZeroForNull) {
-    int result = logos_core_load_plugin_with_dependencies(nullptr);
-    EXPECT_EQ(result, 0);
+// Verifies that logos_core_load_plugin_with_dependencies() aborts on null plugin name
+TEST_F(PluginManagerTest, LoadPluginWithDependencies_AbortsForNull) {
+    EXPECT_DEATH(logos_core_load_plugin_with_dependencies(nullptr), "");
 }
 
 // Verifies that logos_core_load_plugin_with_dependencies() returns 0 for unknown plugin

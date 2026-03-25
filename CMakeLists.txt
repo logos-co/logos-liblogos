@@ -46,6 +46,6 @@ install(TARGETS logos_core logos_host
 )
 
 # Install headers
-install(FILES src/common/interface.h src/logos_core/logos_core.h
+install(FILES src/logos_core/logos_core.h
     DESTINATION include
 )

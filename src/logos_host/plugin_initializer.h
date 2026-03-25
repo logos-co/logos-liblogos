@@ -2,7 +2,7 @@
 #define PLUGIN_INITIALIZER_H
 
 #include <QString>
-#include <module_lib/module_lib.h>
+#include "module_lib.h"
 
 class PluginInterface;
 class LogosAPI;

@@ -2,8 +2,6 @@
 #include "app_lifecycle.h"
 #include "plugin_manager.h"
 #include "logos_core_internal.h"
-#include "logos_mode.h"
-#include "logos_api.h"
 #include <QCoreApplication>
 #include <QDebug>
 
@@ -27,14 +25,7 @@ protected:
         g_plugins_dirs.clear();
         g_loaded_plugins.clear();
         g_known_plugins.clear();
-
-        // Reset mode to default (Remote)
-        LogosModeConfig::setMode(LogosMode::Remote);
-
         g_plugin_processes.clear();
-
-        // Clear local plugin APIs
-        g_local_plugin_apis.clear();
     }
 
     void TearDown() override {
@@ -49,12 +40,6 @@ protected:
             delete process;
         }
         g_plugin_processes.clear();
-
-        // Clean up local plugin APIs
-        for (auto it = g_local_plugin_apis.begin(); it != g_local_plugin_apis.end(); ++it) {
-            delete it.value();
-        }
-        g_local_plugin_apis.clear();
 
         // Clear global state
         g_plugins_dirs.clear();
@@ -83,12 +68,12 @@ TEST_F(AppLifecycleTest, Init_CreatesNewApp) {
     AppLifecycle::init(1, argv);
     
     // App should be initialized
-    ASSERT_TRUE(AppLifecycle::isInitialized());
+    ASSERT_TRUE(g_app != nullptr);
     
     // If there was an existing app, we should reuse it and not claim ownership
     if (beforeApp) {
         EXPECT_EQ(QCoreApplication::instance(), beforeApp);
-        EXPECT_FALSE(AppLifecycle::isAppOwnedByUs());
+        EXPECT_FALSE(g_app_created_by_us);
     }
 }
 
@@ -104,38 +89,6 @@ TEST_F(AppLifecycleTest, Init_RegistersMetaType) {
 }
 
 // =============================================================================
-// Mode Configuration Tests
-// =============================================================================
-
-// Verifies that setMode(1) correctly sets the SDK to Local mode (in-process plugins)
-TEST_F(AppLifecycleTest, SetMode_LocalMode) {
-    AppLifecycle::setMode(1);
-
-    EXPECT_EQ(LogosModeConfig::getMode(), LogosMode::Local);
-    EXPECT_TRUE(LogosModeConfig::isLocal());
-    EXPECT_FALSE(LogosModeConfig::isRemote());
-}
-
-// Verifies that setMode(0) correctly sets the SDK to Remote mode (separate processes)
-TEST_F(AppLifecycleTest, SetMode_RemoteMode) {
-    // First set to Local
-    AppLifecycle::setMode(1);
-
-    // Then set to Remote
-    AppLifecycle::setMode(0);
-
-    EXPECT_EQ(LogosModeConfig::getMode(), LogosMode::Remote);
-    EXPECT_TRUE(LogosModeConfig::isRemote());
-    EXPECT_FALSE(LogosModeConfig::isLocal());
-}
-
-// Verifies that the default mode is Remote (separate process communication)
-TEST_F(AppLifecycleTest, SetMode_DefaultIsRemote) {
-    // After SetUp, mode should be Remote (we reset it in SetUp)
-    EXPECT_EQ(LogosModeConfig::getMode(), LogosMode::Remote);
-}
-
-// =============================================================================
 // Plugin Directory Tests
 // =============================================================================
 
@@ -145,9 +98,8 @@ TEST_F(AppLifecycleTest, SetPluginsDir_SetsDirectory) {
 
     AppLifecycle::setPluginsDir(testDir);
 
-    auto dirs = AppLifecycle::getPluginsDirs();
-    ASSERT_EQ(dirs.size(), 1);
-    EXPECT_EQ(dirs[0].toStdString(), testDir);
+    ASSERT_EQ(g_plugins_dirs.size(), 1);
+    EXPECT_EQ(g_plugins_dirs[0].toStdString(), testDir);
 }
 
 // Verifies that setPluginsDir() clears any existing directories before setting the new one
@@ -155,14 +107,13 @@ TEST_F(AppLifecycleTest, SetPluginsDir_ClearsExisting) {
     // Add multiple directories
     AppLifecycle::addPluginsDir("/dir1");
     AppLifecycle::addPluginsDir("/dir2");
-    ASSERT_EQ(AppLifecycle::getPluginsDirs().size(), 2);
+    ASSERT_EQ(g_plugins_dirs.size(), 2);
     
     // SetPluginsDir should clear and replace
     AppLifecycle::setPluginsDir("/new_dir");
     
-    auto dirs = AppLifecycle::getPluginsDirs();
-    ASSERT_EQ(dirs.size(), 1);
-    EXPECT_EQ(dirs[0].toStdString(), "/new_dir");
+    ASSERT_EQ(g_plugins_dirs.size(), 1);
+    EXPECT_EQ(g_plugins_dirs[0].toStdString(), "/new_dir");
 }
 
 // Verifies that addPluginsDir() appends directories to the list without clearing existing ones
@@ -170,7 +121,7 @@ TEST_F(AppLifecycleTest, AddPluginsDir_AppendsDirectory) {
     AppLifecycle::addPluginsDir("/dir1");
     AppLifecycle::addPluginsDir("/dir2");
     
-    auto dirs = AppLifecycle::getPluginsDirs();
+    auto dirs = g_plugins_dirs;
     ASSERT_EQ(dirs.size(), 2);
     EXPECT_EQ(dirs[0].toStdString(), "/dir1");
     EXPECT_EQ(dirs[1].toStdString(), "/dir2");
@@ -182,7 +133,7 @@ TEST_F(AppLifecycleTest, AddPluginsDir_NoDuplicates) {
     AppLifecycle::addPluginsDir("/test");
     
     // Should only be added once
-    EXPECT_EQ(AppLifecycle::getPluginsDirs().size(), 1);
+    EXPECT_EQ(g_plugins_dirs.size(), 1);
 }
 
 // =============================================================================
@@ -231,7 +182,7 @@ TEST_F(AppLifecycleTest, Cleanup_PreservesExternalApp) {
     char* argv[] = {(char*)"test"};
     AppLifecycle::init(1, argv);
     
-    EXPECT_FALSE(AppLifecycle::isAppOwnedByUs()) << "Should not claim ownership of external app";
+    EXPECT_FALSE(g_app_created_by_us) << "Should not claim ownership of external app";
 }
 
 // =============================================================================
@@ -291,7 +242,7 @@ TEST_F(AppLifecycleTest, Start_UsesCustomPluginsDirs) {
     // After start, plugins dir should still contain our custom dir
     AppLifecycle::start();
     
-    auto dirs = AppLifecycle::getPluginsDirs();
+    auto dirs = g_plugins_dirs;
     ASSERT_EQ(dirs.size(), 1);
     EXPECT_EQ(dirs[0].toStdString(), "/custom/plugins");
 }
@@ -320,9 +271,9 @@ TEST_F(AppLifecycleTest, Exec_WithAppAvailable) {
     char* argv[] = {(char*)"test"};
     AppLifecycle::init(1, argv);
     
-    ASSERT_TRUE(AppLifecycle::isInitialized());
+    ASSERT_TRUE(g_app != nullptr);
     
     // We can't actually call exec() as it would block
     // Just verify the app exists and exec would be callable
-    EXPECT_TRUE(AppLifecycle::isInitialized());
+    EXPECT_TRUE(g_app != nullptr);
 }

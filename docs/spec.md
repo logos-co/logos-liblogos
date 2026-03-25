@@ -9,7 +9,6 @@ The platform is designed to:
 - Isolate each module in its own process for robustness and security
 - Provide transparent inter-module RPC via a remote object registry
 - Support token-based authentication for secure module-to-module communication
-- Offer a local (in-process) mode for mobile/embedded platforms where process spawning is constrained
 - Expose a C API so that host applications in any language can drive the runtime
 
 ## Definitions & Acronyms
@@ -21,8 +20,6 @@ The platform is designed to:
 | **Module Host** | `logos_host` — a lightweight executable that loads a single module in its own process |
 | **Core Manager** | A built-in module that exposes core functionality via RPC, allowing modules to manage the core without linking against the C API |
 | **Capability Module** | A built-in module that handles authorization tokens for inter-module communication |
-| **Remote Mode** | Default operating mode where each module runs in a separate `logos_host` process |
-| **Local Mode** | In-process operating mode for mobile/embedded platforms; modules share the host process |
 | **RPC** | Remote Procedure Call — the mechanism by which modules invoke methods on each other |
 | **IPC** | Inter-Process Communication — the underlying transport |
 | **Token** | A UUID-based authentication credential issued by the core or capability module for securing RPC calls |
@@ -44,9 +41,7 @@ At a high level, the Logos Core consists of:
 
 **Remote Object Registry** — A registry that maintains a mapping of module names to remote object replicas and forwards method calls/events.
 
-### Operating Modes
-
-#### Remote Mode
+### Process Architecture
 
 Each module runs in its own process for isolation:
 
@@ -110,7 +105,7 @@ Every module ships a `metadata.json` referenced by Qt's `Q_PLUGIN_METADATA` macr
 3. Modules are added to the "known" list without being loaded
 4. Multiple plugin directories can be configured
 
-#### Loading (Remote Mode)
+#### Loading
 
 1. Core locates the plugin file for the requested module name
 2. Core resolves dependencies and loads them first (topological sort with circular dependency detection)
@@ -121,16 +116,9 @@ Every module ships a `metadata.json` referenced by Qt's `Q_PLUGIN_METADATA` macr
 7. Host process registers the plugin with the remote object registry
 8. Core waits for registration and records the module as loaded
 
-#### Loading (Local Mode)
-
-1. Plugin is loaded in-process through `QPluginLoader`
-2. Module is registered via the SDK PluginRegistry
-3. Tokens are generated and stored without launching `logos_host`
-4. Static plugins can also be registered via dedicated API functions
-
 #### Unloading
 
-1. The module's host process is terminated (Remote mode) or unregistered (Local mode)
+1. The module's host process is terminated
 2. The module is removed from the loaded modules list
 3. Associated tokens and state are cleaned up
 
@@ -174,7 +162,6 @@ The platform supports two build variants:
 | Function | Purpose |
 |----------|---------|
 | `logos_core_init(argc, argv)` | Initialize global state, optionally set plugin directory. Creates a QCoreApplication if one does not exist. |
-| `logos_core_set_mode(mode)` | Switch between `LOGOS_MODE_REMOTE` (default) and `LOGOS_MODE_LOCAL` (in-process). Must be called before `logos_core_start()`. |
 | `logos_core_set_plugins_dir(path)` | Set the plugin directory. Must be called before starting. |
 | `logos_core_add_plugins_dir(path)` | Add an additional plugin directory to scan. |
 | `logos_core_start()` | Scan plugin directories, process metadata, create Core Manager, load built-in modules, start remote object registry. |

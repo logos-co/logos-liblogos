@@ -15,14 +15,6 @@ extern "C" {
 // Initialize the logos core library
 LOGOS_CORE_EXPORT void logos_core_init(int argc, char *argv[]);
 
-// Set the SDK communication mode
-// mode: 0 = Remote (default, uses separate processes via logos_host)
-//       1 = Local (in-process)
-// Must be called before logos_core_start()
-#define LOGOS_MODE_REMOTE 0
-#define LOGOS_MODE_LOCAL 1
-LOGOS_CORE_EXPORT void logos_core_set_mode(int mode);
-
 // Set a custom plugins directory
 LOGOS_CORE_EXPORT void logos_core_set_plugins_dir(const char* plugins_dir);
 

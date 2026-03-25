@@ -23,11 +23,6 @@ pkgs.stdenv.mkDerivation {
       cp src/logos_core/logos_core.h $out/include/
     fi
     
-    # Install common interface header
-    if [ -f src/common/interface.h ]; then
-      cp src/common/interface.h $out/include/
-    fi
-    
     # Also copy SDK headers if available (including logos_mode.h)
     if [ -n "${toString logosSdk}" ] && [ -d "${toString logosSdk}/include" ]; then
       cp -r ${toString logosSdk}/include/* $out/include/ 2>/dev/null || true

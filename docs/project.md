@@ -74,14 +74,13 @@ logos-liblogos/
 
 **Files:** `src/logos_core/app_lifecycle.h`, `src/logos_core/app_lifecycle.cpp`
 
-**Purpose:** Application lifecycle management. Handles QCoreApplication creation, mode selection, plugin directory configuration, startup, and cleanup.
+**Purpose:** Application lifecycle management. Handles QCoreApplication creation, plugin directory configuration, startup, and cleanup.
 
 **API (namespace `AppLifecycle`):**
 
 | Method | Description |
 |--------|-------------|
 | `init(argc, argv)` | Initialize global state, create QCoreApplication if needed |
-| `setMode(mode)` | Switch between Remote and Local mode |
 | `setPluginsDir(path)` | Set the primary plugin directory |
 | `addPluginsDir(path)` | Add an additional plugin directory |
 | `start()` | Scan plugins, create Core Manager, load built-in modules, start registry |
@@ -93,15 +92,14 @@ logos-liblogos/
 
 **Files:** `src/logos_core/plugin_manager.h`, `src/logos_core/plugin_manager.cpp`
 
-**Purpose:** Module discovery, loading, unloading, and dependency resolution. The largest module (~750 lines). Supports both Remote mode (via `logos_host` processes) and Local mode (in-process via `QPluginLoader`).
+**Purpose:** Module discovery, loading, unloading, and dependency resolution. Each module runs in a separate `logos_host` process for isolation.
 
 **API (namespace `PluginManager`):**
 
 | Method | Description |
 |--------|-------------|
 | `processPlugin(path) → char*` | Extract metadata from a module file, register as known |
-| `loadPlugin(name) → int` | Load a module (spawns `logos_host` in Remote mode) |
-| `loadPluginLocal(name) → int` | Load a module in-process (Local mode) |
+| `loadPlugin(name) → int` | Load a module (spawns `logos_host` process) |
 | `loadPluginWithDependencies(name) → int` | Resolve dependency tree and load in correct order |
 | `unloadPlugin(name) → int` | Terminate module process and remove from loaded list |
 | `resolveDependencies(name) → list` | Topological sort with circular dependency detection |
