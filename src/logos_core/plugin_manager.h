@@ -6,6 +6,14 @@
 #include <QHash>
 
 namespace PluginManager {
+    // Plugin directory management
+    void setPluginsDir(const char* plugins_dir);
+    void addPluginsDir(const char* plugins_dir);
+
+    // Resolve all plugin directories (bundled + user-specified), scan them,
+    // and populate the known plugins registry
+    void discoverPlugins();
+
     // Process a plugin file and extract its metadata
     // Returns the plugin name if successful, empty string otherwise
     QString processPlugin(const QString& pluginPath);
@@ -28,6 +36,9 @@ namespace PluginManager {
     // Unload a plugin by name
     // Returns true if successful, false otherwise
     bool unloadPlugin(const QString& pluginName);
+
+    // Terminate all running plugin processes
+    void terminateAll();
     
     // Get loaded plugins as a C string array (for C API)
     // Returns a null-terminated array of plugin names that must be freed by the caller

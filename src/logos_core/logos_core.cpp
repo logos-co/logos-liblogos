@@ -15,11 +15,11 @@ void logos_core_init(int argc, char *argv[]) {
 }
 
 void logos_core_set_plugins_dir(const char* plugins_dir) {
-    AppLifecycle::setPluginsDir(plugins_dir);
+    PluginManager::setPluginsDir(plugins_dir);
 }
 
 void logos_core_add_plugins_dir(const char* plugins_dir) {
-    AppLifecycle::addPluginsDir(plugins_dir);
+    PluginManager::addPluginsDir(plugins_dir);
 }
 
 void logos_core_start() {

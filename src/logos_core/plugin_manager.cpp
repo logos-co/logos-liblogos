@@ -10,6 +10,7 @@
 #include <QThread>
 #include <QProcess>
 #include <QLocalSocket>
+#include <QCoreApplication>
 #include <cstring>
 #include <cassert>
 #include "logos_api.h"
@@ -20,6 +21,89 @@
 using namespace ModuleLib;
 
 namespace PluginManager {
+
+    void setPluginsDir(const char* plugins_dir) {
+        assert(plugins_dir != nullptr);
+        g_plugins_dirs.clear();
+        g_plugins_dirs.append(QString(plugins_dir));
+        qInfo() << "Custom plugins directory set to:" << g_plugins_dirs.first();
+    }
+
+    void addPluginsDir(const char* plugins_dir) {
+        assert(plugins_dir != nullptr);
+        QString dir = QString(plugins_dir);
+        if (g_plugins_dirs.contains(dir)) return;
+        g_plugins_dirs.append(dir);
+        qDebug() << "Added plugins directory:" << dir;
+    }
+
+    void discoverPlugins() {
+        g_loaded_plugins.clear();
+
+        QStringList pluginsDirs;
+
+        QString defaultDir = qEnvironmentVariable("LOGOS_BUNDLED_MODULES_DIR");
+        if (defaultDir.isEmpty()) {
+            defaultDir = QDir::cleanPath(QCoreApplication::applicationDirPath() + "/../modules");
+        }
+        if (!defaultDir.isEmpty() && QDir(defaultDir).exists()) {
+            pluginsDirs << defaultDir;
+        }
+
+        for (const QString& dir : g_plugins_dirs) {
+            if (!pluginsDirs.contains(dir)) {
+                pluginsDirs << dir;
+            }
+        }
+
+        qDebug() << "Looking for modules in" << pluginsDirs.size() << "directories:" << pluginsDirs;
+
+        for (const QString& pluginsDir : pluginsDirs) {
+            qDebug() << "Scanning directory:" << pluginsDir;
+            QStringList pluginPaths = findPlugins(pluginsDir);
+
+            if (pluginPaths.isEmpty()) {
+                qDebug() << "No modules found in:" << pluginsDir;
+            } else {
+                qDebug() << "Found" << pluginPaths.size() << "modules in:" << pluginsDir;
+
+                for (const QString &pluginPath : pluginPaths) {
+                    QString pluginName = processPlugin(pluginPath);
+                    if (pluginName.isEmpty()) {
+                        qWarning() << "Failed to process plugin (no metadata or invalid):" << pluginPath;
+                    } else {
+                        qDebug() << "Successfully processed plugin:" << pluginName;
+                    }
+                }
+            }
+        }
+
+        qDebug() << "Total known plugins after processing:" << g_known_plugins.size();
+        qDebug() << "Known plugin names:" << g_known_plugins.keys();
+    }
+
+    void terminateAll() {
+        if (g_plugin_processes.isEmpty()) return;
+
+        qDebug() << "Terminating all plugin processes...";
+        for (auto it = g_plugin_processes.begin(); it != g_plugin_processes.end(); ++it) {
+            QProcess* process = it.value();
+            QString pluginName = it.key();
+
+            qDebug() << "Terminating plugin process:" << pluginName;
+            process->terminate();
+
+            if (!process->waitForFinished(3000)) {
+                qWarning() << "Process did not terminate gracefully, killing it:" << pluginName;
+                process->kill();
+                process->waitForFinished(1000);
+            }
+
+            delete process;
+        }
+        g_plugin_processes.clear();
+        g_loaded_plugins.clear();
+    }
 
     QString processPlugin(const QString &pluginPath) {
         auto metadataOpt = LogosModule::extractMetadata(pluginPath);

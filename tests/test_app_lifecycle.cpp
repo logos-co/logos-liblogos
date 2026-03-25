@@ -96,7 +96,7 @@ TEST_F(AppLifecycleTest, Init_RegistersMetaType) {
 TEST_F(AppLifecycleTest, SetPluginsDir_SetsDirectory) {
     const char* testDir = "/test/plugins";
 
-    AppLifecycle::setPluginsDir(testDir);
+    PluginManager::setPluginsDir(testDir);
 
     ASSERT_EQ(g_plugins_dirs.size(), 1);
     EXPECT_EQ(g_plugins_dirs[0].toStdString(), testDir);
@@ -104,13 +104,11 @@ TEST_F(AppLifecycleTest, SetPluginsDir_SetsDirectory) {
 
 // Verifies that setPluginsDir() clears any existing directories before setting the new one
 TEST_F(AppLifecycleTest, SetPluginsDir_ClearsExisting) {
-    // Add multiple directories
-    AppLifecycle::addPluginsDir("/dir1");
-    AppLifecycle::addPluginsDir("/dir2");
+    PluginManager::addPluginsDir("/dir1");
+    PluginManager::addPluginsDir("/dir2");
     ASSERT_EQ(g_plugins_dirs.size(), 2);
     
-    // SetPluginsDir should clear and replace
-    AppLifecycle::setPluginsDir("/new_dir");
+    PluginManager::setPluginsDir("/new_dir");
     
     ASSERT_EQ(g_plugins_dirs.size(), 1);
     EXPECT_EQ(g_plugins_dirs[0].toStdString(), "/new_dir");
@@ -118,8 +116,8 @@ TEST_F(AppLifecycleTest, SetPluginsDir_ClearsExisting) {
 
 // Verifies that addPluginsDir() appends directories to the list without clearing existing ones
 TEST_F(AppLifecycleTest, AddPluginsDir_AppendsDirectory) {
-    AppLifecycle::addPluginsDir("/dir1");
-    AppLifecycle::addPluginsDir("/dir2");
+    PluginManager::addPluginsDir("/dir1");
+    PluginManager::addPluginsDir("/dir2");
     
     auto dirs = g_plugins_dirs;
     ASSERT_EQ(dirs.size(), 2);
@@ -129,8 +127,8 @@ TEST_F(AppLifecycleTest, AddPluginsDir_AppendsDirectory) {
 
 // Verifies that addPluginsDir() prevents duplicate directory entries
 TEST_F(AppLifecycleTest, AddPluginsDir_NoDuplicates) {
-    AppLifecycle::addPluginsDir("/test");
-    AppLifecycle::addPluginsDir("/test");
+    PluginManager::addPluginsDir("/test");
+    PluginManager::addPluginsDir("/test");
     
     // Should only be added once
     EXPECT_EQ(g_plugins_dirs.size(), 1);
@@ -237,7 +235,7 @@ TEST_F(AppLifecycleTest, Start_UsesCustomPluginsDirs) {
     char* argv[] = {(char*)"test"};
     AppLifecycle::init(1, argv);
     
-    AppLifecycle::setPluginsDir("/custom/plugins");
+    PluginManager::setPluginsDir("/custom/plugins");
     
     // After start, plugins dir should still contain our custom dir
     AppLifecycle::start();
