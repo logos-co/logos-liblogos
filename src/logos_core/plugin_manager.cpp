@@ -22,7 +22,7 @@ namespace {
     QStringList s_plugins_dirs;
     QStringList s_loaded_plugins;
     QHash<QString, QString> s_known_plugins;
-    QHash<QString, QJsonObject> s_plugin_metadata;
+    QHash<QString, QStringList> s_plugin_dependencies;
     QHash<QString, QProcess*> s_plugin_processes;
 }
 
@@ -129,7 +129,8 @@ namespace PluginManager {
         }
 
         s_known_plugins.insert(metadata.name, pluginPath);
-        s_plugin_metadata.insert(metadata.name, metadata.rawMetadata);
+
+        s_plugin_dependencies.insert(metadata.name, metadata.dependencies);
 
         return metadata.name;
     }
@@ -626,12 +627,10 @@ namespace PluginManager {
             
             modulesToLoad.insert(moduleName);
             
-            if (s_plugin_metadata.contains(moduleName)) {
-                QJsonObject metadata = s_plugin_metadata.value(moduleName);
-                QJsonArray deps = metadata.value("dependencies").toArray();
-                for (const QJsonValue& dep : deps) {
-                    QString depName = dep.toString();
-                    if (!depName.isEmpty() && !modulesToLoad.contains(depName)) {
+            if (s_plugin_dependencies.contains(moduleName)) {
+                const QStringList& deps = s_plugin_dependencies.value(moduleName);
+                for (const QString& depName : deps) {
+                    if (!modulesToLoad.contains(depName)) {
                         queue.append(depName);
                     }
                 }
@@ -650,12 +649,10 @@ namespace PluginManager {
                 inDegree[moduleName] = 0;
             }
             
-            if (s_plugin_metadata.contains(moduleName)) {
-                QJsonObject metadata = s_plugin_metadata.value(moduleName);
-                QJsonArray deps = metadata.value("dependencies").toArray();
-                for (const QJsonValue& dep : deps) {
-                    QString depName = dep.toString();
-                    if (!depName.isEmpty() && modulesToLoad.contains(depName)) {
+            if (s_plugin_dependencies.contains(moduleName)) {
+                const QStringList& deps = s_plugin_dependencies.value(moduleName);
+                for (const QString& depName : deps) {
+                    if (modulesToLoad.contains(depName)) {
                         inDegree[moduleName]++;
                         dependents[depName].append(moduleName);
                     }
@@ -704,7 +701,7 @@ namespace PluginManager {
         s_plugins_dirs.clear();
         s_loaded_plugins.clear();
         s_known_plugins.clear();
-        s_plugin_metadata.clear();
+        s_plugin_dependencies.clear();
         
         // Terminate and clean up all plugin processes
         for (auto it = s_plugin_processes.begin(); it != s_plugin_processes.end(); ++it) {
@@ -725,8 +722,8 @@ namespace PluginManager {
         s_known_plugins.insert(name, path);
     }
 
-    void addPluginMetadata(const QString& name, const QJsonObject& metadata) {
-        s_plugin_metadata.insert(name, metadata);
+    void addPluginDependencies(const QString& name, const QStringList& dependencies) {
+        s_plugin_dependencies.insert(name, dependencies);
     }
 
     QHash<QString, qint64> getPluginProcessIds() {

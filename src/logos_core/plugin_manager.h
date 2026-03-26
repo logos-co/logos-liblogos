@@ -4,7 +4,6 @@
 #include <QString>
 #include <QStringList>
 #include <QHash>
-#include <QJsonObject>
 
 class QProcess;
 
@@ -35,7 +34,7 @@ namespace PluginManager {
 
     void clearState();
     void addKnownPlugin(const QString& name, const QString& path);
-    void addPluginMetadata(const QString& name, const QJsonObject& metadata);
+    void addPluginDependencies(const QString& name, const QStringList& dependencies);
 
     // Register a plugin as loaded without spawning a process.
     // If process is non-null it is tracked for termination/stats.

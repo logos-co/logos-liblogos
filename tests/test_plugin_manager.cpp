@@ -370,10 +370,7 @@ TEST_F(PluginManagerTest, ResolveDependencies_ReturnsEmptyForUnknownPlugin) {
 
 TEST_F(PluginManagerTest, ResolveDependencies_ReturnsSinglePluginWithNoDeps) {
     PluginManager::addKnownPlugin("plugin_a", "/path/to/plugin_a");
-    QJsonObject metadata;
-    metadata["name"] = "plugin_a";
-    metadata["dependencies"] = QJsonArray();
-    PluginManager::addPluginMetadata("plugin_a", metadata);
+    PluginManager::addPluginDependencies("plugin_a", {});
 
     QStringList requested;
     requested.append("plugin_a");
@@ -388,17 +385,8 @@ TEST_F(PluginManagerTest, ResolveDependencies_ReturnsCorrectOrder) {
     PluginManager::addKnownPlugin("plugin_a", "/path/to/plugin_a");
     PluginManager::addKnownPlugin("plugin_b", "/path/to/plugin_b");
 
-    QJsonObject metadataA;
-    metadataA["name"] = "plugin_a";
-    QJsonArray depsA;
-    depsA.append("plugin_b");
-    metadataA["dependencies"] = depsA;
-    PluginManager::addPluginMetadata("plugin_a", metadataA);
-
-    QJsonObject metadataB;
-    metadataB["name"] = "plugin_b";
-    metadataB["dependencies"] = QJsonArray();
-    PluginManager::addPluginMetadata("plugin_b", metadataB);
+    PluginManager::addPluginDependencies("plugin_a", {"plugin_b"});
+    PluginManager::addPluginDependencies("plugin_b", {});
 
     QStringList requested;
     requested.append("plugin_a");
@@ -415,24 +403,9 @@ TEST_F(PluginManagerTest, ResolveDependencies_HandlesTransitiveDeps) {
     PluginManager::addKnownPlugin("plugin_b", "/path/to/plugin_b");
     PluginManager::addKnownPlugin("plugin_c", "/path/to/plugin_c");
 
-    QJsonObject metadataA;
-    metadataA["name"] = "plugin_a";
-    QJsonArray depsA;
-    depsA.append("plugin_b");
-    metadataA["dependencies"] = depsA;
-    PluginManager::addPluginMetadata("plugin_a", metadataA);
-
-    QJsonObject metadataB;
-    metadataB["name"] = "plugin_b";
-    QJsonArray depsB;
-    depsB.append("plugin_c");
-    metadataB["dependencies"] = depsB;
-    PluginManager::addPluginMetadata("plugin_b", metadataB);
-
-    QJsonObject metadataC;
-    metadataC["name"] = "plugin_c";
-    metadataC["dependencies"] = QJsonArray();
-    PluginManager::addPluginMetadata("plugin_c", metadataC);
+    PluginManager::addPluginDependencies("plugin_a", {"plugin_b"});
+    PluginManager::addPluginDependencies("plugin_b", {"plugin_c"});
+    PluginManager::addPluginDependencies("plugin_c", {});
 
     QStringList requested;
     requested.append("plugin_a");
@@ -462,17 +435,8 @@ TEST_F(PluginManagerTest, LoadPluginWithDependencies_SkipsAlreadyLoaded) {
     PluginManager::addKnownPlugin("plugin_a", "/path/to/plugin_a");
     PluginManager::addKnownPlugin("plugin_b", "/path/to/plugin_b");
 
-    QJsonObject metadataA;
-    metadataA["name"] = "plugin_a";
-    QJsonArray depsA;
-    depsA.append("plugin_b");
-    metadataA["dependencies"] = depsA;
-    PluginManager::addPluginMetadata("plugin_a", metadataA);
-
-    QJsonObject metadataB;
-    metadataB["name"] = "plugin_b";
-    metadataB["dependencies"] = QJsonArray();
-    PluginManager::addPluginMetadata("plugin_b", metadataB);
+    PluginManager::addPluginDependencies("plugin_a", {"plugin_b"});
+    PluginManager::addPluginDependencies("plugin_b", {});
 
     PluginManager::registerLoadedPlugin("plugin_b");
 
