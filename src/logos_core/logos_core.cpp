@@ -1,5 +1,4 @@
 #include "logos_core.h"
-#include "logos_core_internal.h"
 #include "app_lifecycle.h"
 #include "plugin_manager.h"
 #include <process_stats/process_stats.h>
@@ -15,11 +14,11 @@ void logos_core_init(int argc, char *argv[]) {
 }
 
 void logos_core_set_plugins_dir(const char* plugins_dir) {
-    AppLifecycle::setPluginsDir(plugins_dir);
+    PluginManager::setPluginsDir(plugins_dir);
 }
 
 void logos_core_add_plugins_dir(const char* plugins_dir) {
-    AppLifecycle::addPluginsDir(plugins_dir);
+    PluginManager::addPluginsDir(plugins_dir);
 }
 
 void logos_core_start() {
@@ -135,13 +134,7 @@ char* logos_core_get_token(const char* key) {
 }
 
 char* logos_core_get_module_stats() {
-    QHash<QString, qint64> processes;
-    for (auto it = g_plugin_processes.begin(); it != g_plugin_processes.end(); ++it) {
-        if (it.value()) {
-            processes.insert(it.key(), it.value()->processId());
-        }
-    }
-    return ProcessStats::getModuleStats(processes);
+    return ProcessStats::getModuleStats(PluginManager::getPluginProcessIds());
 }
 
 void logos_core_process_events() {

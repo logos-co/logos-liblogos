@@ -1,15 +1,14 @@
 #include "plugin_manager.h"
-#include "logos_core_internal.h"
 #include <QDebug>
 #include <QDir>
 #include <QFile>
-#include <QJsonObject>
 #include <QJsonDocument>
 #include <QJsonArray>
 #include <QUuid>
 #include <QThread>
 #include <QProcess>
 #include <QLocalSocket>
+#include <QCoreApplication>
 #include <cstring>
 #include <cassert>
 #include "logos_api.h"
@@ -19,7 +18,102 @@
 
 using namespace ModuleLib;
 
+namespace {
+    QStringList s_plugins_dirs;
+    QStringList s_loaded_plugins;
+    QHash<QString, QString> s_known_plugins;
+    QHash<QString, QJsonObject> s_plugin_metadata;
+    QHash<QString, QProcess*> s_plugin_processes;
+}
+
 namespace PluginManager {
+
+    void setPluginsDir(const char* plugins_dir) {
+        assert(plugins_dir != nullptr);
+        s_plugins_dirs.clear();
+        s_plugins_dirs.append(QString(plugins_dir));
+        qInfo() << "Custom plugins directory set to:" << s_plugins_dirs.first();
+    }
+
+    void addPluginsDir(const char* plugins_dir) {
+        assert(plugins_dir != nullptr);
+        QString dir = QString(plugins_dir);
+        if (s_plugins_dirs.contains(dir)) return;
+        s_plugins_dirs.append(dir);
+        qDebug() << "Added plugins directory:" << dir;
+    }
+
+    QStringList getPluginsDirs() {
+        return s_plugins_dirs;
+    }
+
+    void discoverPlugins() {
+        s_loaded_plugins.clear();
+
+        QStringList pluginsDirs;
+
+        QString defaultDir = qEnvironmentVariable("LOGOS_BUNDLED_MODULES_DIR");
+        if (defaultDir.isEmpty()) {
+            defaultDir = QDir::cleanPath(QCoreApplication::applicationDirPath() + "/../modules");
+        }
+        if (!defaultDir.isEmpty() && QDir(defaultDir).exists()) {
+            pluginsDirs << defaultDir;
+        }
+
+        for (const QString& dir : s_plugins_dirs) {
+            if (!pluginsDirs.contains(dir)) {
+                pluginsDirs << dir;
+            }
+        }
+
+        qDebug() << "Looking for modules in" << pluginsDirs.size() << "directories:" << pluginsDirs;
+
+        for (const QString& pluginsDir : pluginsDirs) {
+            qDebug() << "Scanning directory:" << pluginsDir;
+            QStringList pluginPaths = findPlugins(pluginsDir);
+
+            if (pluginPaths.isEmpty()) {
+                qDebug() << "No modules found in:" << pluginsDir;
+            } else {
+                qDebug() << "Found" << pluginPaths.size() << "modules in:" << pluginsDir;
+
+                for (const QString &pluginPath : pluginPaths) {
+                    QString pluginName = processPlugin(pluginPath);
+                    if (pluginName.isEmpty()) {
+                        qWarning() << "Failed to process plugin (no metadata or invalid):" << pluginPath;
+                    } else {
+                        qDebug() << "Successfully processed plugin:" << pluginName;
+                    }
+                }
+            }
+        }
+
+        qDebug() << "Total known plugins after processing:" << s_known_plugins.size();
+        qDebug() << "Known plugin names:" << s_known_plugins.keys();
+    }
+
+    void terminateAll() {
+        if (s_plugin_processes.isEmpty()) return;
+
+        qDebug() << "Terminating all plugin processes...";
+        for (auto it = s_plugin_processes.begin(); it != s_plugin_processes.end(); ++it) {
+            QProcess* process = it.value();
+            QString pluginName = it.key();
+
+            qDebug() << "Terminating plugin process:" << pluginName;
+            process->terminate();
+
+            if (!process->waitForFinished(3000)) {
+                qWarning() << "Process did not terminate gracefully, killing it:" << pluginName;
+                process->kill();
+                process->waitForFinished(1000);
+            }
+
+            delete process;
+        }
+        s_plugin_processes.clear();
+        s_loaded_plugins.clear();
+    }
 
     QString processPlugin(const QString &pluginPath) {
         auto metadataOpt = LogosModule::extractMetadata(pluginPath);
@@ -34,8 +128,8 @@ namespace PluginManager {
             return QString();
         }
 
-        g_known_plugins.insert(metadata.name, pluginPath);
-        g_plugin_metadata.insert(metadata.name, metadata.rawMetadata);
+        s_known_plugins.insert(metadata.name, pluginPath);
+        s_plugin_metadata.insert(metadata.name, metadata.rawMetadata);
 
         return metadata.name;
     }
@@ -43,17 +137,17 @@ namespace PluginManager {
     bool loadPlugin(const QString &pluginName) {
         qDebug() << "Attempting to load plugin by name:" << pluginName;
 
-        if (!g_known_plugins.contains(pluginName)) {
+        if (!s_known_plugins.contains(pluginName)) {
             qWarning() << "Plugin not found among known plugins:" << pluginName;
             return false;
         }
 
-        QString pluginPath = g_known_plugins.value(pluginName);
+        QString pluginPath = s_known_plugins.value(pluginName);
 
         qDebug() << "Loading plugin:" << pluginName << "from path:" << pluginPath << "in separate process";
 
         // Check if plugin is already loaded
-        if (g_plugin_processes.contains(pluginName)) {
+        if (s_plugin_processes.contains(pluginName)) {
             qWarning() << "Plugin already loaded:" << pluginName;
             return false;
         }
@@ -72,8 +166,8 @@ namespace PluginManager {
 
         // 3) Fallback relative to plugins directory (../../logos-liblogos/build/bin/logos_host)
         if (!QFile::exists(logosHostPath)) {
-            if (!g_plugins_dirs.isEmpty()) {
-                QDir pluginsDirCandidate(g_plugins_dirs.first());
+            if (!s_plugins_dirs.isEmpty()) {
+                QDir pluginsDirCandidate(s_plugins_dirs.first());
                 QString candidate = QDir::cleanPath(pluginsDirCandidate.absoluteFilePath("../bin/logos_host"));
                 if (QFile::exists(candidate)) {
                     logosHostPath = candidate;
@@ -153,16 +247,16 @@ namespace PluginManager {
         qDebug() << "Auth token sent securely to plugin:" << pluginName;
 
         // Store the process
-        g_plugin_processes.insert(pluginName, process);
+        s_plugin_processes.insert(pluginName, process);
 
         // Add the plugin name to our loaded plugins list
-        g_loaded_plugins.append(pluginName);
+        s_loaded_plugins.append(pluginName);
 
         TokenManager& tokenManager = TokenManager::instance();
         tokenManager.saveToken(pluginName, authTokenString);
 
         // call InformModuleToken on Capability Module
-        if (g_loaded_plugins.contains("capability_module")) {
+        if (s_loaded_plugins.contains("capability_module")) {
             qDebug() << "Informing capability module about new module token for:" << pluginName;
 
             QString capabilityModuleToken = tokenManager.getToken("capability_module");
@@ -197,8 +291,8 @@ namespace PluginManager {
                             }
                             
                             // Remove from our tracking lists
-                            g_plugin_processes.remove(pluginName);
-                            g_loaded_plugins.removeAll(pluginName);
+                            s_plugin_processes.remove(pluginName);
+                            s_loaded_plugins.removeAll(pluginName);
                             
                             // Clean up the process object
                             process->deleteLater();
@@ -255,17 +349,6 @@ namespace PluginManager {
         qDebug() << "Remote registry URL for this plugin: local:logos_" << pluginName;
 
         return true;
-    }
-
-    void loadAndProcessPlugin(const QString &pluginPath) {
-        QString pluginName = processPlugin(pluginPath);
-
-        if (pluginName.isEmpty()) {
-            qWarning() << "Failed to process plugin:" << pluginPath;
-            return;
-        }
-
-        loadPlugin(pluginName);
     }
 
     QString currentPlatformVariant() {
@@ -390,7 +473,7 @@ namespace PluginManager {
         qDebug() << "\n=== Initializing Capability Module ===";
 
         // Check if capability_module is available in known plugins
-        if (!g_known_plugins.contains("capability_module")) {
+        if (!s_known_plugins.contains("capability_module")) {
             qDebug() << "Capability module not found in known plugins, skipping initialization";
             return false;
         }
@@ -414,20 +497,20 @@ namespace PluginManager {
         qDebug() << "Attempting to unload plugin by name:" << pluginName;
 
         // Check if plugin is loaded
-        if (!g_loaded_plugins.contains(pluginName)) {
+        if (!s_loaded_plugins.contains(pluginName)) {
             qWarning() << "Plugin not loaded, cannot unload:" << pluginName;
-            qDebug() << "Loaded plugins:" << g_loaded_plugins;
+            qDebug() << "Loaded plugins:" << s_loaded_plugins;
             return false;
         }
 
         // Check if we have a process for this plugin
-        if (!g_plugin_processes.contains(pluginName)) {
+        if (!s_plugin_processes.contains(pluginName)) {
             qWarning() << "No process found for plugin:" << pluginName;
             return false;
         }
 
         // Get the process
-        QProcess* process = g_plugin_processes.value(pluginName);
+        QProcess* process = s_plugin_processes.value(pluginName);
         
         qDebug() << "Terminating plugin process for:" << pluginName;
         
@@ -442,8 +525,8 @@ namespace PluginManager {
         }
 
         // Remove from our tracking structures
-        g_plugin_processes.remove(pluginName);
-        g_loaded_plugins.removeAll(pluginName);
+        s_plugin_processes.remove(pluginName);
+        s_loaded_plugins.removeAll(pluginName);
         
         // The process will be cleaned up by the signal handler
         qDebug() << "Successfully unloaded plugin:" << pluginName;
@@ -451,7 +534,7 @@ namespace PluginManager {
     }
 
     char** getLoadedPluginsCStr() {
-        int count = g_loaded_plugins.size();
+        int count = s_loaded_plugins.size();
         
         if (count == 0) {
             // Return an array with just a NULL terminator
@@ -465,7 +548,7 @@ namespace PluginManager {
         
         // Copy each plugin name
         for (int i = 0; i < count; ++i) {
-            QByteArray utf8Data = g_loaded_plugins[i].toUtf8();
+            QByteArray utf8Data = s_loaded_plugins[i].toUtf8();
             result[i] = new char[utf8Data.size() + 1];
             strcpy(result[i], utf8Data.constData());
         }
@@ -478,7 +561,7 @@ namespace PluginManager {
 
     char** getKnownPluginsCStr() {
         // Get the keys from the hash (plugin names)
-        QStringList knownPlugins = g_known_plugins.keys();
+        QStringList knownPlugins = s_known_plugins.keys();
         int count = knownPlugins.size();
         
         if (count == 0) {
@@ -506,19 +589,19 @@ namespace PluginManager {
     }
 
     QStringList getLoadedPlugins() {
-        return g_loaded_plugins;
+        return s_loaded_plugins;
     }
 
     QHash<QString, QString> getKnownPlugins() {
-        return g_known_plugins;
+        return s_known_plugins;
     }
 
     bool isPluginLoaded(const QString& name) {
-        return g_loaded_plugins.contains(name);
+        return s_loaded_plugins.contains(name);
     }
 
     bool isPluginKnown(const QString& name) {
-        return g_known_plugins.contains(name);
+        return s_known_plugins.contains(name);
     }
 
     QStringList resolveDependencies(const QStringList& requestedModules) {
@@ -535,7 +618,7 @@ namespace PluginManager {
                 continue;
             }
             
-            if (!g_known_plugins.contains(moduleName)) {
+            if (!s_known_plugins.contains(moduleName)) {
                 qWarning() << "Module not found in known plugins:" << moduleName;
                 missingDependencies.append(moduleName);
                 continue;
@@ -543,8 +626,8 @@ namespace PluginManager {
             
             modulesToLoad.insert(moduleName);
             
-            if (g_plugin_metadata.contains(moduleName)) {
-                QJsonObject metadata = g_plugin_metadata.value(moduleName);
+            if (s_plugin_metadata.contains(moduleName)) {
+                QJsonObject metadata = s_plugin_metadata.value(moduleName);
                 QJsonArray deps = metadata.value("dependencies").toArray();
                 for (const QJsonValue& dep : deps) {
                     QString depName = dep.toString();
@@ -567,8 +650,8 @@ namespace PluginManager {
                 inDegree[moduleName] = 0;
             }
             
-            if (g_plugin_metadata.contains(moduleName)) {
-                QJsonObject metadata = g_plugin_metadata.value(moduleName);
+            if (s_plugin_metadata.contains(moduleName)) {
+                QJsonObject metadata = s_plugin_metadata.value(moduleName);
                 QJsonArray deps = metadata.value("dependencies").toArray();
                 for (const QJsonValue& dep : deps) {
                     QString depName = dep.toString();
@@ -618,13 +701,13 @@ namespace PluginManager {
     void clearState() {
         qDebug() << "Clearing all plugin state";
         
-        g_plugins_dirs.clear();
-        g_loaded_plugins.clear();
-        g_known_plugins.clear();
-        g_plugin_metadata.clear();
+        s_plugins_dirs.clear();
+        s_loaded_plugins.clear();
+        s_known_plugins.clear();
+        s_plugin_metadata.clear();
         
         // Terminate and clean up all plugin processes
-        for (auto it = g_plugin_processes.begin(); it != g_plugin_processes.end(); ++it) {
+        for (auto it = s_plugin_processes.begin(); it != s_plugin_processes.end(); ++it) {
             QProcess* process = it.value();
             if (process) {
                 process->terminate();
@@ -632,14 +715,37 @@ namespace PluginManager {
                 delete process;
             }
         }
-        g_plugin_processes.clear();
+        s_plugin_processes.clear();
 
         qDebug() << "Plugin state cleared";
     }
 
     void addKnownPlugin(const QString& name, const QString& path) {
         qDebug() << "Adding known plugin:" << name << "at path:" << path;
-        g_known_plugins.insert(name, path);
+        s_known_plugins.insert(name, path);
+    }
+
+    void addPluginMetadata(const QString& name, const QJsonObject& metadata) {
+        s_plugin_metadata.insert(name, metadata);
+    }
+
+    QHash<QString, qint64> getPluginProcessIds() {
+        QHash<QString, qint64> result;
+        for (auto it = s_plugin_processes.begin(); it != s_plugin_processes.end(); ++it) {
+            if (it.value()) {
+                result.insert(it.key(), it.value()->processId());
+            }
+        }
+        return result;
+    }
+
+    void registerLoadedPlugin(const QString& name, QProcess* process) {
+        if (!s_loaded_plugins.contains(name)) {
+            s_loaded_plugins.append(name);
+        }
+        if (process) {
+            s_plugin_processes.insert(name, process);
+        }
     }
 
 }

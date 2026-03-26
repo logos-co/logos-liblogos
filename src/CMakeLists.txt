@@ -90,8 +90,6 @@ endif()
 set(LOGOS_CORE_SOURCES
     logos_core/logos_core.cpp
     logos_core/logos_core.h
-    logos_core/logos_core_internal.h
-    logos_core/core_context.cpp
     logos_core/app_lifecycle.cpp
     logos_core/app_lifecycle.h
     logos_core/plugin_manager.cpp
