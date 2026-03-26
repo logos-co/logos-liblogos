@@ -176,43 +176,47 @@ namespace PluginManager {
             return false;
         }
 
-        QStringList arguments;
-        arguments << "--name" << name;
-        arguments << "--path" << pluginPath;
+        std::vector<std::string> arguments = {
+            "--name", name.toStdString(),
+            "--path", pluginPath.toStdString()
+        };
 
-        qDebug() << "Starting logos_host with arguments:" << arguments;
+        qDebug() << "Starting logos_host with arguments:" << name << pluginPath;
 
         QtProcessManager::ProcessCallbacks callbacks;
 
-        callbacks.onFinished = [](const QString& pluginName, int exitCode, bool crashed) {
+        callbacks.onFinished = [](const std::string& pluginName, int exitCode, bool crashed) {
             Q_UNUSED(exitCode);
+            QString qName = QString::fromStdString(pluginName);
             if (crashed) {
-                qCritical() << "Plugin process crashed:" << pluginName << "- terminating core with error";
+                qCritical() << "Plugin process crashed:" << qName << "- terminating core with error";
                 exit(1);
             }
-            s_loaded_plugins.removeAll(pluginName);
+            s_loaded_plugins.removeAll(qName);
         };
 
-        callbacks.onError = [](const QString& pluginName, bool crashed) {
+        callbacks.onError = [](const std::string& pluginName, bool crashed) {
             if (crashed) {
-                qCritical() << "Plugin process crashed:" << pluginName << "- terminating core with error";
+                qCritical() << "Plugin process crashed:" << QString::fromStdString(pluginName) << "- terminating core with error";
                 exit(1);
             }
         };
 
-        callbacks.onOutput = [](const QString& pluginName, const QString& line, bool isStderr) {
+        callbacks.onOutput = [](const std::string& pluginName, const std::string& line, bool isStderr) {
+            QString qName = QString::fromStdString(pluginName);
+            QString qLine = QString::fromStdString(line);
             if (isStderr) {
-                qCritical() << "[LOGOS_HOST" << pluginName << "] STDERR:" << line;
-            } else if (line.contains("qrc:") || line.contains("Warning:") || line.contains("WARNING:")) {
-                qWarning() << "[LOGOS_HOST" << pluginName << "]:" << line;
-            } else if (line.contains("Critical:") || line.contains("FAILED:") || line.contains("ERROR:")) {
-                qCritical() << "[LOGOS_HOST" << pluginName << "]:" << line;
+                qCritical() << "[LOGOS_HOST" << qName << "] STDERR:" << qLine;
+            } else if (qLine.contains("qrc:") || qLine.contains("Warning:") || qLine.contains("WARNING:")) {
+                qWarning() << "[LOGOS_HOST" << qName << "]:" << qLine;
+            } else if (qLine.contains("Critical:") || qLine.contains("FAILED:") || qLine.contains("ERROR:")) {
+                qCritical() << "[LOGOS_HOST" << qName << "]:" << qLine;
             } else {
-                qDebug() << "[LOGOS_HOST" << pluginName << "]:" << line;
+                qDebug() << "[LOGOS_HOST" << qName << "]:" << qLine;
             }
         };
 
-        if (!QtProcessManager::startProcess(name, logosHostPath, arguments, callbacks)) {
+        if (!QtProcessManager::startProcess(name.toStdString(), logosHostPath.toStdString(), arguments, callbacks)) {
             return false;
         }
 
@@ -221,7 +225,7 @@ namespace PluginManager {
         QString authTokenString = authToken.toString(QUuid::WithoutBraces);
         qDebug() << "Generated auth token:" << authTokenString;
 
-        if (!QtProcessManager::sendToken(name, authTokenString)) {
+        if (!QtProcessManager::sendToken(name.toStdString(), authTokenString.toStdString())) {
             return false;
         }
 
@@ -339,12 +343,12 @@ namespace PluginManager {
             return false;
         }
 
-        if (!QtProcessManager::hasProcess(name)) {
+        if (!QtProcessManager::hasProcess(name.toStdString())) {
             qWarning() << "No process found for plugin:" << name;
             return false;
         }
 
-        QtProcessManager::terminateProcess(name);
+        QtProcessManager::terminateProcess(name.toStdString());
 
         s_loaded_plugins.removeAll(name);
         
@@ -531,7 +535,12 @@ namespace PluginManager {
     }
 
     QHash<QString, qint64> getPluginProcessIds() {
-        return QtProcessManager::getAllProcessIds();
+        auto stdMap = QtProcessManager::getAllProcessIds();
+        QHash<QString, qint64> result;
+        for (const auto& [name, pid] : stdMap) {
+            result.insert(QString::fromStdString(name), pid);
+        }
+        return result;
     }
 
     void registerLoadedPlugin(const QString& name) {
