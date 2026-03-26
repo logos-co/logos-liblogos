@@ -17,11 +17,11 @@ namespace PluginManager {
 
     QString processPlugin(const QString& pluginPath);
     char* processPluginCStr(const char* pluginPath);
-    bool loadPlugin(const QString& pluginName);
-    bool loadPluginWithDependencies(const QString& pluginName);
+    bool loadPlugin(const char* pluginName);
+    bool loadPluginWithDependencies(const char* pluginName);
     QStringList findPlugins(const QString& pluginsDir);
     bool initializeCapabilityModule();
-    bool unloadPlugin(const QString& pluginName);
+    bool unloadPlugin(const char* pluginName);
     void terminateAll();
 
     char** getLoadedPluginsCStr();
