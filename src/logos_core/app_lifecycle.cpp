@@ -1,27 +1,12 @@
 #include "app_lifecycle.h"
 #include "plugin_manager.h"
 #include "logos_instance.h"
-#include <QCoreApplication>
-#include <QMetaType>
-
-Q_DECLARE_METATYPE(QObject*)
-
-namespace {
-    QCoreApplication* s_app = nullptr;
-    QCoreApplication* s_owned_app = nullptr;
-}
+#include "qt/qt_app_context.h"
 
 namespace AppLifecycle {
 
     void init(int argc, char* argv[]) {
-        if (QCoreApplication::instance()) {
-            s_app = QCoreApplication::instance();
-        } else {
-            s_app = new QCoreApplication(argc, argv);
-            s_owned_app = s_app;
-        }
-
-        qRegisterMetaType<QObject*>("QObject*");
+        QtAppContext::init(argc, argv);
     }
 
     void start() {
@@ -32,21 +17,16 @@ namespace AppLifecycle {
     }
 
     int exec() {
-        if (!s_app) return -1;
-        return s_app->exec();
+        return QtAppContext::exec();
     }
 
     void cleanup() {
         PluginManager::terminateAll();
-
-        delete s_owned_app;
-        s_owned_app = nullptr;
-        s_app = nullptr;
+        QtAppContext::cleanup();
     }
 
     void processEvents() {
-        if (!s_app) return;
-        s_app->processEvents();
+        QtAppContext::processEvents();
     }
 
 }
