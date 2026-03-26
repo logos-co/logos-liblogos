@@ -44,93 +44,33 @@ char** logos_core_get_known_plugins() {
 
 int logos_core_load_plugin(const char* plugin_name) {
     if (!plugin_name) qFatal("logos_core_load_plugin: plugin_name must not be null");
-    
-    QString name = QString::fromUtf8(plugin_name);
-    bool success = PluginManager::loadPlugin(name);
-    return success ? 1 : 0;
+    return PluginManager::loadPlugin(QString::fromUtf8(plugin_name)) ? 1 : 0;
 }
 
 int logos_core_load_plugin_with_dependencies(const char* plugin_name) {
     if (!plugin_name) qFatal("logos_core_load_plugin_with_dependencies: plugin_name must not be null");
-    
-    QString name = QString::fromUtf8(plugin_name);
-    QStringList requestedModules;
-    requestedModules.append(name);
-    
-    QStringList resolvedModules = PluginManager::resolveDependencies(requestedModules);
-    
-    // If the requested plugin wasn't resolved (unknown plugin), return failure
-    if (resolvedModules.isEmpty() || !resolvedModules.contains(name)) {
-        qWarning() << "Cannot load plugin: plugin not found:" << name;
-        return 0;
-    }
-
-    // Load all plugins in dependency order
-    bool allSucceeded = true;
-    for (const QString& moduleName : resolvedModules) {
-        if (PluginManager::isPluginLoaded(moduleName)) {
-            qDebug() << "Plugin already loaded, skipping:" << moduleName;
-            continue;
-        }
-        if (!PluginManager::loadPlugin(moduleName)) {
-            qWarning() << "Failed to load module:" << moduleName;
-            allSucceeded = false;
-        }
-    }
-    
-    return allSucceeded ? 1 : 0;
+    return PluginManager::loadPluginWithDependencies(QString::fromUtf8(plugin_name)) ? 1 : 0;
 }
 
 int logos_core_unload_plugin(const char* plugin_name) {
     if (!plugin_name) qFatal("logos_core_unload_plugin: plugin_name must not be null");
-
-    QString name = QString::fromUtf8(plugin_name);
-    bool success = PluginManager::unloadPlugin(name);
-    return success ? 1 : 0;
+    return PluginManager::unloadPlugin(QString::fromUtf8(plugin_name)) ? 1 : 0;
 }
 
 char* logos_core_process_plugin(const char* plugin_path) {
     if (!plugin_path) qFatal("logos_core_process_plugin: plugin_path must not be null");
-
-    QString path = QString::fromUtf8(plugin_path);
-    qDebug() << "Processing plugin file:" << path;
-
-    QString pluginName = PluginManager::processPlugin(path);
-    if (pluginName.isEmpty()) {
-        qWarning() << "Failed to process plugin file:" << path;
-        return nullptr;
-    }
-
-    // Convert to C string that must be freed by the caller
-    QByteArray utf8Data = pluginName.toUtf8();
-    char* result = new char[utf8Data.size() + 1];
-    strcpy(result, utf8Data.constData());
-
-    return result;
+    return PluginManager::processPluginCStr(plugin_path);
 }
 
 char* logos_core_get_token(const char* key) {
     if (!key) qFatal("logos_core_get_token: key must not be null");
 
-    QString keyStr = QString::fromUtf8(key);
-    qDebug() << "Getting token for key:" << keyStr;
+    QString token = TokenManager::instance().getToken(QString::fromUtf8(key));
+    if (token.isEmpty()) return nullptr;
 
-    // Get the token from the TokenManager singleton
-    TokenManager& tokenManager = TokenManager::instance();
-    QString token = tokenManager.getToken(keyStr);
-
-    if (token.isEmpty()) {
-        qDebug() << "No token found for key:" << keyStr;
-        return nullptr;
-    }
-
-    qDebug() << "Token found for key:" << keyStr;
-
-    // Convert to C string that must be freed by the caller
-    QByteArray utf8Data = token.toUtf8();
-    char* result = new char[utf8Data.size() + 1];
-    strcpy(result, utf8Data.constData());
-
+    QByteArray utf8 = token.toUtf8();
+    char* result = new char[utf8.size() + 1];
+    memcpy(result, utf8.constData(), utf8.size() + 1);
     return result;
 }
 

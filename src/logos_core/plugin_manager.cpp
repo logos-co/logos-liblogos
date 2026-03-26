@@ -132,6 +132,22 @@ namespace PluginManager {
         return metadata.name;
     }
 
+    char* processPluginCStr(const char* pluginPath) {
+        QString path = QString::fromUtf8(pluginPath);
+        qDebug() << "Processing plugin file:" << path;
+
+        QString pluginName = processPlugin(path);
+        if (pluginName.isEmpty()) {
+            qWarning() << "Failed to process plugin file:" << path;
+            return nullptr;
+        }
+
+        QByteArray utf8Data = pluginName.toUtf8();
+        char* result = new char[utf8Data.size() + 1];
+        strcpy(result, utf8Data.constData());
+        return result;
+    }
+
     bool loadPlugin(const QString &pluginName) {
         qDebug() << "Attempting to load plugin by name:" << pluginName;
 
@@ -349,15 +365,50 @@ namespace PluginManager {
         return true;
     }
 
-    void loadAndProcessPlugin(const QString &pluginPath) {
-        QString pluginName = processPlugin(pluginPath);
+    bool loadPluginWithDependencies(const QString& pluginName) {
+        QStringList requestedModules;
+        requestedModules.append(pluginName);
 
-        if (pluginName.isEmpty()) {
-            qWarning() << "Failed to process plugin:" << pluginPath;
-            return;
+        QStringList resolvedModules = resolveDependencies(requestedModules);
+
+        if (resolvedModules.isEmpty() || !resolvedModules.contains(pluginName)) {
+            qWarning() << "Cannot load plugin: plugin not found:" << pluginName;
+            return false;
         }
 
-        loadPlugin(pluginName);
+        bool allSucceeded = true;
+        for (const QString& moduleName : resolvedModules) {
+            if (isPluginLoaded(moduleName)) {
+                qDebug() << "Plugin already loaded, skipping:" << moduleName;
+                continue;
+            }
+            if (!loadPlugin(moduleName)) {
+                qWarning() << "Failed to load module:" << moduleName;
+                allSucceeded = false;
+            }
+        }
+
+        return allSucceeded;
+    }
+
+    QString currentPlatformVariant() {
+#if defined(Q_OS_MAC)
+    #if defined(Q_PROCESSOR_ARM)
+        return "darwin-arm64";
+    #else
+        return "darwin-x86_64";
+    #endif
+#elif defined(Q_OS_LINUX)
+    #if defined(Q_PROCESSOR_X86_64)
+        return "linux-x86_64";
+    #elif defined(Q_PROCESSOR_ARM_64)
+        return "linux-arm64";
+    #else
+        return "linux-x86";
+    #endif
+#else
+        return "unknown";
+#endif
     }
 
     bool initializeCapabilityModule() {
