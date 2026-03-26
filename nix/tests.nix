@@ -30,6 +30,7 @@ pkgs.stdenv.mkDerivation {
       -DLOGOS_CPP_SDK_ROOT=${common.env.LOGOS_CPP_SDK_ROOT} \
       -DLOGOS_MODULE_ROOT=${common.env.LOGOS_MODULE_ROOT} \
       -DPROCESS_STATS_ROOT=${common.env.PROCESS_STATS_ROOT} \
+      -DLOGOS_PACKAGE_MANAGER_ROOT=${common.env.LOGOS_PACKAGE_MANAGER_ROOT} \
       -DCMAKE_BUILD_TYPE=Release \
       -DCMAKE_INSTALL_PREFIX=$out
     
@@ -56,17 +57,19 @@ pkgs.stdenv.mkDerivation {
     # Copy the libraries so tests can run
     mkdir -p $out/lib
     cp -r lib/* $out/lib/ || true
-    
+    # Copy package_manager_lib from its nix store path
+    cp ${common.env.LOGOS_PACKAGE_MANAGER_ROOT}/lib/libpackage_manager_lib.* $out/lib/ || true
+
     ${pkgs.lib.optionalString pkgs.stdenv.isDarwin ''
       # Fix RPATH to find libraries in $out/lib on macOS
       install_name_tool \
         -change @rpath/liblogos_core.dylib $out/lib/liblogos_core.dylib \
         $out/bin/logos_core_tests || true
     ''}
-    
+
     ${pkgs.lib.optionalString pkgs.stdenv.isLinux ''
       # Fix RPATH on Linux to avoid /build/ references and include all dependencies
-      patchelf --set-rpath "$out/lib:${pkgs.gtest}/lib:${pkgs.qt6.qtbase}/lib:${pkgs.qt6.qtremoteobjects}/lib:${pkgs.stdenv.cc.cc.lib}/lib" $out/bin/logos_core_tests || true
+      patchelf --set-rpath "$out/lib:${common.env.LOGOS_PACKAGE_MANAGER_ROOT}/lib:${pkgs.gtest}/lib:${pkgs.qt6.qtbase}/lib:${pkgs.qt6.qtremoteobjects}/lib:${pkgs.stdenv.cc.cc.lib}/lib" $out/bin/logos_core_tests || true
     ''}
     
     runHook postInstall

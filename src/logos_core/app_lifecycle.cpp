@@ -27,7 +27,7 @@ namespace AppLifecycle {
     void start() {
         LogosInstance::id();
 
-        PluginManager::discoverPlugins();
+        PluginManager::discoverInstalledModules();
         PluginManager::initializeCapabilityModule();
     }
 

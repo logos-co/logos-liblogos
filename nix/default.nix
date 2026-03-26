@@ -1,5 +1,5 @@
 # Common build configuration shared across all packages
-{ pkgs, logosSdk, logosModule, processStats, portableBuild ? false }:
+{ pkgs, logosSdk, logosModule, processStats, logosPackageManager, portableBuild ? false }:
 
 {
   pname = "logos-liblogos";
@@ -21,6 +21,7 @@
     pkgs.gtest
     logosModule
     processStats
+    logosPackageManager
   ];
 
   # Common CMake flags
@@ -29,6 +30,7 @@
     "-DLOGOS_CPP_SDK_ROOT=${logosSdk}"
     "-DLOGOS_MODULE_ROOT=${logosModule}"
     "-DPROCESS_STATS_ROOT=${processStats}"
+    "-DLOGOS_PACKAGE_MANAGER_ROOT=${logosPackageManager}"
   ] ++ pkgs.lib.optionals portableBuild [
     "-DLOGOS_PORTABLE_BUILD=ON"
   ];
@@ -38,6 +40,7 @@
     LOGOS_CPP_SDK_ROOT = "${logosSdk}";
     LOGOS_MODULE_ROOT = "${logosModule}";
     PROCESS_STATS_ROOT = "${processStats}";
+    LOGOS_PACKAGE_MANAGER_ROOT = "${logosPackageManager}";
   };
 
   # Metadata
