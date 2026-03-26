@@ -3,10 +3,10 @@
 #include "plugin_manager.h"
 #include <process_stats/process_stats.h>
 #include "token_manager.h"
-#include <QDebug>
-#include <QByteArray>
-#include <QStringList>
+#include <cstdio>
+#include <cstdlib>
 #include <cstring>
+#include <string>
 
 // === C API Implementation (Thin Wrappers) ===
 
@@ -43,34 +43,34 @@ char** logos_core_get_known_plugins() {
 }
 
 int logos_core_load_plugin(const char* plugin_name) {
-    if (!plugin_name) qFatal("logos_core_load_plugin: plugin_name must not be null");
+    if (!plugin_name) { fprintf(stderr, "logos_core_load_plugin: plugin_name must not be null\n"); std::abort(); }
     return PluginManager::loadPlugin(QString::fromUtf8(plugin_name)) ? 1 : 0;
 }
 
 int logos_core_load_plugin_with_dependencies(const char* plugin_name) {
-    if (!plugin_name) qFatal("logos_core_load_plugin_with_dependencies: plugin_name must not be null");
+    if (!plugin_name) { fprintf(stderr, "logos_core_load_plugin_with_dependencies: plugin_name must not be null\n"); std::abort(); }
     return PluginManager::loadPluginWithDependencies(QString::fromUtf8(plugin_name)) ? 1 : 0;
 }
 
 int logos_core_unload_plugin(const char* plugin_name) {
-    if (!plugin_name) qFatal("logos_core_unload_plugin: plugin_name must not be null");
+    if (!plugin_name) { fprintf(stderr, "logos_core_unload_plugin: plugin_name must not be null\n"); std::abort(); }
     return PluginManager::unloadPlugin(QString::fromUtf8(plugin_name)) ? 1 : 0;
 }
 
 char* logos_core_process_plugin(const char* plugin_path) {
-    if (!plugin_path) qFatal("logos_core_process_plugin: plugin_path must not be null");
+    if (!plugin_path) { fprintf(stderr, "logos_core_process_plugin: plugin_path must not be null\n"); std::abort(); }
     return PluginManager::processPluginCStr(plugin_path);
 }
 
 char* logos_core_get_token(const char* key) {
-    if (!key) qFatal("logos_core_get_token: key must not be null");
+    if (!key) { fprintf(stderr, "logos_core_get_token: key must not be null\n"); std::abort(); }
 
     QString token = TokenManager::instance().getToken(QString::fromUtf8(key));
     if (token.isEmpty()) return nullptr;
 
-    QByteArray utf8 = token.toUtf8();
+    std::string utf8 = token.toStdString();
     char* result = new char[utf8.size() + 1];
-    memcpy(result, utf8.constData(), utf8.size() + 1);
+    memcpy(result, utf8.c_str(), utf8.size() + 1);
     return result;
 }
 
