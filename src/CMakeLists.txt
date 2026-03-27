@@ -94,6 +94,8 @@ set(LOGOS_CORE_SOURCES
     logos_core/app_lifecycle.h
     logos_core/plugin_manager.cpp
     logos_core/plugin_manager.h
+    logos_core/qt/qt_app_context.cpp
+    logos_core/qt/qt_app_context.h
 )
 
 # Define the logos host sources
