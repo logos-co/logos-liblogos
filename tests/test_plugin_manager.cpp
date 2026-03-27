@@ -3,11 +3,9 @@
 #include "plugin_registry.h"
 #include "logos_core.h"
 #include <QCoreApplication>
-#include <QJsonArray>
-#include <QJsonDocument>
-#include <QJsonObject>
 #include <QDir>
 #include <QTemporaryDir>
+#include <nlohmann/json.hpp>
 #include <cstring>
 #include <fstream>
 
@@ -144,9 +142,9 @@ TEST_F(PluginManagerTest, ResolveDependencies_ReturnsEmptyForUnknownPlugin) {
 
 TEST_F(PluginManagerTest, ResolveDependencies_ReturnsSinglePluginWithNoDeps) {
     PluginManager::registry().registerPlugin("plugin_a", "/path/to/plugin_a");
-    QJsonObject metadata;
+    nlohmann::json metadata;
     metadata["name"] = "plugin_a";
-    metadata["dependencies"] = QJsonArray();
+    metadata["dependencies"] = nlohmann::json::array();
     PluginManager::registry().registerMetadata("plugin_a", metadata);
 
     QStringList requested;
@@ -162,16 +160,14 @@ TEST_F(PluginManagerTest, ResolveDependencies_ReturnsCorrectOrder) {
     PluginManager::registry().registerPlugin("plugin_a", "/path/to/plugin_a");
     PluginManager::registry().registerPlugin("plugin_b", "/path/to/plugin_b");
 
-    QJsonObject metadataA;
+    nlohmann::json metadataA;
     metadataA["name"] = "plugin_a";
-    QJsonArray depsA;
-    depsA.append("plugin_b");
-    metadataA["dependencies"] = depsA;
+    metadataA["dependencies"] = nlohmann::json::array({"plugin_b"});
     PluginManager::registry().registerMetadata("plugin_a", metadataA);
 
-    QJsonObject metadataB;
+    nlohmann::json metadataB;
     metadataB["name"] = "plugin_b";
-    metadataB["dependencies"] = QJsonArray();
+    metadataB["dependencies"] = nlohmann::json::array();
     PluginManager::registry().registerMetadata("plugin_b", metadataB);
 
     QStringList requested;
@@ -189,23 +185,19 @@ TEST_F(PluginManagerTest, ResolveDependencies_HandlesTransitiveDeps) {
     PluginManager::registry().registerPlugin("plugin_b", "/path/to/plugin_b");
     PluginManager::registry().registerPlugin("plugin_c", "/path/to/plugin_c");
 
-    QJsonObject metadataA;
+    nlohmann::json metadataA;
     metadataA["name"] = "plugin_a";
-    QJsonArray depsA;
-    depsA.append("plugin_b");
-    metadataA["dependencies"] = depsA;
+    metadataA["dependencies"] = nlohmann::json::array({"plugin_b"});
     PluginManager::registry().registerMetadata("plugin_a", metadataA);
 
-    QJsonObject metadataB;
+    nlohmann::json metadataB;
     metadataB["name"] = "plugin_b";
-    QJsonArray depsB;
-    depsB.append("plugin_c");
-    metadataB["dependencies"] = depsB;
+    metadataB["dependencies"] = nlohmann::json::array({"plugin_c"});
     PluginManager::registry().registerMetadata("plugin_b", metadataB);
 
-    QJsonObject metadataC;
+    nlohmann::json metadataC;
     metadataC["name"] = "plugin_c";
-    metadataC["dependencies"] = QJsonArray();
+    metadataC["dependencies"] = nlohmann::json::array();
     PluginManager::registry().registerMetadata("plugin_c", metadataC);
 
     QStringList requested;
@@ -270,17 +262,16 @@ static void createFakeModule(const QString& parentDir,
     QDir dir(parentDir);
     dir.mkpath(moduleName);
 
-    QJsonObject manifest;
-    manifest["name"] = moduleName;
+    nlohmann::json manifest;
+    manifest["name"] = moduleName.toStdString();
     manifest["version"] = "1.0.0";
-    manifest["type"] = type;
-    manifest["main"] = mainFile;
+    manifest["type"] = type.toStdString();
+    manifest["main"] = mainFile.toStdString();
     manifest["description"] = "Fake test module";
 
     QString manifestPath = dir.filePath(moduleName + "/manifest.json");
     std::ofstream mf(manifestPath.toStdString());
-    QJsonDocument doc(manifest);
-    mf << doc.toJson().toStdString();
+    mf << manifest.dump();
     mf.close();
 
     QString binaryPath = dir.filePath(moduleName + "/" + mainFile);

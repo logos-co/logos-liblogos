@@ -1,13 +1,36 @@
 #include "plugin_registry.h"
 #include <QDebug>
 #include <QDir>
-#include <QJsonDocument>
+#include <QJsonObject>
 #include <QJsonArray>
+#include <QJsonValue>
 #include <cassert>
 #include <module_lib/module_lib.h>
 #include <package_manager_lib.h>
 
 using namespace ModuleLib;
+
+static nlohmann::json qjsonToNlohmann(const QJsonValue& val) {
+    switch (val.type()) {
+        case QJsonValue::Bool:   return val.toBool();
+        case QJsonValue::Double: return val.toDouble();
+        case QJsonValue::String: return val.toString().toStdString();
+        case QJsonValue::Array: {
+            nlohmann::json arr = nlohmann::json::array();
+            for (const QJsonValue& v : val.toArray())
+                arr.push_back(qjsonToNlohmann(v));
+            return arr;
+        }
+        case QJsonValue::Object: {
+            nlohmann::json obj = nlohmann::json::object();
+            QJsonObject qobj = val.toObject();
+            for (auto it = qobj.begin(); it != qobj.end(); ++it)
+                obj[it.key().toStdString()] = qjsonToNlohmann(it.value());
+            return obj;
+        }
+        default: return nullptr;
+    }
+}
 
 static PackageManagerLib& packageManagerInstance() {
     static PackageManagerLib instance;
@@ -40,13 +63,12 @@ void PluginRegistry::discoverInstalledModules() {
     }
 
     std::string jsonStr = pm.getInstalledModules();
-    QJsonDocument doc = QJsonDocument::fromJson(QByteArray::fromStdString(jsonStr));
-    QJsonArray modules = doc.array();
+    nlohmann::json modules = nlohmann::json::parse(jsonStr, nullptr, false);
+    if (!modules.is_array()) return;
 
-    for (const QJsonValue& val : modules) {
-        QJsonObject mod = val.toObject();
-        QString name = mod.value("name").toString();
-        QString mainFilePath = mod.value("mainFilePath").toString();
+    for (const auto& mod : modules) {
+        QString name = QString::fromStdString(mod.value("name", ""));
+        QString mainFilePath = QString::fromStdString(mod.value("mainFilePath", ""));
 
         if (name.isEmpty() || mainFilePath.isEmpty())
             continue;
@@ -77,7 +99,7 @@ QString PluginRegistry::processPlugin(const QString& pluginPath) {
     }
 
     m_knownPlugins.insert(metadata.name, pluginPath);
-    m_pluginMetadata.insert(metadata.name, metadata.rawMetadata);
+    m_pluginMetadata.insert(metadata.name, qjsonToNlohmann(QJsonValue(metadata.rawMetadata)));
 
     return metadata.name;
 }
@@ -90,7 +112,7 @@ QString PluginRegistry::pluginPath(const QString& name) const {
     return m_knownPlugins.value(name);
 }
 
-QJsonObject PluginRegistry::pluginMetadata(const QString& name) const {
+nlohmann::json PluginRegistry::pluginMetadata(const QString& name) const {
     return m_pluginMetadata.value(name);
 }
 
@@ -102,7 +124,7 @@ void PluginRegistry::registerPlugin(const QString& name, const QString& path) {
     m_knownPlugins.insert(name, path);
 }
 
-void PluginRegistry::registerMetadata(const QString& name, const QJsonObject& metadata) {
+void PluginRegistry::registerMetadata(const QString& name, const nlohmann::json& metadata) {
     m_pluginMetadata.insert(name, metadata);
 }
 

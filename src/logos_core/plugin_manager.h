@@ -4,7 +4,6 @@
 #include <QString>
 #include <QStringList>
 #include <QHash>
-#include <QJsonObject>
 
 class PluginRegistry;
 

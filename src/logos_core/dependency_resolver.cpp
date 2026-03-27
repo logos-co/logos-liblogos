@@ -1,6 +1,5 @@
 #include "dependency_resolver.h"
 #include <QDebug>
-#include <QJsonArray>
 #include <QSet>
 #include <QHash>
 
@@ -29,11 +28,10 @@ namespace DependencyResolver {
 
             modulesToLoad.insert(moduleName);
 
-            QJsonObject metadata = getMetadata(moduleName);
-            if (!metadata.isEmpty()) {
-                QJsonArray deps = metadata.value("dependencies").toArray();
-                for (const QJsonValue& dep : deps) {
-                    QString depName = dep.toString();
+            nlohmann::json metadata = getMetadata(moduleName);
+            if (metadata.is_object() && metadata.contains("dependencies")) {
+                for (const auto& dep : metadata["dependencies"]) {
+                    QString depName = QString::fromStdString(dep.get<std::string>());
                     if (!depName.isEmpty() && !modulesToLoad.contains(depName)) {
                         queue.append(depName);
                     }
@@ -54,11 +52,10 @@ namespace DependencyResolver {
                 inDegree[moduleName] = 0;
             }
 
-            QJsonObject metadata = getMetadata(moduleName);
-            if (!metadata.isEmpty()) {
-                QJsonArray deps = metadata.value("dependencies").toArray();
-                for (const QJsonValue& dep : deps) {
-                    QString depName = dep.toString();
+            nlohmann::json metadata = getMetadata(moduleName);
+            if (metadata.is_object() && metadata.contains("dependencies")) {
+                for (const auto& dep : metadata["dependencies"]) {
+                    QString depName = QString::fromStdString(dep.get<std::string>());
                     if (!depName.isEmpty() && modulesToLoad.contains(depName)) {
                         inDegree[moduleName]++;
                         dependents[depName].append(moduleName);

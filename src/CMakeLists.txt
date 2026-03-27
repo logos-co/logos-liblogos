@@ -158,6 +158,7 @@ target_link_libraries(logos_core PUBLIC
     logos_module
     process_stats
     package_manager_lib
+    nlohmann_json::nlohmann_json
 )
 
 # Include directories for the library

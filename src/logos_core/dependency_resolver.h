@@ -3,13 +3,13 @@
 
 #include <QString>
 #include <QStringList>
-#include <QJsonObject>
+#include <nlohmann/json.hpp>
 #include <functional>
 
 namespace DependencyResolver {
 
     using IsKnownFn = std::function<bool(const QString&)>;
-    using GetMetadataFn = std::function<QJsonObject(const QString&)>;
+    using GetMetadataFn = std::function<nlohmann::json(const QString&)>;
 
     QStringList resolve(const QStringList& requested,
                         IsKnownFn isKnown,
