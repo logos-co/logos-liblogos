@@ -1,12 +1,9 @@
 #include "plugin_manager.h"
 #include "plugin_registry.h"
 #include "dependency_resolver.h"
-#include "qt/qt_process_manager.h"
+#include "plugin_launcher.h"
 #include <QDebug>
-#include <QDir>
-#include <QFile>
 #include <QUuid>
-#include <QCoreApplication>
 #include <cassert>
 #include <cstring>
 #include "logos_api.h"
@@ -35,38 +32,6 @@ namespace {
         }
         result[count] = nullptr;
         return result;
-    }
-
-    QString resolveLogosHostPath() {
-        QString logosHostPath;
-
-        QByteArray envPathBytes = qgetenv("LOGOS_HOST_PATH");
-        if (!envPathBytes.isEmpty()) {
-            logosHostPath = QString::fromUtf8(envPathBytes);
-        }
-
-        if (logosHostPath.isEmpty()) {
-            logosHostPath = QDir::cleanPath(QCoreApplication::applicationDirPath() + "/logos_host");
-        }
-
-        if (!QFile::exists(logosHostPath)) {
-            QStringList dirs = registryInstance().pluginsDirs();
-            if (!dirs.isEmpty()) {
-                QDir pluginsDirCandidate(dirs.first());
-                QString candidate = QDir::cleanPath(pluginsDirCandidate.absoluteFilePath("../bin/logos_host"));
-                if (QFile::exists(candidate)) {
-                    logosHostPath = candidate;
-                }
-            }
-        }
-
-        if (!QFile::exists(logosHostPath)) {
-            qCritical() << "logos_host not found at:" << logosHostPath
-                         << "- set LOGOS_HOST_PATH or place it next to the executable";
-            return QString();
-        }
-
-        return logosHostPath;
     }
 
     void notifyCapabilityModule(const QString& name, const QString& token) {
@@ -141,63 +106,23 @@ namespace PluginManager {
 
         QString pluginPath = registryInstance().pluginPath(name);
 
-        QString logosHostPath = resolveLogosHostPath();
-        if (logosHostPath.isEmpty())
+        auto onTerminated = [](const QString& n) {
+            registryInstance().markUnloaded(n);
+        };
+
+        if (!PluginLauncher::launch(name, pluginPath, registryInstance().pluginsDirs(), onTerminated))
             return false;
 
-        std::vector<std::string> arguments = {
-            "--name", name.toStdString(),
-            "--path", pluginPath.toStdString()
-        };
+        QString authToken = QUuid::createUuid().toString(QUuid::WithoutBraces);
 
-        QtProcessManager::ProcessCallbacks callbacks;
-
-        callbacks.onFinished = [](const std::string& pName, int exitCode, bool crashed) {
-            Q_UNUSED(exitCode);
-            QString qName = QString::fromStdString(pName);
-            if (crashed) {
-                qCritical() << "Plugin process crashed:" << qName;
-                exit(1);
-            }
-            registryInstance().markUnloaded(qName);
-        };
-
-        callbacks.onError = [](const std::string& pName, bool crashed) {
-            if (crashed) {
-                qCritical() << "Plugin process crashed:" << QString::fromStdString(pName);
-                exit(1);
-            }
-        };
-
-        callbacks.onOutput = [](const std::string& pName, const std::string& line, bool isStderr) {
-            QString qName = QString::fromStdString(pName);
-            QString qLine = QString::fromStdString(line);
-            if (isStderr) {
-                qCritical() << "[" << qName << "]" << qLine;
-            } else if (qLine.contains("Warning:") || qLine.contains("WARNING:")) {
-                qWarning() << "[" << qName << "]" << qLine;
-            } else if (qLine.contains("Critical:") || qLine.contains("FAILED:") || qLine.contains("ERROR:")) {
-                qCritical() << "[" << qName << "]" << qLine;
-            }
-        };
-
-        if (!QtProcessManager::startProcess(name.toStdString(), logosHostPath.toStdString(), arguments, callbacks)) {
+        if (!PluginLauncher::sendToken(name, authToken))
             return false;
-        }
-
-        QUuid authToken = QUuid::createUuid();
-        QString authTokenString = authToken.toString(QUuid::WithoutBraces);
-
-        if (!QtProcessManager::sendToken(name.toStdString(), authTokenString.toStdString())) {
-            return false;
-        }
 
         registryInstance().markLoaded(name);
 
-        TokenManager& tokenManager = TokenManager::instance();
-        tokenManager.saveToken(name, authTokenString);
+        TokenManager::instance().saveToken(name, authToken);
 
-        notifyCapabilityModule(name, authTokenString);
+        notifyCapabilityModule(name, authToken);
 
         qInfo() << "Plugin loaded:" << name;
 
@@ -254,12 +179,12 @@ namespace PluginManager {
             return false;
         }
 
-        if (!QtProcessManager::hasProcess(name.toStdString())) {
+        if (!PluginLauncher::hasProcess(name)) {
             qWarning() << "No process found for plugin:" << name;
             return false;
         }
 
-        QtProcessManager::terminateProcess(name.toStdString());
+        PluginLauncher::terminate(name);
         registryInstance().markUnloaded(name);
 
         qInfo() << "Plugin unloaded:" << name;
@@ -267,7 +192,7 @@ namespace PluginManager {
     }
 
     void terminateAll() {
-        QtProcessManager::terminateAll();
+        PluginLauncher::terminateAll();
         registryInstance().clearLoaded();
     }
 
@@ -288,12 +213,7 @@ namespace PluginManager {
     }
 
     QHash<QString, qint64> getPluginProcessIds() {
-        auto stdMap = QtProcessManager::getAllProcessIds();
-        QHash<QString, qint64> result;
-        for (const auto& [name, pid] : stdMap) {
-            result.insert(QString::fromStdString(name), pid);
-        }
-        return result;
+        return PluginLauncher::getAllProcessIds();
     }
 
     QStringList resolveDependencies(const QStringList& requestedModules) {

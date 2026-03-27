@@ -98,6 +98,8 @@ set(LOGOS_CORE_SOURCES
     logos_core/dependency_resolver.h
     logos_core/plugin_manager.cpp
     logos_core/plugin_manager.h
+    logos_core/plugin_launcher.cpp
+    logos_core/plugin_launcher.h
     logos_core/qt/qt_app_context.cpp
     logos_core/qt/qt_app_context.h
     logos_core/qt/qt_process_manager.cpp
