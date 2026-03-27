@@ -20,6 +20,7 @@
     pkgs.zstd
     pkgs.gtest
     pkgs.nlohmann_json
+    pkgs.cli11
     logosModule
     processStats
     logosPackageManager

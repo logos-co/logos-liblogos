@@ -1,6 +1,5 @@
 #include "plugin_initializer.h"
-#include <QLocalServer>
-#include <QLocalSocket>
+#include "qt/qt_token_receiver.h"
 #include <QObject>
 #include <QDebug>
 #include <QFileInfo>
@@ -11,44 +10,6 @@
 #include "module_lib.h"
 
 using namespace ModuleLib;
-
-QString receiveAuthToken(const QString& pluginName)
-{
-    // Set up IPC server to receive auth token securely
-    QString socketName = QString("logos_token_%1").arg(pluginName);
-    QLocalServer* tokenServer = new QLocalServer();
-
-    // Remove any existing socket file
-    QLocalServer::removeServer(socketName);
-
-    if (!tokenServer->listen(socketName)) {
-        qCritical() << "Failed to start token server:" << tokenServer->errorString();
-        return QString();
-    }
-
-    QString authToken;
-    if (tokenServer->waitForNewConnection(10000)) {
-        QLocalSocket* clientSocket = tokenServer->nextPendingConnection();
-        if (clientSocket->waitForReadyRead(5000)) {
-            QByteArray tokenData = clientSocket->readAll();
-            authToken = QString::fromUtf8(tokenData);
-        }
-        clientSocket->deleteLater();
-    } else {
-        qCritical() << "Timeout waiting for auth token";
-        tokenServer->deleteLater();
-        return QString();
-    }
-
-    tokenServer->deleteLater();
-
-    if (authToken.isEmpty()) {
-        qCritical() << "No auth token received";
-        return QString();
-    }
-
-    return authToken;
-}
 
 LogosModule loadPlugin(const QString& pluginPath, const QString& expectedName)
 {
@@ -98,7 +59,7 @@ LogosAPI* initializeLogosAPI(const QString& pluginName, QObject* plugin,
 LogosAPI* setupPlugin(const QString& pluginName, const QString& pluginPath)
 {
     // 1. Receive auth token securely
-    QString authToken = receiveAuthToken(pluginName);
+    QString authToken = QtTokenReceiver::receiveAuthToken(pluginName);
     if (authToken.isEmpty()) {
         return nullptr;
     }

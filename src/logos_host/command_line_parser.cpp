@@ -1,45 +1,26 @@
 #include "command_line_parser.h"
-#include <QCoreApplication>
-#include <QCommandLineParser>
-#include <QStringList>
-#include <QDebug>
+#include <CLI/CLI.hpp>
 
-PluginArgs parseCommandLineArgs(QCoreApplication& app)
+PluginArgs parseCommandLineArgs(int argc, char *argv[])
 {
-    PluginArgs args;
-    args.valid = false;
+    PluginArgs result;
+    result.valid = false;
 
-    // Setup command line parser
-    QCommandLineParser parser;
-    parser.setApplicationDescription("Logos host for loading plugins in separate processes");
-    parser.addHelpOption();
-    parser.addVersionOption();
+    CLI::App app{"Logos host for loading plugins in separate processes"};
+    app.set_version_flag("-v,--version", "1.0");
 
-    // Add plugin name option
-    QCommandLineOption pluginNameOption(QStringList() << "n" << "name",
-                                       "Name of the plugin to load",
-                                       "plugin_name");
-    parser.addOption(pluginNameOption);
+    app.add_option("-n,--name", result.name, "Name of the plugin to load")
+        ->required();
+    app.add_option("-p,--path", result.path, "Path to the plugin file")
+        ->required();
 
-    // Add plugin path option
-    QCommandLineOption pluginPathOption(QStringList() << "p" << "path",
-                                       "Path to the plugin file",
-                                       "plugin_path");
-    parser.addOption(pluginPathOption);
-
-    // Process the command line arguments
-    parser.process(app);
-
-    // Get plugin name and path
-    args.name = parser.value(pluginNameOption);
-    args.path = parser.value(pluginPathOption);
-
-    if (args.name.isEmpty() || args.path.isEmpty()) {
-        qCritical() << "Both plugin name and path must be specified";
-        qCritical() << "Usage:" << app.arguments()[0] << "--name <plugin_name> --path <plugin_path>";
-        return args;
+    try {
+        app.parse(argc, argv);
+    } catch (const CLI::ParseError& e) {
+        app.exit(e);
+        return result;
     }
 
-    args.valid = true;
-    return args;
+    result.valid = true;
+    return result;
 }

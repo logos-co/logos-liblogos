@@ -1,16 +1,14 @@
 #ifndef COMMAND_LINE_PARSER_H
 #define COMMAND_LINE_PARSER_H
 
-#include <QString>
-
-class QCoreApplication;
+#include <string>
 
 struct PluginArgs {
-    QString name;
-    QString path;
+    std::string name;
+    std::string path;
     bool valid;
 };
 
-PluginArgs parseCommandLineArgs(QCoreApplication& app);
+PluginArgs parseCommandLineArgs(int argc, char *argv[]);
 
 #endif // COMMAND_LINE_PARSER_H
