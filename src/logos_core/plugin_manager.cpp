@@ -120,7 +120,7 @@ namespace PluginManager {
         return DependencyResolver::resolve(
             requestedModules,
             [](const QString& name) { return registryInstance().isKnown(name); },
-            [](const QString& name) { return registryInstance().pluginMetadata(name); }
+            [](const QString& name) { return registryInstance().pluginDependencies(name); }
         );
     }
 

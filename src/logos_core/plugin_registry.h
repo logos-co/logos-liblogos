@@ -4,7 +4,6 @@
 #include <QString>
 #include <QStringList>
 #include <QHash>
-#include <nlohmann/json.hpp>
 
 class PluginRegistry {
 public:
@@ -17,10 +16,10 @@ public:
 
     bool isKnown(const QString& name) const;
     QString pluginPath(const QString& name) const;
-    nlohmann::json pluginMetadata(const QString& name) const;
+    QStringList pluginDependencies(const QString& name) const;
     QStringList knownPluginNames() const;
     void registerPlugin(const QString& name, const QString& path);
-    void registerMetadata(const QString& name, const nlohmann::json& metadata);
+    void registerDependencies(const QString& name, const QStringList& dependencies);
 
     bool isLoaded(const QString& name) const;
     void markLoaded(const QString& name);
@@ -33,7 +32,7 @@ public:
 private:
     QStringList m_pluginsDirs;
     QHash<QString, QString> m_knownPlugins;
-    QHash<QString, nlohmann::json> m_pluginMetadata;
+    QHash<QString, QStringList> m_pluginDependencies;
     QStringList m_loadedPlugins;
 };
 
