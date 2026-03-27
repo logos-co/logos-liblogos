@@ -6,8 +6,6 @@
 #include <QHash>
 #include <QJsonObject>
 
-class QProcess;
-
 namespace PluginManager {
     void setPluginsDir(const char* plugins_dir);
     void addPluginsDir(const char* plugins_dir);
@@ -16,10 +14,11 @@ namespace PluginManager {
     void discoverInstalledModules();
 
     QString processPlugin(const QString& pluginPath);
-    bool loadPlugin(const QString& pluginName);
-    void loadAndProcessPlugin(const QString& pluginPath);
+    char* processPluginCStr(const char* pluginPath);
+    bool loadPlugin(const char* pluginName);
+    bool loadPluginWithDependencies(const char* pluginName);
     bool initializeCapabilityModule();
-    bool unloadPlugin(const QString& pluginName);
+    bool unloadPlugin(const char* pluginName);
     void terminateAll();
 
     char** getLoadedPluginsCStr();
@@ -37,9 +36,7 @@ namespace PluginManager {
     void addKnownPlugin(const QString& name, const QString& path);
     void addPluginMetadata(const QString& name, const QJsonObject& metadata);
 
-    // Register a plugin as loaded without spawning a process.
-    // If process is non-null it is tracked for termination/stats.
-    void registerLoadedPlugin(const QString& name, QProcess* process = nullptr);
+    void registerLoadedPlugin(const QString& name);
 }
 
 #endif // PLUGIN_MANAGER_H
