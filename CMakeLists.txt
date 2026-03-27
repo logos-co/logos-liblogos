@@ -11,6 +11,9 @@ find_package(Qt${QT_VERSION_MAJOR} REQUIRED COMPONENTS Core RemoteObjects)
 # Find nlohmann_json
 find_package(nlohmann_json REQUIRED)
 
+# Find CLI11
+find_package(CLI11 REQUIRED)
+
 # Set output directories
 set(CMAKE_ARCHIVE_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR}/lib)
 set(CMAKE_LIBRARY_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR}/lib)

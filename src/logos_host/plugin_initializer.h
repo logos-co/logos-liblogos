@@ -8,8 +8,6 @@ class PluginInterface;
 class LogosAPI;
 class QObject;
 
-QString receiveAuthToken(const QString& pluginName);
-
 ModuleLib::LogosModule loadPlugin(const QString& pluginPath, const QString& expectedName);
 
 LogosAPI* initializeLogosAPI(const QString& pluginName, QObject* plugin, 

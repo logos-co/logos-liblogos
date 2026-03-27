@@ -113,6 +113,10 @@ set(LOGOS_HOST_SOURCES
     logos_host/command_line_parser.h
     logos_host/plugin_initializer.cpp
     logos_host/plugin_initializer.h
+    logos_host/qt/qt_app.cpp
+    logos_host/qt/qt_app.h
+    logos_host/qt/qt_token_receiver.cpp
+    logos_host/qt/qt_token_receiver.h
 )
 
 # Create the logos core library
@@ -222,6 +226,7 @@ target_link_libraries(logos_host PRIVATE
     Qt${QT_VERSION_MAJOR}::RemoteObjects
     logos_sdk
     logos_module
+    CLI11::CLI11
 )
 
 # Include directories for the logos host application
