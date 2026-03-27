@@ -1,115 +1,70 @@
 #include "plugin_manager.h"
-#include "qt/qt_process_manager.h"
+#include "plugin_registry.h"
+#include "plugin_loader.h"
+#include "dependency_resolver.h"
 #include <QDebug>
-#include <QDir>
-#include <QFile>
-#include <QJsonDocument>
-#include <QJsonArray>
-#include <QUuid>
-#include <QCoreApplication>
-#include <cstring>
 #include <cassert>
-#include "logos_api.h"
-#include "logos_api_client.h"
-#include "token_manager.h"
-#include "logos_mode.h"
-#include <module_lib/module_lib.h>
-#include <package_manager_lib.h>
+#include <cstring>
 
-using namespace ModuleLib;
+namespace {
+    PluginRegistry& registryInstance() {
+        static PluginRegistry instance;
+        return instance;
+    }
+
+    PluginLoader& loaderInstance() {
+        static PluginLoader instance(registryInstance());
+        return instance;
+    }
+
+    char** toNullTerminatedArray(const QStringList& list) {
+        int count = list.size();
+        if (count == 0) {
+            char** result = new char*[1];
+            result[0] = nullptr;
+            return result;
+        }
+
+        char** result = new char*[count + 1];
+        for (int i = 0; i < count; ++i) {
+            QByteArray utf8Data = list[i].toUtf8();
+            result[i] = new char[utf8Data.size() + 1];
+            strcpy(result[i], utf8Data.constData());
+        }
+        result[count] = nullptr;
+        return result;
+    }
+}
 
 namespace PluginManager {
 
-    QStringList s_plugins_dirs;
-    QStringList s_loaded_plugins;
-    QHash<QString, QString> s_known_plugins;
-    QHash<QString, QJsonObject> s_plugin_metadata;
+    PluginRegistry& registry() {
+        return registryInstance();
+    }
 
     void setPluginsDir(const char* plugins_dir) {
         assert(plugins_dir != nullptr);
-        s_plugins_dirs.clear();
-        s_plugins_dirs.append(QString(plugins_dir));
-        qInfo() << "Custom plugins directory set to:" << s_plugins_dirs.first();
+        registryInstance().setPluginsDir(QString(plugins_dir));
     }
 
     void addPluginsDir(const char* plugins_dir) {
         assert(plugins_dir != nullptr);
-        QString dir = QString(plugins_dir);
-        if (s_plugins_dirs.contains(dir)) return;
-        s_plugins_dirs.append(dir);
-        qDebug() << "Added plugins directory:" << dir;
-    }
-
-    // Delegate to PackageManagerLib for platform variant selection and plugin scanning
-    static PackageManagerLib& packageManagerInstance() {
-        static PackageManagerLib instance;
-        return instance;
+        registryInstance().addPluginsDir(QString(plugins_dir));
     }
 
     void discoverInstalledModules() {
-        // Configure the package manager with the directories set via the C API
-        PackageManagerLib& pm = packageManagerInstance();
-        if (!s_plugins_dirs.isEmpty()) {
-            pm.setEmbeddedModulesDirectory(s_plugins_dirs.first().toStdString());
-            for (int i = 1; i < s_plugins_dirs.size(); ++i) {
-                pm.setUserModulesDirectory(s_plugins_dirs[i].toStdString());
-            }
-        }
-
-        std::string jsonStr = pm.getInstalledModules();
-        QJsonDocument doc = QJsonDocument::fromJson(QByteArray::fromStdString(jsonStr));
-        QJsonArray modules = doc.array();
-
-        for (const QJsonValue& val : modules) {
-            QJsonObject mod = val.toObject();
-            QString name = mod.value("name").toString();
-            QString mainFilePath = mod.value("mainFilePath").toString();
-
-            if (name.isEmpty() || mainFilePath.isEmpty())
-                continue;
-
-            // Process plugin binary to extract Qt metadata and register
-            QString pluginName = processPlugin(mainFilePath);
-            if (pluginName.isEmpty()) {
-                qWarning() << "Failed to process plugin (no metadata or invalid):" << mainFilePath;
-            } else {
-                qDebug() << "Discovered module:" << pluginName << "at" << mainFilePath;
-            }
-        }
-
-        qDebug() << "Total known plugins after discovery:" << s_known_plugins.size();
-        qDebug() << "Known plugin names:" << s_known_plugins.keys();
+        registryInstance().discoverInstalledModules();
     }
 
-    void terminateAll() {
-        QtProcessManager::terminateAll();
-        s_loaded_plugins.clear();
-    }
-
-    QString processPlugin(const QString &pluginPath) {
-        auto metadataOpt = LogosModule::extractMetadata(pluginPath);
-        if (!metadataOpt) {
-            qWarning() << "No metadata found for plugin:" << pluginPath;
-            return QString();
-        }
-
-        const ModuleMetadata& metadata = *metadataOpt;
-        if (!metadata.isValid()) {
-            qWarning() << "Plugin name not specified in metadata for:" << pluginPath;
-            return QString();
-        }
-
-        s_known_plugins.insert(metadata.name, pluginPath);
-        s_plugin_metadata.insert(metadata.name, metadata.rawMetadata);
-
-        return metadata.name;
+    QString processPlugin(const QString& pluginPath) {
+        return registryInstance().processPlugin(pluginPath);
     }
 
     char* processPluginCStr(const char* pluginPath) {
         QString path = QString::fromUtf8(pluginPath);
         qDebug() << "Processing plugin file:" << path;
 
-        QString pluginName = processPlugin(path);
+        QString pluginName = registryInstance().processPlugin(path);
         if (pluginName.isEmpty()) {
             qWarning() << "Failed to process plugin file:" << path;
             return nullptr;
@@ -122,365 +77,51 @@ namespace PluginManager {
     }
 
     bool loadPlugin(const char* pluginName) {
-        const QString name = QString::fromUtf8(pluginName);
-        qDebug() << "Attempting to load plugin by name:" << name;
-
-        if (!s_known_plugins.contains(name)) {
-            qWarning() << "Plugin not found among known plugins:" << name;
-            return false;
-        }
-
-        QString pluginPath = s_known_plugins.value(name);
-
-        qDebug() << "Loading plugin:" << name << "from path:" << pluginPath << "in separate process";
-
-        if (isPluginLoaded(name)) {
-            qWarning() << "Plugin already loaded:" << name;
-            return false;
-        }
-
-        // Find the logos_host executable with multiple strategies
-        QString logosHostPath;
-        // 1) Environment override
-        QByteArray envPathBytes = qgetenv("LOGOS_HOST_PATH");
-        if (!envPathBytes.isEmpty()) {
-            logosHostPath = QString::fromUtf8(envPathBytes);
-        }
-        // 2) Default next to Electron/host executable
-        if (logosHostPath.isEmpty()) {
-            logosHostPath = QDir::cleanPath(QCoreApplication::applicationDirPath() + "/logos_host");
-        }
-
-        // 3) Fallback relative to plugins directory (../../logos-liblogos/build/bin/logos_host)
-        if (!QFile::exists(logosHostPath)) {
-            if (!s_plugins_dirs.isEmpty()) {
-                QDir pluginsDirCandidate(s_plugins_dirs.first());
-                QString candidate = QDir::cleanPath(pluginsDirCandidate.absoluteFilePath("../bin/logos_host"));
-                if (QFile::exists(candidate)) {
-                    logosHostPath = candidate;
-                }
-            }
-        }
-
-        qDebug() << "Logos host path (resolved):" << logosHostPath;
-
-        if (!QFile::exists(logosHostPath)) {
-            qCritical() << "logos_host executable not found at:" << logosHostPath;
-            qCritical() << "Set environment variable LOGOS_HOST_PATH to the absolute path of logos_host or ensure it is next to the Electron executable or under ../bin from the plugins directory.";
-            return false;
-        }
-
-        std::vector<std::string> arguments = {
-            "--name", name.toStdString(),
-            "--path", pluginPath.toStdString()
-        };
-
-        qDebug() << "Starting logos_host with arguments:" << name << pluginPath;
-
-        QtProcessManager::ProcessCallbacks callbacks;
-
-        callbacks.onFinished = [](const std::string& pluginName, int exitCode, bool crashed) {
-            Q_UNUSED(exitCode);
-            QString qName = QString::fromStdString(pluginName);
-            if (crashed) {
-                qCritical() << "Plugin process crashed:" << qName << "- terminating core with error";
-                exit(1);
-            }
-            s_loaded_plugins.removeAll(qName);
-        };
-
-        callbacks.onError = [](const std::string& pluginName, bool crashed) {
-            if (crashed) {
-                qCritical() << "Plugin process crashed:" << QString::fromStdString(pluginName) << "- terminating core with error";
-                exit(1);
-            }
-        };
-
-        callbacks.onOutput = [](const std::string& pluginName, const std::string& line, bool isStderr) {
-            QString qName = QString::fromStdString(pluginName);
-            QString qLine = QString::fromStdString(line);
-            if (isStderr) {
-                qCritical() << "[LOGOS_HOST" << qName << "] STDERR:" << qLine;
-            } else if (qLine.contains("qrc:") || qLine.contains("Warning:") || qLine.contains("WARNING:")) {
-                qWarning() << "[LOGOS_HOST" << qName << "]:" << qLine;
-            } else if (qLine.contains("Critical:") || qLine.contains("FAILED:") || qLine.contains("ERROR:")) {
-                qCritical() << "[LOGOS_HOST" << qName << "]:" << qLine;
-            } else {
-                qDebug() << "[LOGOS_HOST" << qName << "]:" << qLine;
-            }
-        };
-
-        if (!QtProcessManager::startProcess(name.toStdString(), logosHostPath.toStdString(), arguments, callbacks)) {
-            return false;
-        }
-
-        // Generate auth token and send via IPC
-        QUuid authToken = QUuid::createUuid();
-        QString authTokenString = authToken.toString(QUuid::WithoutBraces);
-        qDebug() << "Generated auth token:" << authTokenString;
-
-        if (!QtProcessManager::sendToken(name.toStdString(), authTokenString.toStdString())) {
-            return false;
-        }
-
-        qDebug() << "Auth token sent securely to plugin:" << name;
-
-        s_loaded_plugins.append(name);
-
-        TokenManager& tokenManager = TokenManager::instance();
-        tokenManager.saveToken(name, authTokenString);
-
-        // Inform capability module about the new module token
-        if (s_loaded_plugins.contains("capability_module")) {
-            qDebug() << "Informing capability module about new module token for:" << name;
-
-            QString capabilityModuleToken = tokenManager.getToken("capability_module");
-            qDebug() << "Capability module token:" << capabilityModuleToken;
-
-            static LogosAPI* s_coreApi = nullptr;
-            if (!s_coreApi)
-                s_coreApi = new LogosAPI("core");
-
-            LogosAPIClient* client = s_coreApi->getClient("capability_module");
-            bool success = client->informModuleToken(capabilityModuleToken, name, authTokenString);
-            if (success) {
-                qDebug() << "Successfully informed capability module about token for:" << name;
-            } else {
-                qWarning() << "Failed to inform capability module about token for:" << name;
-            }
-        } else {
-            qDebug() << "Capability module not loaded, skipping token notification";
-        }
-
-        qDebug() << "Plugin" << name << "is now running in separate process";
-        qDebug() << "Remote registry URL for this plugin: local:logos_" << name;
-
-        return true;
+        return loaderInstance().loadPlugin(QString::fromUtf8(pluginName));
     }
 
     bool loadPluginWithDependencies(const char* pluginName) {
-        const QString name = QString::fromUtf8(pluginName);
-        QStringList requestedModules;
-        requestedModules.append(name);
-
-        QStringList resolvedModules = resolveDependencies(requestedModules);
-
-        if (resolvedModules.isEmpty() || !resolvedModules.contains(name)) {
-            qWarning() << "Cannot load plugin: plugin not found:" << name;
-            return false;
-        }
-
-        bool allSucceeded = true;
-        for (const QString& moduleName : resolvedModules) {
-            if (isPluginLoaded(moduleName)) {
-                qDebug() << "Plugin already loaded, skipping:" << moduleName;
-                continue;
-            }
-            if (!loadPlugin(moduleName.toUtf8().constData())) {
-                qWarning() << "Failed to load module:" << moduleName;
-                allSucceeded = false;
-            }
-        }
-
-        return allSucceeded;
+        return loaderInstance().loadPluginWithDependencies(QString::fromUtf8(pluginName));
     }
 
     bool initializeCapabilityModule() {
-        qDebug() << "\n=== Initializing Capability Module ===";
-
-        if (!s_known_plugins.contains("capability_module")) {
-            qDebug() << "Capability module not found in known plugins, skipping initialization";
-            return false;
-        }
-
-        qDebug() << "Capability module found, attempting to load...";
-
-        bool success = loadPlugin("capability_module");
-
-        if (!success) {
-            qDebug() << "Failed to load capability module";
-            return false;
-        }
-
-        qDebug() << "Capability module loaded successfully";
-
-        return true;
+        return loaderInstance().initializeCapabilityModule();
     }
 
     bool unloadPlugin(const char* pluginName) {
-        const QString name = QString::fromUtf8(pluginName);
-        qDebug() << "Attempting to unload plugin by name:" << name;
+        return loaderInstance().unloadPlugin(QString::fromUtf8(pluginName));
+    }
 
-        if (!s_loaded_plugins.contains(name)) {
-            qWarning() << "Plugin not loaded, cannot unload:" << name;
-            qDebug() << "Loaded plugins:" << s_loaded_plugins;
-            return false;
-        }
-
-        if (!QtProcessManager::hasProcess(name.toStdString())) {
-            qWarning() << "No process found for plugin:" << name;
-            return false;
-        }
-
-        QtProcessManager::terminateProcess(name.toStdString());
-
-        s_loaded_plugins.removeAll(name);
-        
-        qDebug() << "Successfully unloaded plugin:" << name;
-        return true;
+    void terminateAll() {
+        loaderInstance().terminateAll();
     }
 
     char** getLoadedPluginsCStr() {
-        int count = s_loaded_plugins.size();
-        
-        if (count == 0) {
-            char** result = new char*[1];
-            result[0] = nullptr;
-            return result;
-        }
-        
-        char** result = new char*[count + 1];
-        
-        for (int i = 0; i < count; ++i) {
-            QByteArray utf8Data = s_loaded_plugins[i].toUtf8();
-            result[i] = new char[utf8Data.size() + 1];
-            strcpy(result[i], utf8Data.constData());
-        }
-        
-        result[count] = nullptr;
-        
-        return result;
+        return toNullTerminatedArray(registryInstance().loadedPluginNames());
     }
 
     char** getKnownPluginsCStr() {
-        QStringList knownPlugins = s_known_plugins.keys();
-        int count = knownPlugins.size();
-        
-        if (count == 0) {
+        QStringList known = registryInstance().knownPluginNames();
+        if (known.isEmpty()) {
             qWarning() << "No known plugins to return";
-            char** result = new char*[1];
-            result[0] = nullptr;
-            return result;
         }
-        
-        char** result = new char*[count + 1];
-        
-        for (int i = 0; i < count; ++i) {
-            QByteArray utf8Data = knownPlugins[i].toUtf8();
-            result[i] = new char[utf8Data.size() + 1];
-            strcpy(result[i], utf8Data.constData());
-        }
-        
-        result[count] = nullptr;
-        
-        return result;
+        return toNullTerminatedArray(known);
     }
 
     bool isPluginLoaded(const QString& name) {
-        return s_loaded_plugins.contains(name);
-    }
-
-    QStringList resolveDependencies(const QStringList& requestedModules) {
-        qDebug() << "Resolving dependencies for modules:" << requestedModules;
-        
-        QSet<QString> modulesToLoad;
-        QStringList queue = requestedModules;
-        QStringList missingDependencies;
-        
-        while (!queue.isEmpty()) {
-            QString moduleName = queue.takeFirst();
-            
-            if (modulesToLoad.contains(moduleName)) {
-                continue;
-            }
-            
-            if (!s_known_plugins.contains(moduleName)) {
-                qWarning() << "Module not found in known plugins:" << moduleName;
-                missingDependencies.append(moduleName);
-                continue;
-            }
-            
-            modulesToLoad.insert(moduleName);
-            
-            if (s_plugin_metadata.contains(moduleName)) {
-                QJsonObject metadata = s_plugin_metadata.value(moduleName);
-                QJsonArray deps = metadata.value("dependencies").toArray();
-                for (const QJsonValue& dep : deps) {
-                    QString depName = dep.toString();
-                    if (!depName.isEmpty() && !modulesToLoad.contains(depName)) {
-                        queue.append(depName);
-                    }
-                }
-            }
-        }
-        
-        if (!missingDependencies.isEmpty()) {
-            qWarning() << "Missing dependencies detected:" << missingDependencies;
-        }
-        
-        QHash<QString, QStringList> dependents;
-        QHash<QString, int> inDegree;
-        
-        for (const QString& moduleName : modulesToLoad) {
-            if (!inDegree.contains(moduleName)) {
-                inDegree[moduleName] = 0;
-            }
-            
-            if (s_plugin_metadata.contains(moduleName)) {
-                QJsonObject metadata = s_plugin_metadata.value(moduleName);
-                QJsonArray deps = metadata.value("dependencies").toArray();
-                for (const QJsonValue& dep : deps) {
-                    QString depName = dep.toString();
-                    if (!depName.isEmpty() && modulesToLoad.contains(depName)) {
-                        inDegree[moduleName]++;
-                        dependents[depName].append(moduleName);
-                    }
-                }
-            }
-        }
-        
-        QStringList result;
-        QStringList zeroInDegree;
-        
-        for (const QString& moduleName : modulesToLoad) {
-            if (inDegree.value(moduleName, 0) == 0) {
-                zeroInDegree.append(moduleName);
-            }
-        }
-        
-        while (!zeroInDegree.isEmpty()) {
-            QString moduleName = zeroInDegree.takeFirst();
-            result.append(moduleName);
-            
-            for (const QString& dependent : dependents.value(moduleName)) {
-                inDegree[dependent]--;
-                if (inDegree[dependent] == 0) {
-                    zeroInDegree.append(dependent);
-                }
-            }
-        }
-        
-        if (result.size() < modulesToLoad.size()) {
-            QStringList cycleModules;
-            for (const QString& moduleName : modulesToLoad) {
-                if (!result.contains(moduleName)) {
-                    cycleModules.append(moduleName);
-                }
-            }
-            qCritical() << "Circular dependency detected involving modules:" << cycleModules;
-        }
-        
-        qDebug() << "Resolved load order:" << result;
-        return result;
+        return registryInstance().isLoaded(name);
     }
 
     QHash<QString, qint64> getPluginProcessIds() {
-        auto stdMap = QtProcessManager::getAllProcessIds();
-        QHash<QString, qint64> result;
-        for (const auto& [name, pid] : stdMap) {
-            result.insert(QString::fromStdString(name), pid);
-        }
-        return result;
+        return loaderInstance().getPluginProcessIds();
+    }
+
+    QStringList resolveDependencies(const QStringList& requestedModules) {
+        return DependencyResolver::resolve(
+            requestedModules,
+            [](const QString& name) { return registryInstance().isKnown(name); },
+            [](const QString& name) { return registryInstance().pluginMetadata(name); }
+        );
     }
 
 }

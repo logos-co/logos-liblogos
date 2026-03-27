@@ -6,7 +6,11 @@
 #include <QHash>
 #include <QJsonObject>
 
+class PluginRegistry;
+
 namespace PluginManager {
+    PluginRegistry& registry();
+
     void setPluginsDir(const char* plugins_dir);
     void addPluginsDir(const char* plugins_dir);
 

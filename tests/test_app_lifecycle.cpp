@@ -1,21 +1,13 @@
 #include <gtest/gtest.h>
 #include "app_lifecycle.h"
 #include "plugin_manager.h"
+#include "plugin_registry.h"
 #include <QCoreApplication>
 #include <QDebug>
 
-namespace PluginManager {
-    extern QStringList s_plugins_dirs;
-    extern QStringList s_loaded_plugins;
-    extern QHash<QString, QString> s_known_plugins;
-    extern QHash<QString, QJsonObject> s_plugin_metadata;
-}
-
 static void clearPluginState() {
     PluginManager::terminateAll();
-    PluginManager::s_plugins_dirs.clear();
-    PluginManager::s_known_plugins.clear();
-    PluginManager::s_plugin_metadata.clear();
+    PluginManager::registry().clear();
 }
 
 int main(int argc, char** argv) {
@@ -70,35 +62,35 @@ TEST_F(AppLifecycleTest, SetPluginsDir_SetsDirectory) {
 
     PluginManager::setPluginsDir(testDir);
 
-    ASSERT_EQ(PluginManager::s_plugins_dirs.size(), 1);
-    EXPECT_EQ(PluginManager::s_plugins_dirs[0].toStdString(), testDir);
+    ASSERT_EQ(PluginManager::registry().pluginsDirs().size(), 1);
+    EXPECT_EQ(PluginManager::registry().pluginsDirs()[0].toStdString(), testDir);
 }
 
 TEST_F(AppLifecycleTest, SetPluginsDir_ClearsExisting) {
     PluginManager::addPluginsDir("/dir1");
     PluginManager::addPluginsDir("/dir2");
-    ASSERT_EQ(PluginManager::s_plugins_dirs.size(), 2);
+    ASSERT_EQ(PluginManager::registry().pluginsDirs().size(), 2);
 
     PluginManager::setPluginsDir("/new_dir");
 
-    ASSERT_EQ(PluginManager::s_plugins_dirs.size(), 1);
-    EXPECT_EQ(PluginManager::s_plugins_dirs[0].toStdString(), "/new_dir");
+    ASSERT_EQ(PluginManager::registry().pluginsDirs().size(), 1);
+    EXPECT_EQ(PluginManager::registry().pluginsDirs()[0].toStdString(), "/new_dir");
 }
 
 TEST_F(AppLifecycleTest, AddPluginsDir_AppendsDirectory) {
     PluginManager::addPluginsDir("/dir1");
     PluginManager::addPluginsDir("/dir2");
 
-    ASSERT_EQ(PluginManager::s_plugins_dirs.size(), 2);
-    EXPECT_EQ(PluginManager::s_plugins_dirs[0].toStdString(), "/dir1");
-    EXPECT_EQ(PluginManager::s_plugins_dirs[1].toStdString(), "/dir2");
+    ASSERT_EQ(PluginManager::registry().pluginsDirs().size(), 2);
+    EXPECT_EQ(PluginManager::registry().pluginsDirs()[0].toStdString(), "/dir1");
+    EXPECT_EQ(PluginManager::registry().pluginsDirs()[1].toStdString(), "/dir2");
 }
 
 TEST_F(AppLifecycleTest, AddPluginsDir_NoDuplicates) {
     PluginManager::addPluginsDir("/test");
     PluginManager::addPluginsDir("/test");
 
-    EXPECT_EQ(PluginManager::s_plugins_dirs.size(), 1);
+    EXPECT_EQ(PluginManager::registry().pluginsDirs().size(), 1);
 }
 
 // =============================================================================
@@ -106,13 +98,13 @@ TEST_F(AppLifecycleTest, AddPluginsDir_NoDuplicates) {
 // =============================================================================
 
 TEST_F(AppLifecycleTest, Cleanup_ClearsGlobals) {
-    PluginManager::s_known_plugins.insert("test", "/path/to/test");
+    PluginManager::registry().registerPlugin("test", "/path/to/test");
     PluginManager::addPluginsDir("/test");
 
     clearPluginState();
 
-    EXPECT_TRUE(PluginManager::s_loaded_plugins.isEmpty());
-    EXPECT_TRUE(PluginManager::s_known_plugins.isEmpty());
+    EXPECT_TRUE(PluginManager::registry().loadedPluginNames().isEmpty());
+    EXPECT_TRUE(PluginManager::registry().knownPluginNames().isEmpty());
 }
 
 TEST_F(AppLifecycleTest, Cleanup_DeletesOwnedApp) {
@@ -135,8 +127,6 @@ TEST_F(AppLifecycleTest, Cleanup_PreservesExternalApp) {
 // =============================================================================
 
 TEST_F(AppLifecycleTest, ProcessEvents_HandlesNoApp) {
-    // cleanup() resets app state to null (won't delete the test runner's app
-    // since init() detected it as external and didn't claim ownership)
     char* argv[] = {(char*)"test"};
     AppLifecycle::init(1, argv);
     AppLifecycle::cleanup();
@@ -163,8 +153,8 @@ TEST_F(AppLifecycleTest, Start_UsesCustomPluginsDirs) {
 
     AppLifecycle::start();
 
-    ASSERT_EQ(PluginManager::s_plugins_dirs.size(), 1);
-    EXPECT_EQ(PluginManager::s_plugins_dirs[0].toStdString(), "/custom/plugins");
+    ASSERT_EQ(PluginManager::registry().pluginsDirs().size(), 1);
+    EXPECT_EQ(PluginManager::registry().pluginsDirs()[0].toStdString(), "/custom/plugins");
 }
 
 // =============================================================================

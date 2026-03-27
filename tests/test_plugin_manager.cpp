@@ -1,5 +1,6 @@
 #include <gtest/gtest.h>
 #include "plugin_manager.h"
+#include "plugin_registry.h"
 #include "logos_core.h"
 #include <QCoreApplication>
 #include <QJsonArray>
@@ -10,18 +11,9 @@
 #include <cstring>
 #include <fstream>
 
-namespace PluginManager {
-    extern QStringList s_plugins_dirs;
-    extern QStringList s_loaded_plugins;
-    extern QHash<QString, QString> s_known_plugins;
-    extern QHash<QString, QJsonObject> s_plugin_metadata;
-}
-
 static void clearPluginState() {
     PluginManager::terminateAll();
-    PluginManager::s_plugins_dirs.clear();
-    PluginManager::s_known_plugins.clear();
-    PluginManager::s_plugin_metadata.clear();
+    PluginManager::registry().clear();
 }
 
 class PluginManagerTest : public ::testing::Test {
@@ -40,20 +32,20 @@ protected:
 // =============================================================================
 
 TEST_F(PluginManagerTest, GetLoadedPlugins_ReturnsEmptyList) {
-    EXPECT_TRUE(PluginManager::s_loaded_plugins.isEmpty());
+    EXPECT_TRUE(PluginManager::registry().loadedPluginNames().isEmpty());
 }
 
 TEST_F(PluginManagerTest, GetKnownPlugins_ReturnsEmptyHash) {
-    EXPECT_TRUE(PluginManager::s_known_plugins.isEmpty());
+    EXPECT_TRUE(PluginManager::registry().knownPluginNames().isEmpty());
 }
 
 TEST_F(PluginManagerTest, GetKnownPlugins_ReturnsCorrectHash) {
-    PluginManager::s_known_plugins.insert("plugin1", "/path/to/plugin1.dylib");
-    PluginManager::s_known_plugins.insert("plugin2", "/path/to/plugin2.dylib");
+    PluginManager::registry().registerPlugin("plugin1", "/path/to/plugin1.dylib");
+    PluginManager::registry().registerPlugin("plugin2", "/path/to/plugin2.dylib");
 
-    ASSERT_EQ(PluginManager::s_known_plugins.size(), 2);
-    EXPECT_EQ(PluginManager::s_known_plugins.value("plugin1").toStdString(), "/path/to/plugin1.dylib");
-    EXPECT_EQ(PluginManager::s_known_plugins.value("plugin2").toStdString(), "/path/to/plugin2.dylib");
+    ASSERT_EQ(PluginManager::registry().knownPluginNames().size(), 2);
+    EXPECT_EQ(PluginManager::registry().pluginPath("plugin1").toStdString(), "/path/to/plugin1.dylib");
+    EXPECT_EQ(PluginManager::registry().pluginPath("plugin2").toStdString(), "/path/to/plugin2.dylib");
 }
 
 TEST_F(PluginManagerTest, IsPluginLoaded_ReturnsFalseForUnloaded) {
@@ -61,13 +53,13 @@ TEST_F(PluginManagerTest, IsPluginLoaded_ReturnsFalseForUnloaded) {
 }
 
 TEST_F(PluginManagerTest, IsPluginKnown_ReturnsFalseForUnknown) {
-    EXPECT_FALSE(PluginManager::s_known_plugins.contains("nonexistent_plugin"));
+    EXPECT_FALSE(PluginManager::registry().isKnown("nonexistent_plugin"));
 }
 
 TEST_F(PluginManagerTest, IsPluginKnown_ReturnsTrueForKnown) {
-    PluginManager::s_known_plugins.insert("test_plugin", "/path/to/plugin");
+    PluginManager::registry().registerPlugin("test_plugin", "/path/to/plugin");
 
-    EXPECT_TRUE(PluginManager::s_known_plugins.contains("test_plugin"));
+    EXPECT_TRUE(PluginManager::registry().isKnown("test_plugin"));
 }
 
 // =============================================================================
@@ -93,8 +85,8 @@ TEST_F(PluginManagerTest, GetKnownPluginsCStr_ReturnsNullTerminatedArrayWhenEmpt
 }
 
 TEST_F(PluginManagerTest, GetKnownPluginsCStr_ReturnsCorrectArray) {
-    PluginManager::s_known_plugins.insert("plugin1", "/path/to/plugin1");
-    PluginManager::s_known_plugins.insert("plugin2", "/path/to/plugin2");
+    PluginManager::registry().registerPlugin("plugin1", "/path/to/plugin1");
+    PluginManager::registry().registerPlugin("plugin2", "/path/to/plugin2");
 
     char** result = PluginManager::getKnownPluginsCStr();
 
@@ -151,11 +143,11 @@ TEST_F(PluginManagerTest, ResolveDependencies_ReturnsEmptyForUnknownPlugin) {
 }
 
 TEST_F(PluginManagerTest, ResolveDependencies_ReturnsSinglePluginWithNoDeps) {
-    PluginManager::s_known_plugins.insert("plugin_a", "/path/to/plugin_a");
+    PluginManager::registry().registerPlugin("plugin_a", "/path/to/plugin_a");
     QJsonObject metadata;
     metadata["name"] = "plugin_a";
     metadata["dependencies"] = QJsonArray();
-    PluginManager::s_plugin_metadata.insert("plugin_a", metadata);
+    PluginManager::registry().registerMetadata("plugin_a", metadata);
 
     QStringList requested;
     requested.append("plugin_a");
@@ -167,20 +159,20 @@ TEST_F(PluginManagerTest, ResolveDependencies_ReturnsSinglePluginWithNoDeps) {
 }
 
 TEST_F(PluginManagerTest, ResolveDependencies_ReturnsCorrectOrder) {
-    PluginManager::s_known_plugins.insert("plugin_a", "/path/to/plugin_a");
-    PluginManager::s_known_plugins.insert("plugin_b", "/path/to/plugin_b");
+    PluginManager::registry().registerPlugin("plugin_a", "/path/to/plugin_a");
+    PluginManager::registry().registerPlugin("plugin_b", "/path/to/plugin_b");
 
     QJsonObject metadataA;
     metadataA["name"] = "plugin_a";
     QJsonArray depsA;
     depsA.append("plugin_b");
     metadataA["dependencies"] = depsA;
-    PluginManager::s_plugin_metadata.insert("plugin_a", metadataA);
+    PluginManager::registry().registerMetadata("plugin_a", metadataA);
 
     QJsonObject metadataB;
     metadataB["name"] = "plugin_b";
     metadataB["dependencies"] = QJsonArray();
-    PluginManager::s_plugin_metadata.insert("plugin_b", metadataB);
+    PluginManager::registry().registerMetadata("plugin_b", metadataB);
 
     QStringList requested;
     requested.append("plugin_a");
@@ -193,28 +185,28 @@ TEST_F(PluginManagerTest, ResolveDependencies_ReturnsCorrectOrder) {
 }
 
 TEST_F(PluginManagerTest, ResolveDependencies_HandlesTransitiveDeps) {
-    PluginManager::s_known_plugins.insert("plugin_a", "/path/to/plugin_a");
-    PluginManager::s_known_plugins.insert("plugin_b", "/path/to/plugin_b");
-    PluginManager::s_known_plugins.insert("plugin_c", "/path/to/plugin_c");
+    PluginManager::registry().registerPlugin("plugin_a", "/path/to/plugin_a");
+    PluginManager::registry().registerPlugin("plugin_b", "/path/to/plugin_b");
+    PluginManager::registry().registerPlugin("plugin_c", "/path/to/plugin_c");
 
     QJsonObject metadataA;
     metadataA["name"] = "plugin_a";
     QJsonArray depsA;
     depsA.append("plugin_b");
     metadataA["dependencies"] = depsA;
-    PluginManager::s_plugin_metadata.insert("plugin_a", metadataA);
+    PluginManager::registry().registerMetadata("plugin_a", metadataA);
 
     QJsonObject metadataB;
     metadataB["name"] = "plugin_b";
     QJsonArray depsB;
     depsB.append("plugin_c");
     metadataB["dependencies"] = depsB;
-    PluginManager::s_plugin_metadata.insert("plugin_b", metadataB);
+    PluginManager::registry().registerMetadata("plugin_b", metadataB);
 
     QJsonObject metadataC;
     metadataC["name"] = "plugin_c";
     metadataC["dependencies"] = QJsonArray();
-    PluginManager::s_plugin_metadata.insert("plugin_c", metadataC);
+    PluginManager::registry().registerMetadata("plugin_c", metadataC);
 
     QStringList requested;
     requested.append("plugin_a");
@@ -246,8 +238,8 @@ TEST_F(PluginManagerTest, LoadPluginWithDependencies_ReturnsZeroForUnknown) {
 
 TEST_F(PluginManagerTest, SetPluginsDir_SetsFirstDirectory) {
     PluginManager::setPluginsDir("/tmp/test_plugins");
-    ASSERT_EQ(PluginManager::s_plugins_dirs.size(), 1);
-    EXPECT_EQ(PluginManager::s_plugins_dirs[0].toStdString(), "/tmp/test_plugins");
+    ASSERT_EQ(PluginManager::registry().pluginsDirs().size(), 1);
+    EXPECT_EQ(PluginManager::registry().pluginsDirs()[0].toStdString(), "/tmp/test_plugins");
 }
 
 TEST_F(PluginManagerTest, AddPluginsDir_AppendsDirectory) {
@@ -255,25 +247,22 @@ TEST_F(PluginManagerTest, AddPluginsDir_AppendsDirectory) {
     PluginManager::addPluginsDir("/tmp/dir2");
     PluginManager::addPluginsDir("/tmp/dir3");
 
-    ASSERT_EQ(PluginManager::s_plugins_dirs.size(), 3);
-    EXPECT_EQ(PluginManager::s_plugins_dirs[0].toStdString(), "/tmp/dir1");
-    EXPECT_EQ(PluginManager::s_plugins_dirs[1].toStdString(), "/tmp/dir2");
-    EXPECT_EQ(PluginManager::s_plugins_dirs[2].toStdString(), "/tmp/dir3");
+    ASSERT_EQ(PluginManager::registry().pluginsDirs().size(), 3);
+    EXPECT_EQ(PluginManager::registry().pluginsDirs()[0].toStdString(), "/tmp/dir1");
+    EXPECT_EQ(PluginManager::registry().pluginsDirs()[1].toStdString(), "/tmp/dir2");
+    EXPECT_EQ(PluginManager::registry().pluginsDirs()[2].toStdString(), "/tmp/dir3");
 }
 
 TEST_F(PluginManagerTest, GetPluginsDirs_ReturnsEmptyAfterClear) {
     PluginManager::setPluginsDir("/tmp/dir1");
     clearPluginState();
-    EXPECT_TRUE(PluginManager::s_plugins_dirs.isEmpty());
+    EXPECT_TRUE(PluginManager::registry().pluginsDirs().isEmpty());
 }
 
 // =============================================================================
 // Discovery Tests — fake installed modules
 // =============================================================================
 
-// Helper to create a fake installed module directory structure:
-//   <parentDir>/<moduleName>/manifest.json
-//   <parentDir>/<moduleName>/<mainFile>  (empty fake binary)
 static void createFakeModule(const QString& parentDir,
                              const QString& moduleName,
                              const QString& mainFile,
@@ -281,7 +270,6 @@ static void createFakeModule(const QString& parentDir,
     QDir dir(parentDir);
     dir.mkpath(moduleName);
 
-    // Write manifest.json
     QJsonObject manifest;
     manifest["name"] = moduleName;
     manifest["version"] = "1.0.0";
@@ -295,7 +283,6 @@ static void createFakeModule(const QString& parentDir,
     mf << doc.toJson().toStdString();
     mf.close();
 
-    // Create a fake binary file (processPlugin will fail on this, which is expected)
     QString binaryPath = dir.filePath(moduleName + "/" + mainFile);
     std::ofstream bf(binaryPath.toStdString());
     bf << "fake";
@@ -309,15 +296,14 @@ TEST_F(PluginManagerTest, DiscoverInstalledModules_DoesNotCrashWithEmptyDir) {
     PluginManager::setPluginsDir(tmpDir.path().toUtf8().constData());
     PluginManager::discoverInstalledModules();
 
-    // No modules to find — known plugins should remain empty
-    EXPECT_TRUE(PluginManager::s_known_plugins.isEmpty());
+    EXPECT_TRUE(PluginManager::registry().knownPluginNames().isEmpty());
 }
 
 TEST_F(PluginManagerTest, DiscoverInstalledModules_DoesNotCrashWithNonexistentDir) {
     PluginManager::setPluginsDir("/tmp/nonexistent_dir_12345");
     PluginManager::discoverInstalledModules();
 
-    EXPECT_TRUE(PluginManager::s_known_plugins.isEmpty());
+    EXPECT_TRUE(PluginManager::registry().knownPluginNames().isEmpty());
 }
 
 TEST_F(PluginManagerTest, DiscoverInstalledModules_FindsFakeModulesWithoutCrash) {
@@ -330,17 +316,13 @@ TEST_F(PluginManagerTest, DiscoverInstalledModules_FindsFakeModulesWithoutCrash)
     PluginManager::setPluginsDir(tmpDir.path().toUtf8().constData());
     PluginManager::discoverInstalledModules();
 
-    // processPlugin fails for fake binaries, so they won't be in known plugins.
-    // The important thing is that discovery ran without crashing and the
-    // scanning pipeline found the manifest.json files.
-    EXPECT_TRUE(PluginManager::s_known_plugins.isEmpty());
+    EXPECT_TRUE(PluginManager::registry().knownPluginNames().isEmpty());
 }
 
 TEST_F(PluginManagerTest, DiscoverInstalledModules_IgnoresModulesWithoutManifest) {
     QTemporaryDir tmpDir;
     ASSERT_TRUE(tmpDir.isValid());
 
-    // Create a module directory without manifest.json
     QDir dir(tmpDir.path());
     dir.mkpath("no_manifest_module");
     QString binaryPath = dir.filePath("no_manifest_module/plugin.so");
@@ -351,21 +333,19 @@ TEST_F(PluginManagerTest, DiscoverInstalledModules_IgnoresModulesWithoutManifest
     PluginManager::setPluginsDir(tmpDir.path().toUtf8().constData());
     PluginManager::discoverInstalledModules();
 
-    EXPECT_TRUE(PluginManager::s_known_plugins.isEmpty());
+    EXPECT_TRUE(PluginManager::registry().knownPluginNames().isEmpty());
 }
 
 TEST_F(PluginManagerTest, DiscoverInstalledModules_IgnoresUiTypeModules) {
     QTemporaryDir tmpDir;
     ASSERT_TRUE(tmpDir.isValid());
 
-    // Create a UI module — getInstalledModules() only scans for "core" type
     createFakeModule(tmpDir.path(), "ui_module", "ui_module_plugin.so", "ui");
 
     PluginManager::setPluginsDir(tmpDir.path().toUtf8().constData());
     PluginManager::discoverInstalledModules();
 
-    // UI modules are not discovered by getInstalledModules (which filters by "core")
-    EXPECT_TRUE(PluginManager::s_known_plugins.isEmpty());
+    EXPECT_TRUE(PluginManager::registry().knownPluginNames().isEmpty());
 }
 
 TEST_F(PluginManagerTest, DiscoverInstalledModules_MultipleDirectories) {
@@ -380,20 +360,17 @@ TEST_F(PluginManagerTest, DiscoverInstalledModules_MultipleDirectories) {
     PluginManager::setPluginsDir(tmpDir1.path().toUtf8().constData());
     PluginManager::addPluginsDir(tmpDir2.path().toUtf8().constData());
 
-    ASSERT_EQ(PluginManager::s_plugins_dirs.size(), 2);
+    ASSERT_EQ(PluginManager::registry().pluginsDirs().size(), 2);
 
     PluginManager::discoverInstalledModules();
 
-    // Both directories should be scanned without crash
-    // (processPlugin still fails for fake binaries)
-    EXPECT_TRUE(PluginManager::s_known_plugins.isEmpty());
+    EXPECT_TRUE(PluginManager::registry().knownPluginNames().isEmpty());
 }
 
 TEST_F(PluginManagerTest, DiscoverInstalledModules_InvalidManifestJson) {
     QTemporaryDir tmpDir;
     ASSERT_TRUE(tmpDir.isValid());
 
-    // Create a module with invalid JSON in manifest
     QDir dir(tmpDir.path());
     dir.mkpath("bad_manifest_module");
     QString manifestPath = dir.filePath("bad_manifest_module/manifest.json");
@@ -404,5 +381,5 @@ TEST_F(PluginManagerTest, DiscoverInstalledModules_InvalidManifestJson) {
     PluginManager::setPluginsDir(tmpDir.path().toUtf8().constData());
     PluginManager::discoverInstalledModules();
 
-    EXPECT_TRUE(PluginManager::s_known_plugins.isEmpty());
+    EXPECT_TRUE(PluginManager::registry().knownPluginNames().isEmpty());
 }
