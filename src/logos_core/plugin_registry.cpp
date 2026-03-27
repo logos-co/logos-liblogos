@@ -32,7 +32,7 @@ void PluginRegistry::discoverInstalledModules() {
     if (!m_pluginsDirs.isEmpty()) {
         pm.setEmbeddedModulesDirectory(m_pluginsDirs.first().toStdString());
         for (int i = 1; i < m_pluginsDirs.size(); ++i) {
-            pm.setUserModulesDirectory(m_pluginsDirs[i].toStdString());
+            pm.addEmbeddedModulesDirectory(m_pluginsDirs[i].toStdString());
         }
     }
 
