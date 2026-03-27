@@ -60,65 +60,73 @@ QString PluginRegistry::processPlugin(const QString& pluginPath) {
     }
 
     QString qName = QString::fromStdString(name);
-    m_knownPlugins.insert(qName, pluginPath);
 
-    auto deps = ModuleLib::LogosModule::getModuleDependencies(pluginPath.toStdString());
-    QStringList qDeps;
-    for (const auto& d : deps) {
-        qDeps.append(QString::fromStdString(d));
+    PluginInfo info;
+    info.path = pluginPath;
+    for (const auto& d : ModuleLib::LogosModule::getModuleDependencies(pluginPath.toStdString())) {
+        info.dependencies.append(QString::fromStdString(d));
     }
-    m_pluginDependencies.insert(qName, qDeps);
+    m_plugins.insert(qName, info);
 
     return qName;
 }
 
 bool PluginRegistry::isKnown(const QString& name) const {
-    return m_knownPlugins.contains(name);
+    return m_plugins.contains(name);
 }
 
 QString PluginRegistry::pluginPath(const QString& name) const {
-    return m_knownPlugins.value(name);
+    return m_plugins.value(name).path;
 }
 
 QStringList PluginRegistry::pluginDependencies(const QString& name) const {
-    return m_pluginDependencies.value(name);
+    return m_plugins.value(name).dependencies;
 }
 
 QStringList PluginRegistry::knownPluginNames() const {
-    return m_knownPlugins.keys();
+    return m_plugins.keys();
 }
 
-void PluginRegistry::registerPlugin(const QString& name, const QString& path) {
-    m_knownPlugins.insert(name, path);
+void PluginRegistry::registerPlugin(const QString& name, const QString& path,
+                                    const QStringList& dependencies) {
+    PluginInfo& info = m_plugins[name];
+    info.path = path;
+    if (!dependencies.isEmpty())
+        info.dependencies = dependencies;
 }
 
 void PluginRegistry::registerDependencies(const QString& name, const QStringList& dependencies) {
-    m_pluginDependencies.insert(name, dependencies);
+    m_plugins[name].dependencies = dependencies;
 }
 
 bool PluginRegistry::isLoaded(const QString& name) const {
-    return m_loadedPlugins.contains(name);
+    return m_plugins.value(name).loaded;
 }
 
 void PluginRegistry::markLoaded(const QString& name) {
-    m_loadedPlugins.append(name);
+    m_plugins[name].loaded = true;
 }
 
 void PluginRegistry::markUnloaded(const QString& name) {
-    m_loadedPlugins.removeAll(name);
+    if (m_plugins.contains(name))
+        m_plugins[name].loaded = false;
 }
 
 QStringList PluginRegistry::loadedPluginNames() const {
-    return m_loadedPlugins;
+    QStringList result;
+    for (auto it = m_plugins.constBegin(); it != m_plugins.constEnd(); ++it) {
+        if (it.value().loaded)
+            result.append(it.key());
+    }
+    return result;
 }
 
 void PluginRegistry::clearLoaded() {
-    m_loadedPlugins.clear();
+    for (auto it = m_plugins.begin(); it != m_plugins.end(); ++it)
+        it.value().loaded = false;
 }
 
 void PluginRegistry::clear() {
     m_pluginsDirs.clear();
-    m_knownPlugins.clear();
-    m_pluginDependencies.clear();
-    m_loadedPlugins.clear();
+    m_plugins.clear();
 }

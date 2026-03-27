@@ -5,6 +5,12 @@
 #include <QStringList>
 #include <QHash>
 
+struct PluginInfo {
+    QString path;
+    QStringList dependencies;
+    bool loaded = false;
+};
+
 class PluginRegistry {
 public:
     void setPluginsDir(const QString& dir);
@@ -18,7 +24,8 @@ public:
     QString pluginPath(const QString& name) const;
     QStringList pluginDependencies(const QString& name) const;
     QStringList knownPluginNames() const;
-    void registerPlugin(const QString& name, const QString& path);
+    void registerPlugin(const QString& name, const QString& path,
+                        const QStringList& dependencies = {});
     void registerDependencies(const QString& name, const QStringList& dependencies);
 
     bool isLoaded(const QString& name) const;
@@ -31,9 +38,7 @@ public:
 
 private:
     QStringList m_pluginsDirs;
-    QHash<QString, QString> m_knownPlugins;
-    QHash<QString, QStringList> m_pluginDependencies;
-    QStringList m_loadedPlugins;
+    QHash<QString, PluginInfo> m_plugins;
 };
 
 #endif // PLUGIN_REGISTRY_H
