@@ -4,6 +4,20 @@
 #include <QCoreApplication>
 #include <QDebug>
 
+namespace PluginManager {
+    extern QStringList s_plugins_dirs;
+    extern QStringList s_loaded_plugins;
+    extern QHash<QString, QString> s_known_plugins;
+    extern QHash<QString, QJsonObject> s_plugin_metadata;
+}
+
+static void clearPluginState() {
+    PluginManager::terminateAll();
+    PluginManager::s_plugins_dirs.clear();
+    PluginManager::s_known_plugins.clear();
+    PluginManager::s_plugin_metadata.clear();
+}
+
 int main(int argc, char** argv) {
     QCoreApplication app(argc, argv);
     ::testing::InitGoogleTest(&argc, argv);
@@ -13,11 +27,11 @@ int main(int argc, char** argv) {
 class AppLifecycleTest : public ::testing::Test {
 protected:
     void SetUp() override {
-        PluginManager::clearState();
+        clearPluginState();
     }
 
     void TearDown() override {
-        PluginManager::clearState();
+        clearPluginState();
     }
 };
 
@@ -56,38 +70,35 @@ TEST_F(AppLifecycleTest, SetPluginsDir_SetsDirectory) {
 
     PluginManager::setPluginsDir(testDir);
 
-    QStringList dirs = PluginManager::getPluginsDirs();
-    ASSERT_EQ(dirs.size(), 1);
-    EXPECT_EQ(dirs[0].toStdString(), testDir);
+    ASSERT_EQ(PluginManager::s_plugins_dirs.size(), 1);
+    EXPECT_EQ(PluginManager::s_plugins_dirs[0].toStdString(), testDir);
 }
 
 TEST_F(AppLifecycleTest, SetPluginsDir_ClearsExisting) {
     PluginManager::addPluginsDir("/dir1");
     PluginManager::addPluginsDir("/dir2");
-    ASSERT_EQ(PluginManager::getPluginsDirs().size(), 2);
+    ASSERT_EQ(PluginManager::s_plugins_dirs.size(), 2);
 
     PluginManager::setPluginsDir("/new_dir");
 
-    QStringList dirs = PluginManager::getPluginsDirs();
-    ASSERT_EQ(dirs.size(), 1);
-    EXPECT_EQ(dirs[0].toStdString(), "/new_dir");
+    ASSERT_EQ(PluginManager::s_plugins_dirs.size(), 1);
+    EXPECT_EQ(PluginManager::s_plugins_dirs[0].toStdString(), "/new_dir");
 }
 
 TEST_F(AppLifecycleTest, AddPluginsDir_AppendsDirectory) {
     PluginManager::addPluginsDir("/dir1");
     PluginManager::addPluginsDir("/dir2");
 
-    QStringList dirs = PluginManager::getPluginsDirs();
-    ASSERT_EQ(dirs.size(), 2);
-    EXPECT_EQ(dirs[0].toStdString(), "/dir1");
-    EXPECT_EQ(dirs[1].toStdString(), "/dir2");
+    ASSERT_EQ(PluginManager::s_plugins_dirs.size(), 2);
+    EXPECT_EQ(PluginManager::s_plugins_dirs[0].toStdString(), "/dir1");
+    EXPECT_EQ(PluginManager::s_plugins_dirs[1].toStdString(), "/dir2");
 }
 
 TEST_F(AppLifecycleTest, AddPluginsDir_NoDuplicates) {
     PluginManager::addPluginsDir("/test");
     PluginManager::addPluginsDir("/test");
 
-    EXPECT_EQ(PluginManager::getPluginsDirs().size(), 1);
+    EXPECT_EQ(PluginManager::s_plugins_dirs.size(), 1);
 }
 
 // =============================================================================
@@ -95,13 +106,13 @@ TEST_F(AppLifecycleTest, AddPluginsDir_NoDuplicates) {
 // =============================================================================
 
 TEST_F(AppLifecycleTest, Cleanup_ClearsGlobals) {
-    PluginManager::addKnownPlugin("test", "/path/to/test");
+    PluginManager::s_known_plugins.insert("test", "/path/to/test");
     PluginManager::addPluginsDir("/test");
 
-    PluginManager::clearState();
+    clearPluginState();
 
-    EXPECT_TRUE(PluginManager::getLoadedPlugins().isEmpty());
-    EXPECT_TRUE(PluginManager::getKnownPlugins().isEmpty());
+    EXPECT_TRUE(PluginManager::s_loaded_plugins.isEmpty());
+    EXPECT_TRUE(PluginManager::s_known_plugins.isEmpty());
 }
 
 TEST_F(AppLifecycleTest, Cleanup_DeletesOwnedApp) {
@@ -144,18 +155,6 @@ TEST_F(AppLifecycleTest, ProcessEvents_CallsAppProcessEvents) {
 // Start Function Tests (Limited testing without actual plugins)
 // =============================================================================
 
-TEST_F(AppLifecycleTest, Start_ClearsLoadedPlugins) {
-    PluginManager::registerLoadedPlugin("old_plugin");
-    ASSERT_FALSE(PluginManager::getLoadedPlugins().isEmpty());
-
-    char* argv[] = {(char*)"test"};
-    AppLifecycle::init(1, argv);
-
-    AppLifecycle::start();
-
-    EXPECT_TRUE(true);
-}
-
 TEST_F(AppLifecycleTest, Start_UsesCustomPluginsDirs) {
     char* argv[] = {(char*)"test"};
     AppLifecycle::init(1, argv);
@@ -164,9 +163,8 @@ TEST_F(AppLifecycleTest, Start_UsesCustomPluginsDirs) {
 
     AppLifecycle::start();
 
-    QStringList dirs = PluginManager::getPluginsDirs();
-    ASSERT_EQ(dirs.size(), 1);
-    EXPECT_EQ(dirs[0].toStdString(), "/custom/plugins");
+    ASSERT_EQ(PluginManager::s_plugins_dirs.size(), 1);
+    EXPECT_EQ(PluginManager::s_plugins_dirs[0].toStdString(), "/custom/plugins");
 }
 
 // =============================================================================

@@ -18,14 +18,12 @@
 
 using namespace ModuleLib;
 
-namespace {
+namespace PluginManager {
+
     QStringList s_plugins_dirs;
     QStringList s_loaded_plugins;
     QHash<QString, QString> s_known_plugins;
     QHash<QString, QJsonObject> s_plugin_metadata;
-}
-
-namespace PluginManager {
 
     void setPluginsDir(const char* plugins_dir) {
         assert(plugins_dir != nullptr);
@@ -40,10 +38,6 @@ namespace PluginManager {
         if (s_plugins_dirs.contains(dir)) return;
         s_plugins_dirs.append(dir);
         qDebug() << "Added plugins directory:" << dir;
-    }
-
-    QStringList getPluginsDirs() {
-        return s_plugins_dirs;
     }
 
     // Delegate to PackageManagerLib for platform variant selection and plugin scanning
@@ -291,26 +285,6 @@ namespace PluginManager {
         return allSucceeded;
     }
 
-    QString currentPlatformVariant() {
-#if defined(Q_OS_MAC)
-    #if defined(Q_PROCESSOR_ARM)
-        return "darwin-arm64";
-    #else
-        return "darwin-x86_64";
-    #endif
-#elif defined(Q_OS_LINUX)
-    #if defined(Q_PROCESSOR_X86_64)
-        return "linux-x86_64";
-    #elif defined(Q_PROCESSOR_ARM_64)
-        return "linux-arm64";
-    #else
-        return "linux-x86";
-    #endif
-#else
-        return "unknown";
-#endif
-    }
-
     bool initializeCapabilityModule() {
         qDebug() << "\n=== Initializing Capability Module ===";
 
@@ -402,20 +376,8 @@ namespace PluginManager {
         return result;
     }
 
-    QStringList getLoadedPlugins() {
-        return s_loaded_plugins;
-    }
-
-    QHash<QString, QString> getKnownPlugins() {
-        return s_known_plugins;
-    }
-
     bool isPluginLoaded(const QString& name) {
         return s_loaded_plugins.contains(name);
-    }
-
-    bool isPluginKnown(const QString& name) {
-        return s_known_plugins.contains(name);
     }
 
     QStringList resolveDependencies(const QStringList& requestedModules) {
@@ -512,28 +474,6 @@ namespace PluginManager {
         return result;
     }
 
-    void clearState() {
-        qDebug() << "Clearing all plugin state";
-        
-        s_plugins_dirs.clear();
-        s_loaded_plugins.clear();
-        s_known_plugins.clear();
-        s_plugin_metadata.clear();
-        
-        QtProcessManager::clearAll();
-
-        qDebug() << "Plugin state cleared";
-    }
-
-    void addKnownPlugin(const QString& name, const QString& path) {
-        qDebug() << "Adding known plugin:" << name << "at path:" << path;
-        s_known_plugins.insert(name, path);
-    }
-
-    void addPluginMetadata(const QString& name, const QJsonObject& metadata) {
-        s_plugin_metadata.insert(name, metadata);
-    }
-
     QHash<QString, qint64> getPluginProcessIds() {
         auto stdMap = QtProcessManager::getAllProcessIds();
         QHash<QString, qint64> result;
@@ -541,12 +481,6 @@ namespace PluginManager {
             result.insert(QString::fromStdString(name), pid);
         }
         return result;
-    }
-
-    void registerLoadedPlugin(const QString& name) {
-        if (!s_loaded_plugins.contains(name)) {
-            s_loaded_plugins.append(name);
-        }
     }
 
 }
