@@ -8,8 +8,6 @@ namespace DependencyResolver {
     QStringList resolve(const QStringList& requested,
                         IsKnownFn isKnown,
                         GetDependenciesFn getDependencies) {
-        qDebug() << "Resolving dependencies for modules:" << requested;
-
         QSet<QString> modulesToLoad;
         QStringList queue = requested;
         QStringList missingDependencies;
@@ -87,7 +85,6 @@ namespace DependencyResolver {
             qCritical() << "Circular dependency detected involving modules:" << cycleModules;
         }
 
-        qDebug() << "Resolved load order:" << result;
         return result;
     }
 

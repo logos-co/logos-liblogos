@@ -14,13 +14,11 @@ static PackageManagerLib& packageManagerInstance() {
 void PluginRegistry::setPluginsDir(const QString& dir) {
     m_pluginsDirs.clear();
     m_pluginsDirs.append(dir);
-    qInfo() << "Custom plugins directory set to:" << m_pluginsDirs.first();
 }
 
 void PluginRegistry::addPluginsDir(const QString& dir) {
     if (m_pluginsDirs.contains(dir)) return;
     m_pluginsDirs.append(dir);
-    qDebug() << "Added plugins directory:" << dir;
 }
 
 QStringList PluginRegistry::pluginsDirs() const {
@@ -49,14 +47,9 @@ void PluginRegistry::discoverInstalledModules() {
 
         QString pluginName = processPlugin(mainFilePath);
         if (pluginName.isEmpty()) {
-            qWarning() << "Failed to process plugin (no metadata or invalid):" << mainFilePath;
-        } else {
-            qDebug() << "Discovered module:" << pluginName << "at" << mainFilePath;
+            qWarning() << "Failed to process plugin:" << mainFilePath;
         }
     }
-
-    qDebug() << "Total known plugins after discovery:" << m_knownPlugins.size();
-    qDebug() << "Known plugin names:" << m_knownPlugins.keys();
 }
 
 QString PluginRegistry::processPlugin(const QString& pluginPath) {

@@ -62,11 +62,10 @@ namespace PluginManager {
 
     char* processPluginCStr(const char* pluginPath) {
         QString path = QString::fromUtf8(pluginPath);
-        qDebug() << "Processing plugin file:" << path;
 
         QString pluginName = registryInstance().processPlugin(path);
         if (pluginName.isEmpty()) {
-            qWarning() << "Failed to process plugin file:" << path;
+            qWarning() << "Failed to process plugin:" << path;
             return nullptr;
         }
 

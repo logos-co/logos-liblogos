@@ -39,11 +39,9 @@ QString PluginLoader::resolveLogosHostPath() {
         }
     }
 
-    qDebug() << "Logos host path (resolved):" << logosHostPath;
-
     if (!QFile::exists(logosHostPath)) {
-        qCritical() << "logos_host executable not found at:" << logosHostPath;
-        qCritical() << "Set environment variable LOGOS_HOST_PATH to the absolute path of logos_host or ensure it is next to the Electron executable or under ../bin from the plugins directory.";
+        qCritical() << "logos_host not found at:" << logosHostPath
+                     << "- set LOGOS_HOST_PATH or place it next to the executable";
         return QString();
     }
 
@@ -51,45 +49,34 @@ QString PluginLoader::resolveLogosHostPath() {
 }
 
 void PluginLoader::notifyCapabilityModule(const QString& name, const QString& token) {
-    if (!m_registry.isLoaded("capability_module"))  {
-        qDebug() << "Capability module not loaded, skipping token notification";
+    if (!m_registry.isLoaded("capability_module"))
         return;
-    }
-
-    qDebug() << "Informing capability module about new module token for:" << name;
 
     TokenManager& tokenManager = TokenManager::instance();
     QString capabilityModuleToken = tokenManager.getToken("capability_module");
-    qDebug() << "Capability module token:" << capabilityModuleToken;
 
     static LogosAPI* s_coreApi = nullptr;
     if (!s_coreApi)
         s_coreApi = new LogosAPI("core");
 
     LogosAPIClient* client = s_coreApi->getClient("capability_module");
-    bool success = client->informModuleToken(capabilityModuleToken, name, token);
-    if (success) {
-        qDebug() << "Successfully informed capability module about token for:" << name;
-    } else {
-        qWarning() << "Failed to inform capability module about token for:" << name;
+    if (!client->informModuleToken(capabilityModuleToken, name, token)) {
+        qWarning() << "Failed to register token with capability module for:" << name;
     }
 }
 
 bool PluginLoader::loadPlugin(const QString& name) {
-    qDebug() << "Attempting to load plugin by name:" << name;
-
     if (!m_registry.isKnown(name)) {
-        qWarning() << "Plugin not found among known plugins:" << name;
+        qWarning() << "Cannot load unknown plugin:" << name;
         return false;
     }
-
-    QString pluginPath = m_registry.pluginPath(name);
-    qDebug() << "Loading plugin:" << name << "from path:" << pluginPath << "in separate process";
 
     if (m_registry.isLoaded(name)) {
         qWarning() << "Plugin already loaded:" << name;
         return false;
     }
+
+    QString pluginPath = m_registry.pluginPath(name);
 
     QString logosHostPath = resolveLogosHostPath();
     if (logosHostPath.isEmpty())
@@ -100,8 +87,6 @@ bool PluginLoader::loadPlugin(const QString& name) {
         "--path", pluginPath.toStdString()
     };
 
-    qDebug() << "Starting logos_host with arguments:" << name << pluginPath;
-
     PluginRegistry* registry = &m_registry;
 
     QtProcessManager::ProcessCallbacks callbacks;
@@ -110,7 +95,7 @@ bool PluginLoader::loadPlugin(const QString& name) {
         Q_UNUSED(exitCode);
         QString qName = QString::fromStdString(pluginName);
         if (crashed) {
-            qCritical() << "Plugin process crashed:" << qName << "- terminating core with error";
+            qCritical() << "Plugin process crashed:" << qName;
             exit(1);
         }
         registry->markUnloaded(qName);
@@ -118,7 +103,7 @@ bool PluginLoader::loadPlugin(const QString& name) {
 
     callbacks.onError = [](const std::string& pluginName, bool crashed) {
         if (crashed) {
-            qCritical() << "Plugin process crashed:" << QString::fromStdString(pluginName) << "- terminating core with error";
+            qCritical() << "Plugin process crashed:" << QString::fromStdString(pluginName);
             exit(1);
         }
     };
@@ -127,13 +112,11 @@ bool PluginLoader::loadPlugin(const QString& name) {
         QString qName = QString::fromStdString(pluginName);
         QString qLine = QString::fromStdString(line);
         if (isStderr) {
-            qCritical() << "[LOGOS_HOST" << qName << "] STDERR:" << qLine;
-        } else if (qLine.contains("qrc:") || qLine.contains("Warning:") || qLine.contains("WARNING:")) {
-            qWarning() << "[LOGOS_HOST" << qName << "]:" << qLine;
+            qCritical() << "[" << qName << "]" << qLine;
+        } else if (qLine.contains("Warning:") || qLine.contains("WARNING:")) {
+            qWarning() << "[" << qName << "]" << qLine;
         } else if (qLine.contains("Critical:") || qLine.contains("FAILED:") || qLine.contains("ERROR:")) {
-            qCritical() << "[LOGOS_HOST" << qName << "]:" << qLine;
-        } else {
-            qDebug() << "[LOGOS_HOST" << qName << "]:" << qLine;
+            qCritical() << "[" << qName << "]" << qLine;
         }
     };
 
@@ -143,13 +126,10 @@ bool PluginLoader::loadPlugin(const QString& name) {
 
     QUuid authToken = QUuid::createUuid();
     QString authTokenString = authToken.toString(QUuid::WithoutBraces);
-    qDebug() << "Generated auth token:" << authTokenString;
 
     if (!QtProcessManager::sendToken(name.toStdString(), authTokenString.toStdString())) {
         return false;
     }
-
-    qDebug() << "Auth token sent securely to plugin:" << name;
 
     m_registry.markLoaded(name);
 
@@ -158,8 +138,7 @@ bool PluginLoader::loadPlugin(const QString& name) {
 
     notifyCapabilityModule(name, authTokenString);
 
-    qDebug() << "Plugin" << name << "is now running in separate process";
-    qDebug() << "Remote registry URL for this plugin: local:logos_" << name;
+    qInfo() << "Plugin loaded:" << name;
 
     return true;
 }
@@ -175,18 +154,16 @@ bool PluginLoader::loadPluginWithDependencies(const QString& name) {
     );
 
     if (resolved.isEmpty() || !resolved.contains(name)) {
-        qWarning() << "Cannot load plugin: plugin not found:" << name;
+        qWarning() << "Cannot resolve dependencies for:" << name;
         return false;
     }
 
     bool allSucceeded = true;
     for (const QString& moduleName : resolved) {
-        if (m_registry.isLoaded(moduleName)) {
-            qDebug() << "Plugin already loaded, skipping:" << moduleName;
+        if (m_registry.isLoaded(moduleName))
             continue;
-        }
         if (!loadPlugin(moduleName)) {
-            qWarning() << "Failed to load module:" << moduleName;
+            qWarning() << "Failed to load plugin:" << moduleName;
             allSucceeded = false;
         }
     }
@@ -195,32 +172,20 @@ bool PluginLoader::loadPluginWithDependencies(const QString& name) {
 }
 
 bool PluginLoader::initializeCapabilityModule() {
-    qDebug() << "\n=== Initializing Capability Module ===";
+    if (!m_registry.isKnown("capability_module"))
+        return false;
 
-    if (!m_registry.isKnown("capability_module")) {
-        qDebug() << "Capability module not found in known plugins, skipping initialization";
+    if (!loadPlugin("capability_module")) {
+        qWarning() << "Failed to load capability module";
         return false;
     }
 
-    qDebug() << "Capability module found, attempting to load...";
-
-    bool success = loadPlugin("capability_module");
-
-    if (!success) {
-        qDebug() << "Failed to load capability module";
-        return false;
-    }
-
-    qDebug() << "Capability module loaded successfully";
     return true;
 }
 
 bool PluginLoader::unloadPlugin(const QString& name) {
-    qDebug() << "Attempting to unload plugin by name:" << name;
-
     if (!m_registry.isLoaded(name)) {
-        qWarning() << "Plugin not loaded, cannot unload:" << name;
-        qDebug() << "Loaded plugins:" << m_registry.loadedPluginNames();
+        qWarning() << "Cannot unload plugin (not loaded):" << name;
         return false;
     }
 
@@ -230,10 +195,9 @@ bool PluginLoader::unloadPlugin(const QString& name) {
     }
 
     QtProcessManager::terminateProcess(name.toStdString());
-
     m_registry.markUnloaded(name);
 
-    qDebug() << "Successfully unloaded plugin:" << name;
+    qInfo() << "Plugin unloaded:" << name;
     return true;
 }
 

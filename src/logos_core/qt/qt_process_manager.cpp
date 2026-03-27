@@ -25,27 +25,19 @@ namespace QtProcessManager {
             qArgs << toQ(arg);
         }
 
-        qDebug() << "Starting process with arguments:" << qArgs;
-
         process->start(toQ(executable), qArgs);
 
         if (!process->waitForStarted(5000)) {
-            qCritical() << "Failed to start process:" << process->errorString();
+            qCritical() << "Failed to start process for" << qName << ":" << process->errorString();
             delete process;
             return false;
         }
-
-        qDebug() << "Process started successfully for:" << qName;
-        qDebug() << "Process ID:" << process->processId();
 
         s_processes.insert(qName, process);
 
         QObject::connect(process, QOverload<int, QProcess::ExitStatus>::of(&QProcess::finished),
                         [name, qName, process, callbacks](int exitCode, QProcess::ExitStatus exitStatus) {
                             bool crashed = (exitStatus == QProcess::CrashExit);
-                            qDebug() << "Process finished:" << qName
-                                    << "Exit code:" << exitCode
-                                    << "Exit status:" << exitStatus;
 
                             s_processes.remove(qName);
                             process->deleteLater();
@@ -128,7 +120,6 @@ namespace QtProcessManager {
         tokenSocket->disconnectFromServer();
         tokenSocket->deleteLater();
 
-        qDebug() << "Token sent to:" << qName;
         return true;
     }
 
@@ -139,7 +130,6 @@ namespace QtProcessManager {
         QProcess* process = s_processes.take(qName);
         if (!process) return;
 
-        qDebug() << "Terminating process for:" << qName;
         process->terminate();
 
         if (!process->waitForFinished(5000)) {
@@ -154,7 +144,6 @@ namespace QtProcessManager {
     void terminateAll() {
         if (s_processes.isEmpty()) return;
 
-        qDebug() << "Terminating all processes...";
         // Copy and clear first to avoid iterator invalidation from the
         // finished signal handler which removes entries from s_processes.
         QHash<QString, QProcess*> snapshot = s_processes;
@@ -164,7 +153,6 @@ namespace QtProcessManager {
             QProcess* process = it.value();
             QString processName = it.key();
 
-            qDebug() << "Terminating process:" << processName;
             process->terminate();
 
             if (!process->waitForFinished(3000)) {
