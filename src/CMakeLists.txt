@@ -96,8 +96,6 @@ set(LOGOS_CORE_SOURCES
     logos_core/plugin_registry.h
     logos_core/dependency_resolver.cpp
     logos_core/dependency_resolver.h
-    logos_core/plugin_loader.cpp
-    logos_core/plugin_loader.h
     logos_core/plugin_manager.cpp
     logos_core/plugin_manager.h
     logos_core/qt/qt_app_context.cpp
