@@ -7,7 +7,7 @@ namespace DependencyResolver {
 
     QStringList resolve(const QStringList& requested,
                         IsKnownFn isKnown,
-                        GetMetadataFn getMetadata) {
+                        GetDependenciesFn getDependencies) {
         qDebug() << "Resolving dependencies for modules:" << requested;
 
         QSet<QString> modulesToLoad;
@@ -28,13 +28,9 @@ namespace DependencyResolver {
 
             modulesToLoad.insert(moduleName);
 
-            nlohmann::json metadata = getMetadata(moduleName);
-            if (metadata.is_object() && metadata.contains("dependencies")) {
-                for (const auto& dep : metadata["dependencies"]) {
-                    QString depName = QString::fromStdString(dep.get<std::string>());
-                    if (!depName.isEmpty() && !modulesToLoad.contains(depName)) {
-                        queue.append(depName);
-                    }
+            for (const QString& depName : getDependencies(moduleName)) {
+                if (!depName.isEmpty() && !modulesToLoad.contains(depName)) {
+                    queue.append(depName);
                 }
             }
         }
@@ -52,14 +48,10 @@ namespace DependencyResolver {
                 inDegree[moduleName] = 0;
             }
 
-            nlohmann::json metadata = getMetadata(moduleName);
-            if (metadata.is_object() && metadata.contains("dependencies")) {
-                for (const auto& dep : metadata["dependencies"]) {
-                    QString depName = QString::fromStdString(dep.get<std::string>());
-                    if (!depName.isEmpty() && modulesToLoad.contains(depName)) {
-                        inDegree[moduleName]++;
-                        dependents[depName].append(moduleName);
-                    }
+            for (const QString& depName : getDependencies(moduleName)) {
+                if (!depName.isEmpty() && modulesToLoad.contains(depName)) {
+                    inDegree[moduleName]++;
+                    dependents[depName].append(moduleName);
                 }
             }
         }

@@ -8,6 +8,7 @@
 #include <nlohmann/json.hpp>
 #include <cstring>
 #include <fstream>
+#include <QStringList>
 
 static void clearPluginState() {
     PluginManager::terminateAll();
@@ -142,10 +143,7 @@ TEST_F(PluginManagerTest, ResolveDependencies_ReturnsEmptyForUnknownPlugin) {
 
 TEST_F(PluginManagerTest, ResolveDependencies_ReturnsSinglePluginWithNoDeps) {
     PluginManager::registry().registerPlugin("plugin_a", "/path/to/plugin_a");
-    nlohmann::json metadata;
-    metadata["name"] = "plugin_a";
-    metadata["dependencies"] = nlohmann::json::array();
-    PluginManager::registry().registerMetadata("plugin_a", metadata);
+    PluginManager::registry().registerDependencies("plugin_a", {});
 
     QStringList requested;
     requested.append("plugin_a");
@@ -159,16 +157,8 @@ TEST_F(PluginManagerTest, ResolveDependencies_ReturnsSinglePluginWithNoDeps) {
 TEST_F(PluginManagerTest, ResolveDependencies_ReturnsCorrectOrder) {
     PluginManager::registry().registerPlugin("plugin_a", "/path/to/plugin_a");
     PluginManager::registry().registerPlugin("plugin_b", "/path/to/plugin_b");
-
-    nlohmann::json metadataA;
-    metadataA["name"] = "plugin_a";
-    metadataA["dependencies"] = nlohmann::json::array({"plugin_b"});
-    PluginManager::registry().registerMetadata("plugin_a", metadataA);
-
-    nlohmann::json metadataB;
-    metadataB["name"] = "plugin_b";
-    metadataB["dependencies"] = nlohmann::json::array();
-    PluginManager::registry().registerMetadata("plugin_b", metadataB);
+    PluginManager::registry().registerDependencies("plugin_a", {"plugin_b"});
+    PluginManager::registry().registerDependencies("plugin_b", {});
 
     QStringList requested;
     requested.append("plugin_a");
@@ -184,21 +174,9 @@ TEST_F(PluginManagerTest, ResolveDependencies_HandlesTransitiveDeps) {
     PluginManager::registry().registerPlugin("plugin_a", "/path/to/plugin_a");
     PluginManager::registry().registerPlugin("plugin_b", "/path/to/plugin_b");
     PluginManager::registry().registerPlugin("plugin_c", "/path/to/plugin_c");
-
-    nlohmann::json metadataA;
-    metadataA["name"] = "plugin_a";
-    metadataA["dependencies"] = nlohmann::json::array({"plugin_b"});
-    PluginManager::registry().registerMetadata("plugin_a", metadataA);
-
-    nlohmann::json metadataB;
-    metadataB["name"] = "plugin_b";
-    metadataB["dependencies"] = nlohmann::json::array({"plugin_c"});
-    PluginManager::registry().registerMetadata("plugin_b", metadataB);
-
-    nlohmann::json metadataC;
-    metadataC["name"] = "plugin_c";
-    metadataC["dependencies"] = nlohmann::json::array();
-    PluginManager::registry().registerMetadata("plugin_c", metadataC);
+    PluginManager::registry().registerDependencies("plugin_a", {"plugin_b"});
+    PluginManager::registry().registerDependencies("plugin_b", {"plugin_c"});
+    PluginManager::registry().registerDependencies("plugin_c", {});
 
     QStringList requested;
     requested.append("plugin_a");

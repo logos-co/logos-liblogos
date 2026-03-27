@@ -171,7 +171,7 @@ bool PluginLoader::loadPluginWithDependencies(const QString& name) {
     QStringList resolved = DependencyResolver::resolve(
         requested,
         [this](const QString& n) { return m_registry.isKnown(n); },
-        [this](const QString& n) { return m_registry.pluginMetadata(n); }
+        [this](const QString& n) { return m_registry.pluginDependencies(n); }
     );
 
     if (resolved.isEmpty() || !resolved.contains(name)) {

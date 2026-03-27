@@ -3,17 +3,16 @@
 
 #include <QString>
 #include <QStringList>
-#include <nlohmann/json.hpp>
 #include <functional>
 
 namespace DependencyResolver {
 
     using IsKnownFn = std::function<bool(const QString&)>;
-    using GetMetadataFn = std::function<nlohmann::json(const QString&)>;
+    using GetDependenciesFn = std::function<QStringList(const QString&)>;
 
     QStringList resolve(const QStringList& requested,
                         IsKnownFn isKnown,
-                        GetMetadataFn getMetadata);
+                        GetDependenciesFn getDependencies);
 }
 
 #endif // DEPENDENCY_RESOLVER_H
