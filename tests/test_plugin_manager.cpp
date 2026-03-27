@@ -5,7 +5,6 @@
 #include <QJsonArray>
 #include <QJsonDocument>
 #include <QJsonObject>
-#include <QProcess>
 #include <QDir>
 #include <QTemporaryDir>
 #include <cstring>
@@ -157,8 +156,7 @@ TEST_F(PluginManagerTest, LoadPlugin_ReturnsFalseForUnknownPlugin) {
 TEST_F(PluginManagerTest, LoadPlugin_ReturnsFalseForAlreadyLoaded) {
     PluginManager::addKnownPlugin("test_plugin", "/path/to/plugin");
 
-    QProcess* dummyProcess = new QProcess();
-    PluginManager::registerLoadedPlugin("test_plugin", dummyProcess);
+    PluginManager::registerLoadedPlugin("test_plugin");
 
     bool result = PluginManager::loadPlugin("test_plugin");
     EXPECT_FALSE(result);

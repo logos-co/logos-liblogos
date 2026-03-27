@@ -1,13 +1,11 @@
 #include "plugin_manager.h"
+#include "qt/qt_process_manager.h"
 #include <QDebug>
 #include <QDir>
 #include <QFile>
 #include <QJsonDocument>
 #include <QJsonArray>
 #include <QUuid>
-#include <QThread>
-#include <QProcess>
-#include <QLocalSocket>
 #include <QCoreApplication>
 #include <cstring>
 #include <cassert>
@@ -25,7 +23,6 @@ namespace {
     QStringList s_loaded_plugins;
     QHash<QString, QString> s_known_plugins;
     QHash<QString, QJsonObject> s_plugin_metadata;
-    QHash<QString, QProcess*> s_plugin_processes;
 }
 
 namespace PluginManager {
@@ -91,25 +88,7 @@ namespace PluginManager {
     }
 
     void terminateAll() {
-        if (s_plugin_processes.isEmpty()) return;
-
-        qDebug() << "Terminating all plugin processes...";
-        for (auto it = s_plugin_processes.begin(); it != s_plugin_processes.end(); ++it) {
-            QProcess* process = it.value();
-            QString pluginName = it.key();
-
-            qDebug() << "Terminating plugin process:" << pluginName;
-            process->terminate();
-
-            if (!process->waitForFinished(3000)) {
-                qWarning() << "Process did not terminate gracefully, killing it:" << pluginName;
-                process->kill();
-                process->waitForFinished(1000);
-            }
-
-            delete process;
-        }
-        s_plugin_processes.clear();
+        QtProcessManager::terminateAll();
         s_loaded_plugins.clear();
     }
 
@@ -161,8 +140,7 @@ namespace PluginManager {
 
         qDebug() << "Loading plugin:" << name << "from path:" << pluginPath << "in separate process";
 
-        // Check if plugin is already loaded
-        if (s_plugin_processes.contains(name)) {
+        if (isPluginLoaded(name)) {
             qWarning() << "Plugin already loaded:" << name;
             return false;
         }
@@ -192,85 +170,69 @@ namespace PluginManager {
 
         qDebug() << "Logos host path (resolved):" << logosHostPath;
 
-        // Check if logos_host exists
         if (!QFile::exists(logosHostPath)) {
             qCritical() << "logos_host executable not found at:" << logosHostPath;
             qCritical() << "Set environment variable LOGOS_HOST_PATH to the absolute path of logos_host or ensure it is next to the Electron executable or under ../bin from the plugins directory.";
             return false;
         }
 
-        // Create a new process for the plugin
-        QProcess* process = new QProcess();
-
-        // Set up the process to capture output (merge stdout and stderr)
-        process->setProcessChannelMode(QProcess::MergedChannels);
-
-        // Set up arguments for logos_host
         QStringList arguments;
         arguments << "--name" << name;
         arguments << "--path" << pluginPath;
 
         qDebug() << "Starting logos_host with arguments:" << arguments;
 
-        // Start the process
-        process->start(logosHostPath, arguments);
+        QtProcessManager::ProcessCallbacks callbacks;
 
-        if (!process->waitForStarted(5000)) { // Wait up to 5 seconds for the process to start
-            qCritical() << "Failed to start logos_host process:" << process->errorString();
-            delete process;
-            return false;
-        }
-
-        qDebug() << "Logos host process started successfully for plugin:" << name;
-        qDebug() << "Process ID:" << process->processId();
-
-        // Set up IPC to securely send the auth token
-        QString socketName = QString("logos_token_%1").arg(name);
-        QLocalSocket* tokenSocket = new QLocalSocket();
-
-        // Try to connect to the socket (with retries since the process might need time to set up)
-        bool connected = false;
-        for (int i = 0; i < 10; ++i) { // Try for up to 1 second
-            tokenSocket->connectToServer(socketName);
-            if (tokenSocket->waitForConnected(100)) {
-                connected = true;
-                break;
+        callbacks.onFinished = [](const QString& pluginName, int exitCode, bool crashed) {
+            Q_UNUSED(exitCode);
+            if (crashed) {
+                qCritical() << "Plugin process crashed:" << pluginName << "- terminating core with error";
+                exit(1);
             }
-            QThread::msleep(100); // Wait 100ms before retry
-        }
+            s_loaded_plugins.removeAll(pluginName);
+        };
 
-        if (!connected) {
-            qCritical() << "Failed to connect to token socket for plugin:" << name;
-            tokenSocket->deleteLater();
-            process->terminate();
-            delete process;
+        callbacks.onError = [](const QString& pluginName, bool crashed) {
+            if (crashed) {
+                qCritical() << "Plugin process crashed:" << pluginName << "- terminating core with error";
+                exit(1);
+            }
+        };
+
+        callbacks.onOutput = [](const QString& pluginName, const QString& line, bool isStderr) {
+            if (isStderr) {
+                qCritical() << "[LOGOS_HOST" << pluginName << "] STDERR:" << line;
+            } else if (line.contains("qrc:") || line.contains("Warning:") || line.contains("WARNING:")) {
+                qWarning() << "[LOGOS_HOST" << pluginName << "]:" << line;
+            } else if (line.contains("Critical:") || line.contains("FAILED:") || line.contains("ERROR:")) {
+                qCritical() << "[LOGOS_HOST" << pluginName << "]:" << line;
+            } else {
+                qDebug() << "[LOGOS_HOST" << pluginName << "]:" << line;
+            }
+        };
+
+        if (!QtProcessManager::startProcess(name, logosHostPath, arguments, callbacks)) {
             return false;
         }
 
-        // generate a guid and print it
+        // Generate auth token and send via IPC
         QUuid authToken = QUuid::createUuid();
         QString authTokenString = authToken.toString(QUuid::WithoutBraces);
         qDebug() << "Generated auth token:" << authTokenString;
 
-        // Send the auth token securely via IPC
-        QByteArray tokenData = QString(authTokenString).toUtf8();
-        tokenSocket->write(tokenData);
-        tokenSocket->waitForBytesWritten(1000);
-        tokenSocket->disconnectFromServer();
-        tokenSocket->deleteLater();
+        if (!QtProcessManager::sendToken(name, authTokenString)) {
+            return false;
+        }
 
         qDebug() << "Auth token sent securely to plugin:" << name;
 
-        // Store the process
-        s_plugin_processes.insert(name, process);
-
-        // Add the plugin name to our loaded plugins list
         s_loaded_plugins.append(name);
 
         TokenManager& tokenManager = TokenManager::instance();
         tokenManager.saveToken(name, authTokenString);
 
-        // call InformModuleToken on Capability Module
+        // Inform capability module about the new module token
         if (s_loaded_plugins.contains("capability_module")) {
             qDebug() << "Informing capability module about new module token for:" << name;
 
@@ -291,74 +253,6 @@ namespace PluginManager {
         } else {
             qDebug() << "Capability module not loaded, skipping token notification";
         }
-
-        // Connect to process finished signal for cleanup
-        QObject::connect(process, QOverload<int, QProcess::ExitStatus>::of(&QProcess::finished),
-                        [name, process](int exitCode, QProcess::ExitStatus exitStatus) {
-                            qDebug() << "Plugin process finished:" << name
-                                    << "Exit code:" << exitCode 
-                                    << "Exit status:" << exitStatus;
-                            
-                            // TODO: This is temporary and later needs a mechanism to restart the process
-                            if (exitStatus == QProcess::CrashExit) {
-                                qCritical() << "Plugin process crashed:" << name << "- terminating core with error";
-                                exit(1);
-                            }
-                            
-                            // Remove from our tracking lists
-                            s_plugin_processes.remove(name);
-                            s_loaded_plugins.removeAll(name);
-                            
-                            // Clean up the process object
-                            process->deleteLater();
-                        });
-
-        // Connect to error signal
-        QObject::connect(process, &QProcess::errorOccurred,
-                        [name](QProcess::ProcessError error) {
-                            qCritical() << "Plugin process error for" << name << ":" << error;
-                            
-                            // TODO: This is temporary and later needs a mechanism to restart the process
-                            if (error == QProcess::Crashed) {
-                                qCritical() << "Plugin process crashed:" << name << "- terminating core with error";
-                                exit(1);
-                            }
-                        });
-
-        // Connect to output signals to forward logs from logos_host to main process
-        QObject::connect(process, &QProcess::readyReadStandardOutput,
-                        [name, process]() {
-                            QByteArray output = process->readAllStandardOutput();
-                            if (!output.isEmpty()) {
-                                // Forward logs to main process with plugin prefix
-                                QString logLine = QString::fromUtf8(output).trimmed();
-                                QStringList lines = logLine.split('\n', Qt::SkipEmptyParts);
-                                for (const QString &line : lines) {
-                                    // Parse the Qt log level from the line and forward appropriately
-                                    if (line.contains("qrc:") || line.contains("Warning:") || line.contains("WARNING:")) {
-                                        qWarning() << "[LOGOS_HOST" << name << "]:" << line;
-                                    } else if (line.contains("Critical:") || line.contains("FAILED:") || line.contains("ERROR:")) {
-                                        qCritical() << "[LOGOS_HOST" << name << "]:" << line;
-                                    } else {
-                                        qDebug() << "[LOGOS_HOST" << name << "]:" << line;
-                                    }
-                                }
-                            }
-                        });
-
-        // Connect to stderr output (in case channel mode changes)
-        QObject::connect(process, &QProcess::readyReadStandardError,
-                        [name, process]() {
-                            QByteArray output = process->readAllStandardError();
-                            if (!output.isEmpty()) {
-                                // Forward error logs to main process with plugin prefix
-                                QString logLine = QString::fromUtf8(output).trimmed();
-                                QStringList lines = logLine.split('\n', Qt::SkipEmptyParts);
-                                for (const QString &line : lines) {
-                                    qCritical() << "[LOGOS_HOST" << name << "] STDERR:" << line;
-                                }
-                            }
-                        });
 
         qDebug() << "Plugin" << name << "is now running in separate process";
         qDebug() << "Remote registry URL for this plugin: local:logos_" << name;
@@ -416,7 +310,6 @@ namespace PluginManager {
     bool initializeCapabilityModule() {
         qDebug() << "\n=== Initializing Capability Module ===";
 
-        // Check if capability_module is available in known plugins
         if (!s_known_plugins.contains("capability_module")) {
             qDebug() << "Capability module not found in known plugins, skipping initialization";
             return false;
@@ -424,7 +317,6 @@ namespace PluginManager {
 
         qDebug() << "Capability module found, attempting to load...";
 
-        // Load the capability module
         bool success = loadPlugin("capability_module");
 
         if (!success) {
@@ -441,39 +333,21 @@ namespace PluginManager {
         const QString name = QString::fromUtf8(pluginName);
         qDebug() << "Attempting to unload plugin by name:" << name;
 
-        // Check if plugin is loaded
         if (!s_loaded_plugins.contains(name)) {
             qWarning() << "Plugin not loaded, cannot unload:" << name;
             qDebug() << "Loaded plugins:" << s_loaded_plugins;
             return false;
         }
 
-        // Check if we have a process for this plugin
-        if (!s_plugin_processes.contains(name)) {
+        if (!QtProcessManager::hasProcess(name)) {
             qWarning() << "No process found for plugin:" << name;
             return false;
         }
 
-        // Get the process
-        QProcess* process = s_plugin_processes.value(name);
-        
-        qDebug() << "Terminating plugin process for:" << name;
-        
-        // Terminate the process gracefully
-        process->terminate();
-        
-        // Wait for the process to finish, with a timeout
-        if (!process->waitForFinished(5000)) {
-            qWarning() << "Process did not terminate gracefully, killing it";
-            process->kill();
-            process->waitForFinished(2000);
-        }
+        QtProcessManager::terminateProcess(name);
 
-        // Remove from our tracking structures
-        s_plugin_processes.remove(name);
         s_loaded_plugins.removeAll(name);
         
-        // The process will be cleaned up by the signal handler
         qDebug() << "Successfully unloaded plugin:" << name;
         return true;
     }
@@ -482,52 +356,43 @@ namespace PluginManager {
         int count = s_loaded_plugins.size();
         
         if (count == 0) {
-            // Return an array with just a NULL terminator
             char** result = new char*[1];
             result[0] = nullptr;
             return result;
         }
         
-        // Allocate memory for the array of strings
-        char** result = new char*[count + 1];  // +1 for null terminator
+        char** result = new char*[count + 1];
         
-        // Copy each plugin name
         for (int i = 0; i < count; ++i) {
             QByteArray utf8Data = s_loaded_plugins[i].toUtf8();
             result[i] = new char[utf8Data.size() + 1];
             strcpy(result[i], utf8Data.constData());
         }
         
-        // Null-terminate the array
         result[count] = nullptr;
         
         return result;
     }
 
     char** getKnownPluginsCStr() {
-        // Get the keys from the hash (plugin names)
         QStringList knownPlugins = s_known_plugins.keys();
         int count = knownPlugins.size();
         
         if (count == 0) {
             qWarning() << "No known plugins to return";
-            // Return an array with just a NULL terminator
             char** result = new char*[1];
             result[0] = nullptr;
             return result;
         }
         
-        // Allocate memory for the array of strings
-        char** result = new char*[count + 1];  // +1 for null terminator
+        char** result = new char*[count + 1];
         
-        // Copy each plugin name
         for (int i = 0; i < count; ++i) {
             QByteArray utf8Data = knownPlugins[i].toUtf8();
             result[i] = new char[utf8Data.size() + 1];
             strcpy(result[i], utf8Data.constData());
         }
         
-        // Null-terminate the array
         result[count] = nullptr;
         
         return result;
@@ -651,16 +516,7 @@ namespace PluginManager {
         s_known_plugins.clear();
         s_plugin_metadata.clear();
         
-        // Terminate and clean up all plugin processes
-        for (auto it = s_plugin_processes.begin(); it != s_plugin_processes.end(); ++it) {
-            QProcess* process = it.value();
-            if (process) {
-                process->terminate();
-                process->waitForFinished(1000);
-                delete process;
-            }
-        }
-        s_plugin_processes.clear();
+        QtProcessManager::clearAll();
 
         qDebug() << "Plugin state cleared";
     }
@@ -675,21 +531,12 @@ namespace PluginManager {
     }
 
     QHash<QString, qint64> getPluginProcessIds() {
-        QHash<QString, qint64> result;
-        for (auto it = s_plugin_processes.begin(); it != s_plugin_processes.end(); ++it) {
-            if (it.value()) {
-                result.insert(it.key(), it.value()->processId());
-            }
-        }
-        return result;
+        return QtProcessManager::getAllProcessIds();
     }
 
-    void registerLoadedPlugin(const QString& name, QProcess* process) {
+    void registerLoadedPlugin(const QString& name) {
         if (!s_loaded_plugins.contains(name)) {
             s_loaded_plugins.append(name);
-        }
-        if (process) {
-            s_plugin_processes.insert(name, process);
         }
     }
 
