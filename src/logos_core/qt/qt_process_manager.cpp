@@ -41,13 +41,14 @@ namespace QtProcessManager {
         s_processes.insert(qName, process);
 
         QObject::connect(process, QOverload<int, QProcess::ExitStatus>::of(&QProcess::finished),
-                        [name, qName, callbacks](int exitCode, QProcess::ExitStatus exitStatus) {
+                        [name, qName, process, callbacks](int exitCode, QProcess::ExitStatus exitStatus) {
                             bool crashed = (exitStatus == QProcess::CrashExit);
                             qDebug() << "Process finished:" << qName
                                     << "Exit code:" << exitCode
                                     << "Exit status:" << exitStatus;
 
                             s_processes.remove(qName);
+                            process->deleteLater();
 
                             if (callbacks.onFinished) {
                                 callbacks.onFinished(name, exitCode, crashed);
@@ -146,13 +147,20 @@ namespace QtProcessManager {
             process->kill();
             process->waitForFinished(2000);
         }
+
+        delete process;
     }
 
     void terminateAll() {
         if (s_processes.isEmpty()) return;
 
         qDebug() << "Terminating all processes...";
-        for (auto it = s_processes.begin(); it != s_processes.end(); ++it) {
+        // Copy and clear first to avoid iterator invalidation from the
+        // finished signal handler which removes entries from s_processes.
+        QHash<QString, QProcess*> snapshot = s_processes;
+        s_processes.clear();
+
+        for (auto it = snapshot.begin(); it != snapshot.end(); ++it) {
             QProcess* process = it.value();
             QString processName = it.key();
 
@@ -167,7 +175,6 @@ namespace QtProcessManager {
 
             delete process;
         }
-        s_processes.clear();
     }
 
     bool hasProcess(const std::string& name) {
