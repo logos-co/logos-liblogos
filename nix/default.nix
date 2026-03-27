@@ -19,6 +19,7 @@
     pkgs.qt6.qtremoteobjects
     pkgs.zstd
     pkgs.gtest
+    pkgs.nlohmann_json
     logosModule
     processStats
     logosPackageManager

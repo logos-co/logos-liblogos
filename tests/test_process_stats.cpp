@@ -2,9 +2,7 @@
 #include <process_stats/process_stats.h>
 #include <QCoreApplication>
 #include <QProcess>
-#include <QJsonDocument>
-#include <QJsonArray>
-#include <QJsonObject>
+#include <nlohmann/json.hpp>
 #include <cstring>
 #include <unistd.h>
 
@@ -117,13 +115,10 @@ TEST_F(ProcessStatsTest, GetModuleStats_ReturnsEmptyArrayWhenNoPlugins) {
 
     ASSERT_NE(result, nullptr);
 
-    QByteArray jsonData(result);
-    QJsonDocument doc = QJsonDocument::fromJson(jsonData);
+    nlohmann::json doc = nlohmann::json::parse(result);
 
-    EXPECT_TRUE(doc.isArray());
-
-    QJsonArray modulesArray = doc.array();
-    EXPECT_EQ(modulesArray.size(), 0);
+    EXPECT_TRUE(doc.is_array());
+    EXPECT_EQ(doc.size(), 0);
 
     delete[] result;
 }
@@ -155,24 +150,21 @@ TEST_F(ProcessStatsTest, GetModuleStats_ReturnsValidJsonStructure) {
 
     ASSERT_NE(result, nullptr);
 
-    QByteArray jsonData(result);
-    QJsonDocument doc = QJsonDocument::fromJson(jsonData);
+    nlohmann::json doc = nlohmann::json::parse(result);
 
-    EXPECT_TRUE(doc.isArray());
+    EXPECT_TRUE(doc.is_array());
+    ASSERT_EQ(doc.size(), 1);
 
-    QJsonArray modulesArray = doc.array();
-    ASSERT_EQ(modulesArray.size(), 1);
-
-    QJsonObject moduleObj = modulesArray[0].toObject();
+    auto moduleObj = doc[0];
     EXPECT_TRUE(moduleObj.contains("name"));
     EXPECT_TRUE(moduleObj.contains("cpu_percent"));
     EXPECT_TRUE(moduleObj.contains("cpu_time_seconds"));
     EXPECT_TRUE(moduleObj.contains("memory_mb"));
 
-    EXPECT_EQ(moduleObj["name"].toString().toStdString(), "test_plugin");
-    EXPECT_GE(moduleObj["cpu_percent"].toDouble(), 0.0);
-    EXPECT_GE(moduleObj["cpu_time_seconds"].toDouble(), 0.0);
-    EXPECT_GE(moduleObj["memory_mb"].toDouble(), 0.0);
+    EXPECT_EQ(moduleObj["name"].get<std::string>(), "test_plugin");
+    EXPECT_GE(moduleObj["cpu_percent"].get<double>(), 0.0);
+    EXPECT_GE(moduleObj["cpu_time_seconds"].get<double>(), 0.0);
+    EXPECT_GE(moduleObj["memory_mb"].get<double>(), 0.0);
 
     delete[] result;
 }

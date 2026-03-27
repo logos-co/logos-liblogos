@@ -92,6 +92,12 @@ set(LOGOS_CORE_SOURCES
     logos_core/logos_core.h
     logos_core/app_lifecycle.cpp
     logos_core/app_lifecycle.h
+    logos_core/plugin_registry.cpp
+    logos_core/plugin_registry.h
+    logos_core/dependency_resolver.cpp
+    logos_core/dependency_resolver.h
+    logos_core/plugin_loader.cpp
+    logos_core/plugin_loader.h
     logos_core/plugin_manager.cpp
     logos_core/plugin_manager.h
     logos_core/qt/qt_app_context.cpp
@@ -152,6 +158,7 @@ target_link_libraries(logos_core PUBLIC
     logos_module
     process_stats
     package_manager_lib
+    nlohmann_json::nlohmann_json
 )
 
 # Include directories for the library

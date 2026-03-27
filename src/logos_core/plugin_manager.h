@@ -4,12 +4,14 @@
 #include <QString>
 #include <QStringList>
 #include <QHash>
-#include <QJsonObject>
+
+class PluginRegistry;
 
 namespace PluginManager {
+    PluginRegistry& registry();
+
     void setPluginsDir(const char* plugins_dir);
     void addPluginsDir(const char* plugins_dir);
-    QStringList getPluginsDirs();
 
     void discoverInstalledModules();
 
@@ -24,19 +26,10 @@ namespace PluginManager {
     char** getLoadedPluginsCStr();
     char** getKnownPluginsCStr();
 
-    QStringList getLoadedPlugins();
-    QHash<QString, QString> getKnownPlugins();
     bool isPluginLoaded(const QString& name);
-    bool isPluginKnown(const QString& name);
     QHash<QString, qint64> getPluginProcessIds();
 
     QStringList resolveDependencies(const QStringList& requestedModules);
-
-    void clearState();
-    void addKnownPlugin(const QString& name, const QString& path);
-    void addPluginMetadata(const QString& name, const QJsonObject& metadata);
-
-    void registerLoadedPlugin(const QString& name);
 }
 
 #endif // PLUGIN_MANAGER_H
