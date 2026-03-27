@@ -44,17 +44,17 @@ char** logos_core_get_known_plugins() {
 
 int logos_core_load_plugin(const char* plugin_name) {
     if (!plugin_name) { fprintf(stderr, "logos_core_load_plugin: plugin_name must not be null\n"); std::abort(); }
-    return PluginManager::loadPlugin(QString::fromUtf8(plugin_name)) ? 1 : 0;
+    return PluginManager::loadPlugin(plugin_name) ? 1 : 0;
 }
 
 int logos_core_load_plugin_with_dependencies(const char* plugin_name) {
     if (!plugin_name) { fprintf(stderr, "logos_core_load_plugin_with_dependencies: plugin_name must not be null\n"); std::abort(); }
-    return PluginManager::loadPluginWithDependencies(QString::fromUtf8(plugin_name)) ? 1 : 0;
+    return PluginManager::loadPluginWithDependencies(plugin_name) ? 1 : 0;
 }
 
 int logos_core_unload_plugin(const char* plugin_name) {
     if (!plugin_name) { fprintf(stderr, "logos_core_unload_plugin: plugin_name must not be null\n"); std::abort(); }
-    return PluginManager::unloadPlugin(QString::fromUtf8(plugin_name)) ? 1 : 0;
+    return PluginManager::unloadPlugin(plugin_name) ? 1 : 0;
 }
 
 char* logos_core_process_plugin(const char* plugin_path) {
