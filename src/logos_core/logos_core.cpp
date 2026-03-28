@@ -1,6 +1,7 @@
 #include "logos_core.h"
 #include "app_lifecycle.h"
 #include "plugin_manager.h"
+#include "plugin_registry.h"
 #include <process_stats/process_stats.h>
 #include "token_manager.h"
 #include <cstdio>
@@ -83,6 +84,30 @@ void logos_core_refresh_plugins()
     PluginManager::discoverInstalledModules();
 }
 
+
+char* logos_core_get_plugin_type(const char* plugin_name) {
+    if (!plugin_name) { fprintf(stderr, "logos_core_get_plugin_type: plugin_name must not be null\n"); std::abort(); }
+
+    QString type = PluginManager::registry().pluginType(QString::fromUtf8(plugin_name));
+    if (type.isEmpty()) return nullptr;
+
+    std::string utf8 = type.toStdString();
+    char* result = new char[utf8.size() + 1];
+    memcpy(result, utf8.c_str(), utf8.size() + 1);
+    return result;
+}
+
+char* logos_core_get_plugin_socket(const char* plugin_name) {
+    if (!plugin_name) { fprintf(stderr, "logos_core_get_plugin_socket: plugin_name must not be null\n"); std::abort(); }
+
+    QString socketPath = PluginManager::registry().pluginSocketPath(QString::fromUtf8(plugin_name));
+    if (socketPath.isEmpty()) return nullptr;
+
+    std::string utf8 = socketPath.toStdString();
+    char* result = new char[utf8.size() + 1];
+    memcpy(result, utf8.c_str(), utf8.size() + 1);
+    return result;
+}
 
 void logos_core_process_events()
 {

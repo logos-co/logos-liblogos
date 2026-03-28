@@ -64,6 +64,11 @@ LogosAPI* setupPlugin(const QString& pluginName, const QString& pluginPath)
         return nullptr;
     }
 
+    // ============
+    // TODO: this should be a single call to load an register the Plugin
+    // it should specify how the plugin will be served (i.e remote vs local etc..)
+    // ============
+
     // 2. Load and validate plugin
     LogosModule module = loadPlugin(pluginPath, pluginName);
     if (!module.isValid()) {

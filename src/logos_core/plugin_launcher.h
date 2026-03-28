@@ -11,6 +11,13 @@ namespace PluginLauncher {
 
     bool launch(const QString& name, const QString& pluginPath,
                 const QStringList& pluginsDirs, OnTerminatedFn onTerminated);
+
+    // Type-aware launch: for gRPC modules, launches the executable directly
+    // with --socket and --name arguments instead of going through logos_host.
+    bool launch(const QString& name, const QString& pluginPath,
+                const QStringList& pluginsDirs, const QString& moduleType,
+                const QString& socketPath, OnTerminatedFn onTerminated);
+
     bool sendToken(const QString& name, const QString& token);
     void terminate(const QString& name);
     void terminateAll();

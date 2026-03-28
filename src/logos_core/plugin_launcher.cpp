@@ -88,6 +88,60 @@ namespace PluginLauncher {
         return QtProcessManager::startProcess(name.toStdString(), logosHostPath.toStdString(), arguments, callbacks);
     }
 
+    bool launch(const QString& name, const QString& pluginPath,
+                const QStringList& pluginsDirs, const QString& moduleType,
+                const QString& socketPath, OnTerminatedFn onTerminated) {
+        // For non-gRPC modules, delegate to the standard launch
+        if (moduleType != "grpc") {
+            return launch(name, pluginPath, pluginsDirs, onTerminated);
+        }
+
+        // For gRPC modules: launch the executable directly (no logos_host wrapper)
+        if (!QFile::exists(pluginPath)) {
+            qCritical() << "gRPC module executable not found:" << pluginPath;
+            return false;
+        }
+
+        std::vector<std::string> arguments = {
+            "--socket", socketPath.toStdString(),
+            "--name", name.toStdString()
+        };
+
+        QtProcessManager::ProcessCallbacks callbacks;
+
+        callbacks.onFinished = [onTerminated](const std::string& pName, int exitCode, bool crashed) {
+            Q_UNUSED(exitCode);
+            QString qName = QString::fromStdString(pName);
+            if (crashed) {
+                qCritical() << "gRPC module process crashed:" << qName;
+                exit(1);
+            }
+            if (onTerminated)
+                onTerminated(qName);
+        };
+
+        callbacks.onError = [](const std::string& pName, bool crashed) {
+            if (crashed) {
+                qCritical() << "gRPC module process crashed:" << QString::fromStdString(pName);
+                exit(1);
+            }
+        };
+
+        callbacks.onOutput = [](const std::string& pName, const std::string& line, bool isStderr) {
+            QString qName = QString::fromStdString(pName);
+            QString qLine = QString::fromStdString(line);
+            if (isStderr) {
+                qCritical() << "[" << qName << "]" << qLine;
+            } else if (qLine.contains("Warning:") || qLine.contains("WARNING:")) {
+                qWarning() << "[" << qName << "]" << qLine;
+            } else if (qLine.contains("Critical:") || qLine.contains("FAILED:") || qLine.contains("ERROR:")) {
+                qCritical() << "[" << qName << "]" << qLine;
+            }
+        };
+
+        return QtProcessManager::startProcess(name.toStdString(), pluginPath.toStdString(), arguments, callbacks);
+    }
+
     bool sendToken(const QString& name, const QString& token) {
         return QtProcessManager::sendToken(name.toStdString(), token.toStdString());
     }

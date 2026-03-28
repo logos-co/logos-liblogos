@@ -105,11 +105,29 @@ namespace PluginManager {
         }
 
         QString pluginPath = registryInstance().pluginPath(name);
+        QString moduleType = registryInstance().pluginType(name);
 
         auto onTerminated = [](const QString& n) {
             registryInstance().markUnloaded(n);
         };
 
+        if (moduleType == "grpc") {
+            // gRPC modules: launch executable directly, no logos_host, no token handshake
+            QString socketPath = QString("/tmp/logos_grpc_%1_%2.sock")
+                .arg(name)
+                .arg(QUuid::createUuid().toString(QUuid::WithoutBraces).left(8));
+            registryInstance().setPluginSocketPath(name, socketPath);
+
+            if (!PluginLauncher::launch(name, pluginPath, registryInstance().pluginsDirs(),
+                                         moduleType, socketPath, onTerminated))
+                return false;
+
+            registryInstance().markLoaded(name);
+            qInfo() << "gRPC plugin loaded:" << name << "socket:" << socketPath;
+            return true;
+        }
+
+        // Standard Qt plugin path
         if (!PluginLauncher::launch(name, pluginPath, registryInstance().pluginsDirs(), onTerminated))
             return false;
 

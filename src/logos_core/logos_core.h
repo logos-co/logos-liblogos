@@ -70,6 +70,16 @@ LOGOS_CORE_EXPORT char* logos_core_get_module_stats();
 LOGOS_CORE_EXPORT void logos_core_refresh_plugins();
 
 
+// Get the type of a loaded plugin ("core", "ui", "grpc", etc.)
+// Returns the type string if found, NULL if not found
+// The returned string must be freed by the caller
+LOGOS_CORE_EXPORT char* logos_core_get_plugin_type(const char* plugin_name);
+
+// Get the gRPC socket path for a loaded gRPC plugin
+// Returns the socket path if found, NULL if not found or not a gRPC plugin
+// The returned string must be freed by the caller
+LOGOS_CORE_EXPORT char* logos_core_get_plugin_socket(const char* plugin_name);
+
 // Process Qt events without blocking (for integration with other event loops)
 LOGOS_CORE_EXPORT void logos_core_process_events();
 

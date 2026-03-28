@@ -66,6 +66,13 @@ QString PluginRegistry::processPlugin(const QString& pluginPath) {
     for (const auto& d : ModuleLib::LogosModule::getModuleDependencies(pluginPath.toStdString())) {
         info.dependencies.append(QString::fromStdString(d));
     }
+
+    // Extract module type from metadata
+    std::string moduleType = ModuleLib::LogosModule::getModuleType(pluginPath.toStdString());
+    if (!moduleType.empty()) {
+        info.type = QString::fromStdString(moduleType);
+    }
+
     m_plugins.insert(qName, info);
 
     return qName;
@@ -97,6 +104,19 @@ void PluginRegistry::registerPlugin(const QString& name, const QString& path,
 
 void PluginRegistry::registerDependencies(const QString& name, const QStringList& dependencies) {
     m_plugins[name].dependencies = dependencies;
+}
+
+QString PluginRegistry::pluginType(const QString& name) const {
+    return m_plugins.value(name).type;
+}
+
+QString PluginRegistry::pluginSocketPath(const QString& name) const {
+    return m_plugins.value(name).socketPath;
+}
+
+void PluginRegistry::setPluginSocketPath(const QString& name, const QString& path) {
+    if (m_plugins.contains(name))
+        m_plugins[name].socketPath = path;
 }
 
 bool PluginRegistry::isLoaded(const QString& name) const {

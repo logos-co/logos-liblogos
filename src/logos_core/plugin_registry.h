@@ -9,6 +9,8 @@ struct PluginInfo {
     QString path;
     QStringList dependencies;
     bool loaded = false;
+    QString type;       // "core", "ui", "grpc", etc.
+    QString socketPath; // gRPC socket path (set during launch)
 };
 
 class PluginRegistry {
@@ -27,6 +29,10 @@ public:
     void registerPlugin(const QString& name, const QString& path,
                         const QStringList& dependencies = {});
     void registerDependencies(const QString& name, const QStringList& dependencies);
+
+    QString pluginType(const QString& name) const;
+    QString pluginSocketPath(const QString& name) const;
+    void setPluginSocketPath(const QString& name, const QString& path);
 
     bool isLoaded(const QString& name) const;
     void markLoaded(const QString& name);
