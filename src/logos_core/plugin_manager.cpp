@@ -4,6 +4,7 @@
 #include "plugin_launcher.h"
 #include <QDebug>
 #include <QUuid>
+#include <mutex>
 #include <cassert>
 #include <cstring>
 #include "logos_api.h"
@@ -14,6 +15,11 @@ namespace {
     PluginRegistry& registryInstance() {
         static PluginRegistry instance;
         return instance;
+    }
+
+    std::mutex& loadMutex() {
+        static std::mutex mutex;
+        return mutex;
     }
 
     char** toNullTerminatedArray(const QStringList& list) {
@@ -49,6 +55,44 @@ namespace {
         if (!client->informModuleToken(capabilityModuleToken, name, token)) {
             qWarning() << "Failed to register token with capability module for:" << name;
         }
+    }
+
+    bool loadPluginInternal(const char* pluginName) {
+        QString name = QString::fromUtf8(pluginName);
+
+        if (!registryInstance().isKnown(name)) {
+            qWarning() << "Cannot load unknown plugin:" << name;
+            return false;
+        }
+
+        if (registryInstance().isLoaded(name)) {
+            qWarning() << "Plugin already loaded:" << name;
+            return false;
+        }
+
+        QString pluginPath = registryInstance().pluginPath(name);
+
+        auto onTerminated = [](const QString& n) {
+            registryInstance().markUnloaded(n);
+        };
+
+        if (!PluginLauncher::launch(name, pluginPath, registryInstance().pluginsDirs(), onTerminated))
+            return false;
+
+        QString authToken = QUuid::createUuid().toString(QUuid::WithoutBraces);
+
+        if (!PluginLauncher::sendToken(name, authToken))
+            return false;
+
+        registryInstance().markLoaded(name);
+
+        TokenManager::instance().saveToken(name, authToken);
+
+        notifyCapabilityModule(name, authToken);
+
+        qInfo() << "Plugin loaded:" << name;
+
+        return true;
     }
 }
 
@@ -92,44 +136,13 @@ namespace PluginManager {
     }
 
     bool loadPlugin(const char* pluginName) {
-        QString name = QString::fromUtf8(pluginName);
-
-        if (!registryInstance().isKnown(name)) {
-            qWarning() << "Cannot load unknown plugin:" << name;
-            return false;
-        }
-
-        if (registryInstance().isLoaded(name)) {
-            qWarning() << "Plugin already loaded:" << name;
-            return false;
-        }
-
-        QString pluginPath = registryInstance().pluginPath(name);
-
-        auto onTerminated = [](const QString& n) {
-            registryInstance().markUnloaded(n);
-        };
-
-        if (!PluginLauncher::launch(name, pluginPath, registryInstance().pluginsDirs(), onTerminated))
-            return false;
-
-        QString authToken = QUuid::createUuid().toString(QUuid::WithoutBraces);
-
-        if (!PluginLauncher::sendToken(name, authToken))
-            return false;
-
-        registryInstance().markLoaded(name);
-
-        TokenManager::instance().saveToken(name, authToken);
-
-        notifyCapabilityModule(name, authToken);
-
-        qInfo() << "Plugin loaded:" << name;
-
-        return true;
+        std::lock_guard lock(loadMutex());
+        return loadPluginInternal(pluginName);
     }
 
     bool loadPluginWithDependencies(const char* pluginName) {
+        std::lock_guard lock(loadMutex());
+
         QString name = QString::fromUtf8(pluginName);
 
         QStringList requested;
@@ -150,7 +163,7 @@ namespace PluginManager {
         for (const QString& moduleName : resolved) {
             if (registryInstance().isLoaded(moduleName))
                 continue;
-            if (!loadPlugin(moduleName.toUtf8().constData())) {
+            if (!loadPluginInternal(moduleName.toUtf8().constData())) {
                 qWarning() << "Failed to load plugin:" << moduleName;
                 allSucceeded = false;
             }
@@ -160,10 +173,12 @@ namespace PluginManager {
     }
 
     bool initializeCapabilityModule() {
+        std::lock_guard lock(loadMutex());
+
         if (!registryInstance().isKnown("capability_module"))
             return false;
 
-        if (!loadPlugin("capability_module")) {
+        if (!loadPluginInternal("capability_module")) {
             qWarning() << "Failed to load capability module";
             return false;
         }
@@ -172,6 +187,8 @@ namespace PluginManager {
     }
 
     bool unloadPlugin(const char* pluginName) {
+        std::lock_guard lock(loadMutex());
+
         QString name = QString::fromUtf8(pluginName);
 
         if (!registryInstance().isLoaded(name)) {
@@ -192,8 +209,15 @@ namespace PluginManager {
     }
 
     void terminateAll() {
+        std::lock_guard lock(loadMutex());
         PluginLauncher::terminateAll();
         registryInstance().clearLoaded();
+    }
+
+    void clear() {
+        std::lock_guard lock(loadMutex());
+        PluginLauncher::terminateAll();
+        registryInstance().clear();
     }
 
     char** getLoadedPluginsCStr() {

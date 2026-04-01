@@ -21,7 +21,7 @@ namespace AppLifecycle {
     }
 
     void cleanup() {
-        PluginManager::terminateAll();
+        PluginManager::clear();
         QtAppContext::cleanup();
     }
 

@@ -22,6 +22,7 @@ namespace PluginManager {
     bool initializeCapabilityModule();
     bool unloadPlugin(const char* pluginName);
     void terminateAll();
+    void clear();
 
     char** getLoadedPluginsCStr();
     char** getKnownPluginsCStr();

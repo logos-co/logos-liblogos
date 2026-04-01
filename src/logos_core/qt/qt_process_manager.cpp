@@ -130,6 +130,12 @@ namespace QtProcessManager {
         QProcess* process = s_processes.take(qName);
         if (!process) return;
 
+        // Disconnect all signal handlers before waiting. The finished-signal
+        // lambda calls process->deleteLater(), which would queue a deferred
+        // deletion on an object we are about to delete directly — causing a
+        // double-free when that deferred deletion fires later.
+        process->disconnect();
+
         process->terminate();
 
         if (!process->waitForFinished(5000)) {
@@ -152,6 +158,10 @@ namespace QtProcessManager {
         for (auto it = snapshot.begin(); it != snapshot.end(); ++it) {
             QProcess* process = it.value();
             QString processName = it.key();
+
+            // Disconnect before waiting — same double-free prevention as in
+            // terminateProcess.
+            process->disconnect();
 
             process->terminate();
 
@@ -190,6 +200,7 @@ namespace QtProcessManager {
         for (auto it = s_processes.begin(); it != s_processes.end(); ++it) {
             QProcess* process = it.value();
             if (process) {
+                process->disconnect();
                 process->terminate();
                 process->waitForFinished(1000);
                 delete process;

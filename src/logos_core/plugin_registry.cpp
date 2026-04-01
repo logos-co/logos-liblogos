@@ -2,6 +2,8 @@
 #include <QDebug>
 #include <QDir>
 #include <cassert>
+#include <mutex>
+#include <shared_mutex>
 #include <nlohmann/json.hpp>
 #include <module_lib/module_lib.h>
 #include <package_manager_lib.h>
@@ -12,20 +14,25 @@ static PackageManagerLib& packageManagerInstance() {
 }
 
 void PluginRegistry::setPluginsDir(const QString& dir) {
+    std::unique_lock lock(m_mutex);
     m_pluginsDirs.clear();
     m_pluginsDirs.append(dir);
 }
 
 void PluginRegistry::addPluginsDir(const QString& dir) {
+    std::unique_lock lock(m_mutex);
     if (m_pluginsDirs.contains(dir)) return;
     m_pluginsDirs.append(dir);
 }
 
 QStringList PluginRegistry::pluginsDirs() const {
+    std::shared_lock lock(m_mutex);
     return m_pluginsDirs;
 }
 
 void PluginRegistry::discoverInstalledModules() {
+    std::unique_lock lock(m_mutex);
+
     PackageManagerLib& pm = packageManagerInstance();
     if (!m_pluginsDirs.isEmpty()) {
         pm.setEmbeddedModulesDirectory(m_pluginsDirs.first().toStdString());
@@ -45,7 +52,7 @@ void PluginRegistry::discoverInstalledModules() {
         if (name.isEmpty() || mainFilePath.isEmpty())
             continue;
 
-        QString pluginName = processPlugin(mainFilePath);
+        QString pluginName = processPluginInternal(mainFilePath);
         if (pluginName.isEmpty()) {
             qWarning() << "Failed to process plugin:" << mainFilePath;
         }
@@ -53,6 +60,11 @@ void PluginRegistry::discoverInstalledModules() {
 }
 
 QString PluginRegistry::processPlugin(const QString& pluginPath) {
+    std::unique_lock lock(m_mutex);
+    return processPluginInternal(pluginPath);
+}
+
+QString PluginRegistry::processPluginInternal(const QString& pluginPath) {
     std::string name = ModuleLib::LogosModule::getModuleName(pluginPath.toStdString());
     if (name.empty()) {
         qWarning() << "No valid metadata for plugin:" << pluginPath;
@@ -72,23 +84,28 @@ QString PluginRegistry::processPlugin(const QString& pluginPath) {
 }
 
 bool PluginRegistry::isKnown(const QString& name) const {
+    std::shared_lock lock(m_mutex);
     return m_plugins.contains(name);
 }
 
 QString PluginRegistry::pluginPath(const QString& name) const {
+    std::shared_lock lock(m_mutex);
     return m_plugins.value(name).path;
 }
 
 QStringList PluginRegistry::pluginDependencies(const QString& name) const {
+    std::shared_lock lock(m_mutex);
     return m_plugins.value(name).dependencies;
 }
 
 QStringList PluginRegistry::knownPluginNames() const {
+    std::shared_lock lock(m_mutex);
     return m_plugins.keys();
 }
 
 void PluginRegistry::registerPlugin(const QString& name, const QString& path,
                                     const QStringList& dependencies) {
+    std::unique_lock lock(m_mutex);
     PluginInfo& info = m_plugins[name];
     info.path = path;
     if (!dependencies.isEmpty())
@@ -96,23 +113,28 @@ void PluginRegistry::registerPlugin(const QString& name, const QString& path,
 }
 
 void PluginRegistry::registerDependencies(const QString& name, const QStringList& dependencies) {
+    std::unique_lock lock(m_mutex);
     m_plugins[name].dependencies = dependencies;
 }
 
 bool PluginRegistry::isLoaded(const QString& name) const {
+    std::shared_lock lock(m_mutex);
     return m_plugins.value(name).loaded;
 }
 
 void PluginRegistry::markLoaded(const QString& name) {
+    std::unique_lock lock(m_mutex);
     m_plugins[name].loaded = true;
 }
 
 void PluginRegistry::markUnloaded(const QString& name) {
+    std::unique_lock lock(m_mutex);
     if (m_plugins.contains(name))
         m_plugins[name].loaded = false;
 }
 
 QStringList PluginRegistry::loadedPluginNames() const {
+    std::shared_lock lock(m_mutex);
     QStringList result;
     for (auto it = m_plugins.constBegin(); it != m_plugins.constEnd(); ++it) {
         if (it.value().loaded)
@@ -122,11 +144,13 @@ QStringList PluginRegistry::loadedPluginNames() const {
 }
 
 void PluginRegistry::clearLoaded() {
+    std::unique_lock lock(m_mutex);
     for (auto it = m_plugins.begin(); it != m_plugins.end(); ++it)
         it.value().loaded = false;
 }
 
 void PluginRegistry::clear() {
+    std::unique_lock lock(m_mutex);
     m_pluginsDirs.clear();
     m_plugins.clear();
 }

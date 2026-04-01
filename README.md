@@ -134,6 +134,12 @@ void logos_core_process_events();
 
 See `src/logos_core/logos_core.h` for the full API.
 
+### Thread safety
+
+All C API functions that mutate plugin state (`logos_core_load_plugin`, `logos_core_load_plugin_with_dependencies`, `logos_core_unload_plugin`, `logos_core_refresh_plugins`) are serialised internally by a single mutex. It is safe to call them concurrently from multiple threads, including rapid and repeated load/unload cycles on the same module — each call waits for its turn and the process management layer handles teardown cleanly before the next launch.
+
+Read-only accessors (`logos_core_get_known_plugins`, `logos_core_get_loaded_plugins`) use a shared reader-writer lock and are safe to call concurrently with each other and with the mutating functions above.
+
 ## Dev vs Portable Builds
 
 The library supports two build modes controlled by the `LOGOS_PORTABLE_BUILD` CMake flag:
