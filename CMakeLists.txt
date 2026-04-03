@@ -50,7 +50,11 @@ include(GoogleTest)
 add_subdirectory(tests)
 
 # Install rules
-install(TARGETS logos_core logos_host
+set(_install_targets logos_core logos_host)
+if(TARGET logos_host_wasm)
+    list(APPEND _install_targets logos_host_wasm)
+endif()
+install(TARGETS ${_install_targets}
     LIBRARY DESTINATION lib
     RUNTIME DESTINATION bin
     ARCHIVE DESTINATION lib

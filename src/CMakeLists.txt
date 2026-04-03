@@ -272,3 +272,61 @@ else()
         INSTALL_RPATH "$ORIGIN/../lib"
         BUILD_WITH_INSTALL_RPATH TRUE)
 endif()
+
+# ── logos_host_wasm (WebAssembly module host) ────────────────────────────
+# Only built when wasmtime is available
+find_library(WASMTIME_LIBRARY NAMES wasmtime)
+find_path(WASMTIME_INCLUDE_DIR NAMES wasmtime.h)
+
+if(WASMTIME_LIBRARY AND WASMTIME_INCLUDE_DIR)
+    message(STATUS "Wasmtime found: ${WASMTIME_LIBRARY}")
+    message(STATUS "Wasmtime include: ${WASMTIME_INCLUDE_DIR}")
+
+    set(LOGOS_HOST_WASM_SOURCES
+        logos_host_wasm/logos_host_wasm.cpp
+        logos_host_wasm/wasm_provider_object.h
+        logos_host_wasm/wasm_provider_object.cpp
+    )
+
+    add_executable(logos_host_wasm ${LOGOS_HOST_WASM_SOURCES})
+
+    target_link_libraries(logos_host_wasm PRIVATE
+        Qt${QT_VERSION_MAJOR}::Core
+        Qt${QT_VERSION_MAJOR}::RemoteObjects
+        Qt${QT_VERSION_MAJOR}::Network
+        logos_sdk
+        CLI11::CLI11
+        ${WASMTIME_LIBRARY}
+    )
+
+    target_include_directories(logos_host_wasm PRIVATE
+        ${CMAKE_CURRENT_SOURCE_DIR}
+        ${CMAKE_CURRENT_SOURCE_DIR}/logos_host_wasm
+        ${WASMTIME_INCLUDE_DIR}
+        ${Qt${QT_VERSION_MAJOR}_INCLUDE_DIRS}
+    )
+
+    if(EXISTS "${LOGOS_CPP_SDK_ROOT}/lib" AND EXISTS "${LOGOS_CPP_SDK_ROOT}/include")
+        target_include_directories(logos_host_wasm PRIVATE
+            ${LOGOS_CPP_SDK_ROOT}/include
+            ${LOGOS_CPP_SDK_ROOT}/include/cpp
+            ${LOGOS_CPP_SDK_ROOT}/include/core
+        )
+    else()
+        target_include_directories(logos_host_wasm PRIVATE ${LOGOS_CPP_SDK_ROOT}/cpp)
+    endif()
+
+    if(APPLE)
+        set_target_properties(logos_host_wasm PROPERTIES
+            INSTALL_RPATH "${_qt_exec_runtime_paths}"
+            BUILD_WITH_INSTALL_RPATH TRUE)
+    else()
+        set_target_properties(logos_host_wasm PROPERTIES
+            INSTALL_RPATH "$ORIGIN/../lib"
+            BUILD_WITH_INSTALL_RPATH TRUE)
+    endif()
+
+    message(STATUS "logos_host_wasm will be built (wasmtime available)")
+else()
+    message(STATUS "logos_host_wasm will NOT be built (wasmtime not found)")
+endif()

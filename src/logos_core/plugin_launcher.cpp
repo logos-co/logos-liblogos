@@ -7,35 +7,50 @@
 
 namespace {
 
-    QString resolveLogosHostPath(const QStringList& pluginsDirs) {
-        QString logosHostPath;
+    QString resolveHostBinary(const QString& binaryName, const QString& envVar,
+                              const QStringList& pluginsDirs) {
+        QString hostPath;
 
-        QByteArray envPathBytes = qgetenv("LOGOS_HOST_PATH");
+        QByteArray envPathBytes = qgetenv(envVar.toUtf8().constData());
         if (!envPathBytes.isEmpty()) {
-            logosHostPath = QString::fromUtf8(envPathBytes);
+            hostPath = QString::fromUtf8(envPathBytes);
         }
 
-        if (logosHostPath.isEmpty()) {
-            logosHostPath = QDir::cleanPath(QCoreApplication::applicationDirPath() + "/logos_host");
+        if (hostPath.isEmpty()) {
+            hostPath = QDir::cleanPath(QCoreApplication::applicationDirPath() + "/" + binaryName);
         }
 
-        if (!QFile::exists(logosHostPath)) {
+        if (!QFile::exists(hostPath)) {
             if (!pluginsDirs.isEmpty()) {
                 QDir pluginsDirCandidate(pluginsDirs.first());
-                QString candidate = QDir::cleanPath(pluginsDirCandidate.absoluteFilePath("../bin/logos_host"));
+                QString candidate = QDir::cleanPath(pluginsDirCandidate.absoluteFilePath("../bin/" + binaryName));
                 if (QFile::exists(candidate)) {
-                    logosHostPath = candidate;
+                    hostPath = candidate;
                 }
             }
         }
 
-        if (!QFile::exists(logosHostPath)) {
-            qCritical() << "logos_host not found at:" << logosHostPath
+        return hostPath;
+    }
+
+    QString resolveLogosHostPath(const QStringList& pluginsDirs) {
+        QString path = resolveHostBinary("logos_host", "LOGOS_HOST_PATH", pluginsDirs);
+        if (!QFile::exists(path)) {
+            qCritical() << "logos_host not found at:" << path
                          << "- set LOGOS_HOST_PATH or place it next to the executable";
             return QString();
         }
+        return path;
+    }
 
-        return logosHostPath;
+    QString resolveLogosHostWasmPath(const QStringList& pluginsDirs) {
+        QString path = resolveHostBinary("logos_host_wasm", "LOGOS_HOST_WASM_PATH", pluginsDirs);
+        if (!QFile::exists(path)) {
+            qCritical() << "logos_host_wasm not found at:" << path
+                         << "- set LOGOS_HOST_WASM_PATH or place it next to the executable";
+            return QString();
+        }
+        return path;
     }
 
 }
@@ -44,9 +59,19 @@ namespace PluginLauncher {
 
     bool launch(const QString& name, const QString& pluginPath,
                 const QStringList& pluginsDirs, OnTerminatedFn onTerminated) {
-        QString logosHostPath = resolveLogosHostPath(pluginsDirs);
-        if (logosHostPath.isEmpty())
+
+        // Choose host binary based on module type
+        bool isWasm = pluginPath.endsWith(".wasm", Qt::CaseInsensitive);
+        QString hostPath = isWasm
+            ? resolveLogosHostWasmPath(pluginsDirs)
+            : resolveLogosHostPath(pluginsDirs);
+
+        if (hostPath.isEmpty())
             return false;
+
+        qDebug() << "Loading plugin:" << name << "from path:" << pluginPath
+                 << "in separate process";
+        qDebug() << "Logos host path (resolved):" << hostPath;
 
         std::vector<std::string> arguments = {
             "--name", name.toStdString(),
@@ -59,7 +84,8 @@ namespace PluginLauncher {
             Q_UNUSED(exitCode);
             QString qName = QString::fromStdString(pName);
             if (crashed) {
-                qCritical() << "Plugin process crashed:" << qName;
+                qCritical() << "Plugin process crashed:" << qName
+                            << "- terminating core with error";
                 exit(1);
             }
             if (onTerminated)
@@ -68,7 +94,8 @@ namespace PluginLauncher {
 
         callbacks.onError = [](const std::string& pName, bool crashed) {
             if (crashed) {
-                qCritical() << "Plugin process crashed:" << QString::fromStdString(pName);
+                qCritical() << "Process error for" << QString::fromStdString(pName)
+                            << ": QProcess::Crashed";
                 exit(1);
             }
         };
@@ -85,7 +112,7 @@ namespace PluginLauncher {
             }
         };
 
-        return QtProcessManager::startProcess(name.toStdString(), logosHostPath.toStdString(), arguments, callbacks);
+        return QtProcessManager::startProcess(name.toStdString(), hostPath.toStdString(), arguments, callbacks);
     }
 
     bool sendToken(const QString& name, const QString& token) {

@@ -45,6 +45,23 @@ void PluginRegistry::discoverInstalledModules() {
         if (name.isEmpty() || mainFilePath.isEmpty())
             continue;
 
+        // .wasm modules can't be introspected via QPluginLoader,
+        // so register them directly using manifest metadata
+        if (mainFilePath.endsWith(".wasm", Qt::CaseInsensitive)) {
+            PluginInfo info;
+            info.path = mainFilePath;
+            // Parse dependencies from manifest if available
+            if (mod.contains("dependencies") && mod["dependencies"].is_array()) {
+                for (const auto& dep : mod["dependencies"]) {
+                    if (dep.is_string())
+                        info.dependencies.append(QString::fromStdString(dep.get<std::string>()));
+                }
+            }
+            m_plugins.insert(name, info);
+            qDebug() << "Registered WASM module:" << name << "at" << mainFilePath;
+            continue;
+        }
+
         QString pluginName = processPlugin(mainFilePath);
         if (pluginName.isEmpty()) {
             qWarning() << "Failed to process plugin:" << mainFilePath;
