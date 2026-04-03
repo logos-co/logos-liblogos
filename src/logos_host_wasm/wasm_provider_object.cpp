@@ -2,7 +2,6 @@
 #include <QDebug>
 #include <QFile>
 #include <QJsonObject>
-#include <wasi.h>
 
 WasmProviderObject::WasmProviderObject(const QString& wasmPath, const QString& moduleName,
                                        const QString& moduleVersion)
@@ -56,36 +55,12 @@ bool WasmProviderObject::loadModule(const QString& wasmPath)
         return false;
     }
 
-    // Create store with WASI config
-    wasi_config_t* wasi_config = wasi_config_new();
-    wasi_config_inherit_stdout(wasi_config);
-    wasi_config_inherit_stderr(wasi_config);
-
+    // Create store (no WASI needed for wasm32-unknown-unknown modules)
     m_store = wasmtime_store_new(m_engine, nullptr, nullptr);
     wasmtime_context_t* context = wasmtime_store_context(m_store);
 
-    error = wasmtime_context_set_wasi(context, wasi_config);
-    if (error) {
-        wasm_message_t msg;
-        wasmtime_error_message(error, &msg);
-        qCritical() << "WasmProviderObject: WASI setup error:" << QByteArray(msg.data, msg.size);
-        wasm_byte_vec_delete(&msg);
-        wasmtime_error_delete(error);
-        return false;
-    }
-
-    // Create linker and define WASI
+    // Create linker (no WASI imports to define for pure computation modules)
     wasmtime_linker_t* linker = wasmtime_linker_new(m_engine);
-    error = wasmtime_linker_define_wasi(linker);
-    if (error) {
-        wasmtime_linker_delete(linker);
-        wasm_message_t msg;
-        wasmtime_error_message(error, &msg);
-        qCritical() << "WasmProviderObject: linker WASI error:" << QByteArray(msg.data, msg.size);
-        wasm_byte_vec_delete(&msg);
-        wasmtime_error_delete(error);
-        return false;
-    }
 
     // Instantiate
     wasm_trap_t* trap = nullptr;
