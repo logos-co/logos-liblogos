@@ -137,6 +137,15 @@ Every module ships a `metadata.json` referenced by Qt's `Q_PLUGIN_METADATA` macr
 - Core Manager process is excluded from stats
 - Not available on iOS
 
+### Thread Safety
+
+The C API is designed to be safe for use from multi-threaded host applications:
+
+- **Load/unload operations** (`load_plugin`, `load_plugin_with_dependencies`, `unload_plugin`) are serialised — only one runs at a time, so rapid concurrent load/unload cycles on the same or different modules do not produce data races.
+- **Read-only queries** (`get_known_plugins`, `get_loaded_plugins`) use a shared reader-writer lock and may execute concurrently with each other and with load/unload operations.
+- **Plugin discovery** (`refresh_plugins`) is protected by the registry's own write lock.
+- **Lifecycle functions** (`init`, `start`, `cleanup`) are not thread-safe and must be called from a single thread.
+
 ### Dev vs Portable Builds
 
 The platform supports two build variants:

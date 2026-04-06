@@ -4,6 +4,7 @@
 #include <QString>
 #include <QStringList>
 #include <QHash>
+#include <shared_mutex>
 
 struct PluginInfo {
     QString path;
@@ -37,6 +38,9 @@ public:
     void clear();
 
 private:
+    QString processPluginInternal(const QString& pluginPath);
+
+    mutable std::shared_mutex m_mutex;
     QStringList m_pluginsDirs;
     QHash<QString, PluginInfo> m_plugins;
 };

@@ -98,6 +98,8 @@ logos-liblogos/
 
 **Purpose:** Thin facade that orchestrates `PluginRegistry`, `PluginLauncher`, and `DependencyResolver`. Provides the C++-level API for module lifecycle management. Each module runs in a separate `logos_host` process for isolation.
 
+**Thread safety:** `loadPlugin`, `loadPluginWithDependencies`, and `unloadPlugin` are serialised by a static `loadMutex()` (one load/unload at a time). `discoverInstalledModules` delegates to `PluginRegistry` which has its own reader-writer lock.
+
 **API (namespace `PluginManager`):**
 
 | Method | Description |
@@ -123,12 +125,13 @@ logos-liblogos/
 
 **Files:** `src/logos_core/plugin_registry.h`, `src/logos_core/plugin_registry.cpp`
 
-**Purpose:** In-memory registry of discovered and loaded modules. Stores plugin paths, dependencies, and load state.
+**Purpose:** In-memory registry of discovered and loaded modules. Stores plugin paths, dependencies, and load state. All public methods are thread-safe: mutating methods acquire a `std::unique_lock` on an internal `std::shared_mutex`; read-only methods acquire a `std::shared_lock`, allowing concurrent reads.
 
 **Data:**
 - `PluginInfo` struct — holds `path`, `dependencies` (QStringList), `loaded` flag
 - `QHash<QString, PluginInfo> m_plugins` — plugin database keyed by name
 - `QStringList m_pluginsDirs` — configured plugin directories
+- `std::shared_mutex m_mutex` — reader-writer lock protecting all fields
 
 **API (class `PluginRegistry`):**
 
@@ -189,7 +192,7 @@ Takes callback functions (`IsKnownFn`, `GetDependenciesFn`) so it has no couplin
 **Purpose:** Isolates all Qt-specific code behind internal interfaces.
 
 - **QtAppContext** — Creates/manages `QCoreApplication`, runs event loop, processes events
-- **QtProcessManager** — Manages `QProcess` instances for module subprocesses, handles exit/error signals, sends tokens via stdin
+- **QtProcessManager** — Manages `QProcess` instances for module subprocesses, handles exit/error signals, sends tokens via local socket. A `std::mutex` (`s_processesMutex`) protects the `s_processes` map against concurrent access from calling threads and async signal deliveries. All teardown paths use a shared `destroyProcess` helper that disconnects signals before waiting, preventing double-free from deferred `deleteLater` calls.
 
 ### ProcessStats (external dependency)
 
@@ -244,6 +247,15 @@ The public C API (`logos_core.h`) is the only exported interface. All functions 
 | `logos_core_get_known_plugins() → char**` | Null-terminated array of known names (caller frees) |
 | `logos_core_get_module_stats() → char*` | JSON array of CPU/memory stats (caller frees) |
 | `logos_core_get_token(key) → char*` | Get auth token by key (caller frees) |
+
+### Thread Safety
+
+| Category | Guarantee |
+|----------|-----------|
+| `logos_core_load_plugin`, `logos_core_load_plugin_with_dependencies`, `logos_core_unload_plugin` | Serialised by a single internal mutex — safe to call concurrently from multiple threads |
+| `logos_core_get_known_plugins`, `logos_core_get_loaded_plugins` | Protected by a shared reader-writer lock — safe to call concurrently with each other and with the mutating functions above |
+| `logos_core_refresh_plugins` | Protected by `PluginRegistry`'s reader-writer lock (write side) — safe for concurrent registry access but not serialised against load/unload |
+| `logos_core_init`, `logos_core_start`, `logos_core_cleanup` | Not thread-safe — must be called from a single thread during startup/shutdown |
 
 ## Build Artifacts
 
