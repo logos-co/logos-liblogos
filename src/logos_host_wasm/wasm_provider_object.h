@@ -23,6 +23,8 @@ public:
     QJsonArray getMethods() override;
     void setEventListener(EventCallback callback) override;
     void init(void* apiInstance) override;
+    QString providerName() const override { return m_name; }
+    QString providerVersion() const override { return m_version; }
 
 private:
     struct WasmFunc {
