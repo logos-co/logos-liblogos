@@ -24,7 +24,7 @@ logos-liblogos/
 │   │   ├── dependency_resolver.h/cpp    # Topological sort with circular dependency detection
 │   │   └── platform/                    # OS / portable abstractions (swap implementations here)
 │   │       ├── app_context.h/cpp        # Core event loop (Boost.Asio io_context poll + wait)
-│   │       ├── process_manager.h/cpp    # POSIX subprocess + token socket client
+│   │       ├── process_manager.h/cpp    # Subprocess via Boost.Process v2 + token socket (Boost.Asio local)
 │   │       ├── executable_path.h/cpp    # Resolve directory of the current executable
 │   │       ├── ipc_paths.h              # Token Unix socket path helper
 │   │       ├── logos_uuid.h             # Random UUID helper
@@ -36,7 +36,7 @@ logos-liblogos/
 │       ├── qt/
 │       │   └── host_app.h/cpp           # QCoreApplication for Qt SDK / plugins
 │       └── platform/
-│           └── token_receiver.h/cpp     # Auth token reception (Unix domain socket)
+│           └── token_receiver.h/cpp     # Auth token reception (Boost.Asio local stream acceptor)
 ├── tests/                               # Google Test suite
 │   ├── CMakeLists.txt                   # Test build configuration
 │   ├── test_app_lifecycle.cpp           # AppLifecycle tests
@@ -44,6 +44,7 @@ logos-liblogos/
 │   └── test_process_stats.cpp           # ProcessStats (external lib) tests
 ├── nix/                                 # Nix build modules
 │   ├── default.nix                      # Common configuration (deps, flags, metadata)
+│   ├── boost-process-v2-impl.nix       # Fetch boostorg/process, build libboost_process_v2_impl.a (trimmed nixpkgs Boost)
 │   ├── build.nix                        # Shared build derivation
 │   ├── bin.nix                          # Binary extraction (logos_host + runtime libs)
 │   ├── lib.nix                          # Library extraction (liblogos_core)
@@ -62,7 +63,7 @@ logos-liblogos/
 | **C++17** | Implementation language |
 | **CMake 3.14+** | Build system |
 | **Qt 6** (Core, RemoteObjects) | SDK IPC, `logos_host` event loop, plugin system (`QPluginLoader`) |
-| **Boost** (headers / Asio) | Lightweight `io_context` for `logos_core_process_events` |
+| **Boost** (Asio, Process v2, filesystem paths) | `io_context` for `processEvents`, subprocess launch (`boost::process::v2`), local sockets for auth token IPC |
 | **spdlog** | Default backend behind `logos_log_*` in [`logos_logging.h`](src/logos_core/platform/logos_logging.h) |
 | **nlohmann_json** | JSON parsing/serialization |
 | **CLI11** | Command-line argument parsing (logos_host) |
@@ -165,7 +166,7 @@ logos-liblogos/
 
 **Files:** `src/logos_core/plugin_launcher.h`, `src/logos_core/plugin_launcher.cpp`
 
-**Purpose:** Spawn and manage module subprocesses via `ProcessManager` (POSIX + Unix socket token).
+**Purpose:** Spawn and manage module subprocesses via `ProcessManager` (Boost.Process v2 + Boost.Asio local socket token).
 
 **API (namespace `PluginLauncher`):**
 
@@ -197,7 +198,7 @@ Takes callback functions (`IsKnownFn`, `GetDependenciesFn`) so it has no couplin
 **Files:** `src/logos_core/platform/app_context.h/cpp`, `src/logos_core/platform/process_manager.h/cpp`
 
 - **AppContext** — Condition-variable based `exec()` / `cleanup()`, plus `boost::asio::io_context::poll()` for `processEvents()`.
-- **ProcessManager** — POSIX `fork`/`execvp`/`pipe` for `logos_host` children, background reader thread for merged stdout/stderr, token delivery via Unix socket (`ipc_paths.h`).
+- **ProcessManager** — `boost::process::v2::process` for `logos_host` children (shared stdout/stderr via one pipe + `readable_pipe`), background reader thread, token delivery with `boost::asio::local::stream_protocol` (`ipc_paths.h`). Nix’s trimmed Boost omits `libboost_process`; [`nix/boost-process-v2-impl.nix`](nix/boost-process-v2-impl.nix) fetches [boostorg/process](https://github.com/boostorg/process) at `boost-<version>` matching `pkgs.boost` and links `libboost_process_v2_impl.a`. CMake requires `BOOST_PROCESS_V2_IMPL_LIBRARY` (set by the flake / `nix/default.nix`, and `nix develop` via `shellHook`).
 
 ### ProcessStats (external `process-stats`)
 

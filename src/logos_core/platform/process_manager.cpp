@@ -1,13 +1,18 @@
 #include "process_manager.h"
 #include "ipc_paths.h"
 #include "logos_logging.h"
-#include <atomic>
+#include <boost/asio/any_io_executor.hpp>
+#include <boost/asio/local/stream_protocol.hpp>
+#include <boost/asio/readable_pipe.hpp>
+#include <boost/asio/write.hpp>
+#include <boost/filesystem/path.hpp>
+#include <boost/process/v2/process.hpp>
+#include <boost/process/v2/stdio.hpp>
+#include <boost/system/error_code.hpp>
 #include <cerrno>
 #include <chrono>
 #include <cstring>
-#include <csignal>
 #include <mutex>
-#include <sys/socket.h>
 #include <sys/un.h>
 #include <sys/wait.h>
 #include <thread>
@@ -15,10 +20,18 @@
 
 namespace {
 
+    namespace bp = boost::process::v2;
+
     struct ManagedProcess {
-        pid_t pid = -1;
-        int readFd = -1;
+        boost::asio::io_context io;
+        boost::asio::readable_pipe pipe;
+        std::unique_ptr<bp::process> proc;
         std::thread worker;
+
+        ManagedProcess()
+            : pipe(io)
+        {
+        }
     };
 
     std::mutex s_mutex;
@@ -54,48 +67,53 @@ namespace {
     {
         if (!mp)
             return;
-        if (mp->pid > 0) {
-            kill(mp->pid, SIGTERM);
-            int status = 0;
+        if (mp->proc && mp->proc->is_open()) {
+            boost::system::error_code ec;
+            mp->proc->request_exit(ec);
             for (int i = 0; i < 50; ++i) {
-                pid_t w = waitpid(mp->pid, &status, WNOHANG);
-                if (w == mp->pid)
+                if (!mp->proc->running(ec))
                     break;
                 std::this_thread::sleep_for(std::chrono::milliseconds(100));
             }
-            if (waitpid(mp->pid, &status, WNOHANG) == 0) {
+            if (mp->proc->running(ec)) {
                 logos_log_warn("Process did not terminate gracefully, killing it: {}", name);
-                kill(mp->pid, SIGKILL);
-                waitpid(mp->pid, &status, 0);
+                mp->proc->terminate(ec);
             }
-            mp->pid = -1;
         }
         if (mp->worker.joinable())
             mp->worker.join();
         delete mp;
     }
 
-    static void worker_main(std::string name, pid_t pid, int readFd, ProcessManager::ProcessCallbacks callbacks)
+    static void worker_main(std::string name, boost::asio::readable_pipe* outPipe, bp::process* proc,
+                            ProcessManager::ProcessCallbacks callbacks)
     {
         std::string buf;
         char tmp[4096];
+        boost::system::error_code ec;
+
         for (;;) {
-            const ssize_t n = read(readFd, tmp, sizeof tmp);
-            if (n <= 0)
+            std::size_t n = outPipe->read_some(boost::asio::buffer(tmp), ec);
+            if (ec == boost::asio::error::eof)
                 break;
-            buf.append(tmp, static_cast<size_t>(n));
+            if (ec)
+                break;
+            if (n == 0)
+                continue;
+            buf.append(tmp, n);
             flush_lines(buf, name, callbacks, false);
         }
         trim_inplace(buf);
         if (!buf.empty() && callbacks.onOutput)
             callbacks.onOutput(name, buf, false);
 
-        int status = 0;
-        waitpid(pid, &status, 0);
-        const bool crashed = WIFSIGNALED(status) != 0;
-        const int exitCode = WIFEXITED(status) ? WEXITSTATUS(status) : -1;
+        proc->wait(ec);
+        const int native = proc->native_exit_code();
+        const bool crashed = WIFSIGNALED(native) != 0;
+        const int exitCode = WIFEXITED(native) ? WEXITSTATUS(native) : -1;
 
-        close(readFd);
+        boost::system::error_code closeEc;
+        outPipe->close(closeEc);
 
         if (callbacks.onFinished)
             callbacks.onFinished(name, exitCode, crashed);
@@ -107,55 +125,56 @@ namespace ProcessManager {
     bool startProcess(const std::string& name, const std::string& executable,
                       const std::vector<std::string>& arguments, const ProcessCallbacks& callbacks)
     {
-        int pipefd[2];
-        if (pipe(pipefd) != 0) {
-            logos_log_critical("pipe() failed for process {}: {}", name, strerror(errno));
-            return false;
-        }
-
-        pid_t pid = fork();
-        if (pid < 0) {
-            logos_log_critical("fork() failed for {}: {}", name, strerror(errno));
-            close(pipefd[0]);
-            close(pipefd[1]);
-            return false;
-        }
-
-        if (pid == 0) {
-            close(pipefd[0]);
-            dup2(pipefd[1], STDOUT_FILENO);
-            dup2(pipefd[1], STDERR_FILENO);
-            if (pipefd[1] != STDOUT_FILENO && pipefd[1] != STDERR_FILENO)
-                close(pipefd[1]);
-
-            std::vector<char*> argv;
-            argv.reserve(arguments.size() + 2);
-            argv.push_back(const_cast<char*>(executable.c_str()));
-            for (const auto& a : arguments)
-                argv.push_back(const_cast<char*>(const_cast<std::string&>(a).data()));
-            argv.push_back(nullptr);
-
-            execvp(executable.c_str(), argv.data());
-            _exit(127);
-        }
-
-        close(pipefd[1]);
-        const int readFd = pipefd[0];
-
-        std::this_thread::sleep_for(std::chrono::milliseconds(20));
-        int st = 0;
-        const pid_t w = waitpid(pid, &st, WNOHANG);
-        if (w == pid) {
-            close(readFd);
-            logos_log_critical("Failed to start process for {}: child exited immediately (code {})", name,
-                            WIFEXITED(st) ? WEXITSTATUS(st) : -1);
+        int fds[2];
+        if (::pipe(fds) != 0) {
+            logos_log_critical("pipe() failed for process {}: {}", name, std::strerror(errno));
             return false;
         }
 
         auto* mp = new ManagedProcess();
-        mp->pid = pid;
-        mp->readFd = readFd;
-        mp->worker = std::thread(worker_main, name, pid, readFd, callbacks);
+        boost::system::error_code pec;
+        mp->pipe.assign(fds[0], pec);
+        if (pec) {
+            logos_log_critical("readable_pipe::assign failed for {}: {}", name, pec.message());
+            ::close(fds[0]);
+            ::close(fds[1]);
+            delete mp;
+            return false;
+        }
+
+        bp::process_stdio stdio{};
+        stdio.out = bp::detail::process_output_binding(fds[1]);
+        stdio.err = bp::detail::process_error_binding(fds[1]);
+
+        try {
+            const boost::asio::any_io_executor exec = mp->io.get_executor();
+            mp->proc = std::make_unique<bp::process>(exec, boost::filesystem::path(executable), arguments,
+                                                     std::move(stdio));
+        } catch (const std::exception& ex) {
+            logos_log_critical("Failed to start process for {}: {}", name, ex.what());
+            boost::system::error_code cec;
+            mp->pipe.close(cec);
+            ::close(fds[1]);
+            delete mp;
+            return false;
+        }
+
+        ::close(fds[1]);
+
+        std::this_thread::sleep_for(std::chrono::milliseconds(20));
+        boost::system::error_code rec;
+        if (!mp->proc->running(rec)) {
+            if (!rec) {
+                const int code = mp->proc->exit_code();
+                boost::system::error_code cec;
+                mp->pipe.close(cec);
+                logos_log_critical("Failed to start process for {}: child exited immediately (code {})", name, code);
+                delete mp;
+                return false;
+            }
+        }
+
+        mp->worker = std::thread(worker_main, name, &mp->pipe, mp->proc.get(), callbacks);
 
         {
             std::lock_guard<std::mutex> lock(s_mutex);
@@ -173,24 +192,25 @@ namespace ProcessManager {
             return false;
         }
 
+        using local = boost::asio::local::stream_protocol;
         bool connected = false;
-        int fd = -1;
         for (int attempt = 0; attempt < 10; ++attempt) {
-            fd = socket(AF_UNIX, SOCK_STREAM, 0);
-            if (fd < 0) {
-                std::this_thread::sleep_for(std::chrono::milliseconds(100));
-                continue;
-            }
-            sockaddr_un addr{};
-            addr.sun_family = AF_UNIX;
-            std::strncpy(addr.sun_path, path.c_str(), sizeof(addr.sun_path) - 1);
-            if (::connect(fd, reinterpret_cast<sockaddr*>(&addr), sizeof(addr)) == 0) {
-                connected = true;
+            boost::asio::io_context io;
+            local::endpoint ep(path);
+            local::socket sock(io);
+            boost::system::error_code ec;
+            sock.connect(ep, ec);
+            if (!ec) {
+                boost::asio::write(sock, boost::asio::buffer(token), ec);
+                if (!ec) {
+                    connected = true;
+                    boost::system::error_code sec;
+                    sock.shutdown(local::socket::shutdown_send, sec);
+                }
                 break;
             }
-            close(fd);
-            fd = -1;
-            std::this_thread::sleep_for(std::chrono::milliseconds(100));
+            if (attempt + 1 < 10)
+                std::this_thread::sleep_for(std::chrono::milliseconds(100));
         }
 
         if (!connected) {
@@ -209,9 +229,6 @@ namespace ProcessManager {
             return false;
         }
 
-        const ssize_t w = write(fd, token.data(), token.size());
-        (void)w;
-        close(fd);
         return true;
     }
 
@@ -255,9 +272,9 @@ namespace ProcessManager {
     {
         std::lock_guard<std::mutex> lock(s_mutex);
         auto it = s_processes.find(name);
-        if (it == s_processes.end() || !it->second)
+        if (it == s_processes.end() || !it->second || !it->second->proc || !it->second->proc->is_open())
             return -1;
-        return static_cast<int64_t>(it->second->pid);
+        return static_cast<int64_t>(it->second->proc->id());
     }
 
     std::unordered_map<std::string, int64_t> getAllProcessIds()
@@ -265,8 +282,8 @@ namespace ProcessManager {
         std::lock_guard<std::mutex> lock(s_mutex);
         std::unordered_map<std::string, int64_t> result;
         for (const auto& e : s_processes) {
-            if (e.second && e.second->pid > 0)
-                result[e.first] = static_cast<int64_t>(e.second->pid);
+            if (e.second && e.second->proc && e.second->proc->is_open())
+                result[e.first] = static_cast<int64_t>(e.second->proc->id());
         }
         return result;
     }
@@ -282,15 +299,17 @@ namespace ProcessManager {
             if (!e.second)
                 continue;
             ManagedProcess* mp = e.second;
-            if (mp->readFd >= 0) {
-                close(mp->readFd);
-                mp->readFd = -1;
-            }
-            if (mp->pid > 0) {
-                kill(mp->pid, SIGTERM);
-                int status = 0;
-                waitpid(mp->pid, &status, 0);
-                mp->pid = -1;
+            boost::system::error_code ec;
+            mp->pipe.close(ec);
+            if (mp->proc && mp->proc->is_open()) {
+                mp->proc->request_exit(ec);
+                for (int i = 0; i < 50; ++i) {
+                    if (!mp->proc->running(ec))
+                        break;
+                    std::this_thread::sleep_for(std::chrono::milliseconds(100));
+                }
+                if (mp->proc->running(ec))
+                    mp->proc->terminate(ec);
             }
             if (mp->worker.joinable())
                 mp->worker.join();

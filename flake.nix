@@ -97,22 +97,30 @@
         }
       );
 
-      devShells = forAllSystems ({ pkgs, system, ... }: {
-        default = pkgs.mkShell {
-          nativeBuildInputs = [
-            pkgs.cmake
-            pkgs.ninja
-            pkgs.pkg-config
-          ];
-          buildInputs = [
-            pkgs.boost
-            pkgs.spdlog
-            pkgs.qt6.qtbase
-            pkgs.qt6.qtremoteobjects
-            pkgs.zstd
-            process-stats.packages.${system}.default
-          ];
-        };
-      });
+      devShells = forAllSystems ({ pkgs, system, ... }:
+        let
+          boostProcessV2Impl = pkgs.callPackage ./nix/boost-process-v2-impl.nix { };
+        in
+        {
+          default = pkgs.mkShell {
+            nativeBuildInputs = [
+              pkgs.cmake
+              pkgs.ninja
+              pkgs.pkg-config
+              boostProcessV2Impl
+            ];
+            buildInputs = [
+              pkgs.boost
+              pkgs.spdlog
+              pkgs.qt6.qtbase
+              pkgs.qt6.qtremoteobjects
+              pkgs.zstd
+              process-stats.packages.${system}.default
+            ];
+            shellHook = ''
+              export BOOST_PROCESS_V2_IMPL_LIBRARY="${boostProcessV2Impl}/lib/libboost_process_v2_impl.a"
+            '';
+          };
+        });
     };
 }

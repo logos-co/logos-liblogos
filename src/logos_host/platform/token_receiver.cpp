@@ -1,15 +1,12 @@
 #include "token_receiver.h"
 #include "ipc_paths.h"
 #include "logos_logging.h"
-#include <cerrno>
-#include <cstring>
-#include <fcntl.h>
-#include <sys/select.h>
-#include <sys/socket.h>
-#include <sys/time.h>
+#include <boost/asio/local/stream_protocol.hpp>
+#include <boost/asio/read.hpp>
+#include <boost/asio/steady_timer.hpp>
+#include <chrono>
 #include <sys/un.h>
 #include <unistd.h>
-#include <vector>
 
 namespace TokenReceiver {
 
@@ -24,68 +21,63 @@ namespace TokenReceiver {
 
         ::unlink(pathStr.c_str());
 
-        const int serverFd = socket(AF_UNIX, SOCK_STREAM, 0);
-        if (serverFd < 0) {
-            logos_log_critical("socket() failed: {}", strerror(errno));
-            return {};
-        }
+        boost::asio::io_context io;
+        using local = boost::asio::local::stream_protocol;
+        local::endpoint ep(pathStr);
 
-        sockaddr_un addr{};
-        addr.sun_family = AF_UNIX;
-        std::strncpy(addr.sun_path, pathStr.c_str(), sizeof(addr.sun_path) - 1);
+        try {
+            local::acceptor acceptor(io, ep);
 
-        if (bind(serverFd, reinterpret_cast<sockaddr*>(&addr), sizeof(addr)) != 0) {
-            logos_log_critical("Failed to bind token server: {}", strerror(errno));
-            close(serverFd);
-            return {};
-        }
+            local::socket sock(io);
+            bool acceptedOk = false;
+            boost::asio::steady_timer timer(io);
+            timer.expires_after(std::chrono::seconds(10));
 
-        if (listen(serverFd, 1) != 0) {
-            logos_log_critical("listen() failed: {}", strerror(errno));
-            close(serverFd);
+            acceptor.async_accept(sock, [&](boost::system::error_code ec) {
+                if (!ec)
+                    acceptedOk = true;
+                timer.cancel();
+            });
+
+            timer.async_wait([&](boost::system::error_code ec) {
+                if (ec == boost::asio::error::operation_aborted)
+                    return;
+                if (!ec) {
+                    boost::system::error_code closeEc;
+                    acceptor.close(closeEc);
+                }
+            });
+
+            io.run();
+
+            boost::system::error_code closeEc;
+            acceptor.close(closeEc);
+            ::unlink(pathStr.c_str());
+
+            if (!acceptedOk) {
+                logos_log_critical("Timeout waiting for auth token");
+                return {};
+            }
+
+            std::string authToken;
+            boost::system::error_code readEc;
+            boost::asio::read(sock, boost::asio::dynamic_buffer(authToken), readEc);
+            if (readEc && readEc != boost::asio::error::eof) {
+                logos_log_critical("read token failed: {}", readEc.message());
+                return {};
+            }
+
+            if (authToken.empty()) {
+                logos_log_critical("No auth token received");
+                return {};
+            }
+
+            return authToken;
+        } catch (const std::exception& ex) {
+            logos_log_critical("Failed to bind token server: {}", ex.what());
             ::unlink(pathStr.c_str());
             return {};
         }
-
-        fd_set rfds;
-        FD_ZERO(&rfds);
-        FD_SET(serverFd, &rfds);
-        timeval tv;
-        tv.tv_sec = 10;
-        tv.tv_usec = 0;
-
-        if (select(serverFd + 1, &rfds, nullptr, nullptr, &tv) <= 0) {
-            logos_log_critical("Timeout waiting for auth token");
-            close(serverFd);
-            ::unlink(pathStr.c_str());
-            return {};
-        }
-
-        const int clientFd = accept(serverFd, nullptr, nullptr);
-        close(serverFd);
-        ::unlink(pathStr.c_str());
-
-        if (clientFd < 0) {
-            logos_log_critical("accept() failed: {}", strerror(errno));
-            return {};
-        }
-
-        std::vector<char> buf(4096);
-        std::string authToken;
-        for (;;) {
-            const ssize_t n = read(clientFd, buf.data(), buf.size());
-            if (n <= 0)
-                break;
-            authToken.append(buf.data(), static_cast<size_t>(n));
-        }
-        close(clientFd);
-
-        if (authToken.empty()) {
-            logos_log_critical("No auth token received");
-            return {};
-        }
-
-        return authToken;
     }
 
 }

@@ -1,6 +1,10 @@
 # Common build configuration shared across all packages
 { pkgs, logosSdk, logosModule, logosPackageManager, processStats, portableBuild ? false }:
 
+let
+  boostProcessV2Impl = pkgs.callPackage ./boost-process-v2-impl.nix { };
+in
+
 {
   pname = "logos-liblogos";
   version = "0.1.0";
@@ -10,6 +14,7 @@
     pkgs.ninja
     pkgs.pkg-config
     pkgs.qt6.wrapQtAppsNoGuiHook
+    boostProcessV2Impl
   ];
 
   buildInputs = [
@@ -32,6 +37,7 @@
     "-DLOGOS_MODULE_ROOT=${logosModule}"
     "-DLOGOS_PACKAGE_MANAGER_ROOT=${logosPackageManager}"
     "-DPROCESS_STATS_ROOT=${processStats}"
+    "-DBOOST_PROCESS_V2_IMPL_LIBRARY=${boostProcessV2Impl}/lib/libboost_process_v2_impl.a"
   ] ++ pkgs.lib.optionals portableBuild [
     "-DLOGOS_PORTABLE_BUILD=ON"
   ];
@@ -41,6 +47,7 @@
     LOGOS_MODULE_ROOT = "${logosModule}";
     LOGOS_PACKAGE_MANAGER_ROOT = "${logosPackageManager}";
     PROCESS_STATS_ROOT = "${processStats}";
+    BOOST_PROCESS_V2_IMPL_LIBRARY = "${boostProcessV2Impl}/lib/libboost_process_v2_impl.a";
   };
 
   meta = with pkgs.lib; {

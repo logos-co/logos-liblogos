@@ -135,6 +135,18 @@ set(LOGOS_HOST_SOURCES
     logos_host/platform/token_receiver.h
 )
 
+# Boost.Process v2: nixpkgs' trimmed Boost omits libboost_process. Nix supplies a prebuilt archive
+# (see nix/boost-process-v2-impl.nix); pass -DBOOST_PROCESS_V2_IMPL_LIBRARY= when not using Nix.
+if(NOT DEFINED BOOST_PROCESS_V2_IMPL_LIBRARY OR NOT EXISTS "${BOOST_PROCESS_V2_IMPL_LIBRARY}")
+    message(FATAL_ERROR
+        "BOOST_PROCESS_V2_IMPL_LIBRARY must point to libboost_process_v2_impl.a "
+        "(set automatically when building via the flake / nix/default.nix).")
+endif()
+add_library(boost_process_v2_impl STATIC IMPORTED GLOBAL)
+set_target_properties(boost_process_v2_impl PROPERTIES
+    IMPORTED_LOCATION "${BOOST_PROCESS_V2_IMPL_LIBRARY}"
+)
+
 add_library(logos_core SHARED ${LOGOS_CORE_SOURCES})
 
 target_compile_definitions(logos_core PRIVATE LOGOS_CORE_LIBRARY)
@@ -154,6 +166,7 @@ target_link_libraries(logos_core PUBLIC
     process_stats
     nlohmann_json::nlohmann_json
 )
+target_link_libraries(logos_core PRIVATE boost_process_v2_impl)
 
 target_include_directories(logos_core PRIVATE
     ${CMAKE_CURRENT_SOURCE_DIR}
@@ -217,6 +230,7 @@ target_include_directories(logos_host PRIVATE
     ${CMAKE_CURRENT_SOURCE_DIR}/logos_host/platform
     ${CMAKE_CURRENT_SOURCE_DIR}/logos_core
     ${CMAKE_CURRENT_SOURCE_DIR}/logos_core/platform
+    ${Boost_INCLUDE_DIRS}
     ${Qt${QT_VERSION_MAJOR}_INCLUDE_DIRS}
 )
 

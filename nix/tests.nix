@@ -31,6 +31,7 @@ pkgs.stdenv.mkDerivation {
       -DLOGOS_MODULE_ROOT=${common.env.LOGOS_MODULE_ROOT} \
       -DLOGOS_PACKAGE_MANAGER_ROOT=${common.env.LOGOS_PACKAGE_MANAGER_ROOT} \
       -DPROCESS_STATS_ROOT=${common.env.PROCESS_STATS_ROOT} \
+      -DBOOST_PROCESS_V2_IMPL_LIBRARY=${common.env.BOOST_PROCESS_V2_IMPL_LIBRARY} \
       -DCMAKE_BUILD_TYPE=Release \
       -DCMAKE_INSTALL_PREFIX=$out
     
