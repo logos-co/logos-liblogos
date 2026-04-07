@@ -7,6 +7,21 @@
 #include <cstdlib>
 #include <cstring>
 #include <string>
+#include <unordered_map>
+
+namespace {
+
+    std::unordered_map<std::string, int64_t> pluginPidsForProcessStats()
+    {
+        const QHash<QString, qint64> q = PluginManager::getPluginProcessIds();
+        std::unordered_map<std::string, int64_t> out;
+        out.reserve(static_cast<size_t>(q.size()));
+        for (auto it = q.constBegin(); it != q.constEnd(); ++it)
+            out[it.key().toStdString()] = static_cast<int64_t>(it.value());
+        return out;
+    }
+
+}
 
 // === C API Implementation (Thin Wrappers) ===
 
@@ -75,7 +90,7 @@ char* logos_core_get_token(const char* key) {
 }
 
 char* logos_core_get_module_stats() {
-    return ProcessStats::getModuleStats(PluginManager::getPluginProcessIds());
+    return ProcessStats::getModuleStats(pluginPidsForProcessStats());
 }
 
 void logos_core_refresh_plugins()

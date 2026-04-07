@@ -4,6 +4,8 @@
 #include <QProcess>
 #include <nlohmann/json.hpp>
 #include <cstring>
+#include <string>
+#include <unordered_map>
 #include <unistd.h>
 
 class ProcessStatsTest : public ::testing::Test {
@@ -110,7 +112,7 @@ TEST_F(ProcessStatsTest, GetProcessStats_CpuPercentUpdatesOnSecondCall) {
 
 // Verifies that getModuleStats() returns an empty JSON array when no plugins are loaded
 TEST_F(ProcessStatsTest, GetModuleStats_ReturnsEmptyArrayWhenNoPlugins) {
-    QHash<QString, qint64> processes;
+    std::unordered_map<std::string, int64_t> processes;
     char* result = ProcessStats::getModuleStats(processes);
 
     ASSERT_NE(result, nullptr);
@@ -125,7 +127,7 @@ TEST_F(ProcessStatsTest, GetModuleStats_ReturnsEmptyArrayWhenNoPlugins) {
 
 // Verifies that getModuleStats() returns a non-null pointer
 TEST_F(ProcessStatsTest, GetModuleStats_ReturnsNonNullPointer) {
-    QHash<QString, qint64> processes;
+    std::unordered_map<std::string, int64_t> processes;
     char* result = ProcessStats::getModuleStats(processes);
 
     ASSERT_NE(result, nullptr);
@@ -143,8 +145,8 @@ TEST_F(ProcessStatsTest, GetModuleStats_ReturnsValidJsonStructure) {
     qint64 pid = dummyProcess->processId();
     ASSERT_GT(pid, 0);
 
-    QHash<QString, qint64> processes;
-    processes.insert("test_plugin", pid);
+    std::unordered_map<std::string, int64_t> processes;
+    processes.emplace("test_plugin", static_cast<int64_t>(pid));
 
     char* result = ProcessStats::getModuleStats(processes);
 

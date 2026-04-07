@@ -7,7 +7,7 @@
     logos-cpp-sdk.url = "github:logos-co/logos-cpp-sdk";
     logos-capability-module.url = "github:logos-co/logos-capability-module";
     logos-module.url = "github:logos-co/logos-module";
-    process-stats.url = "github:logos-co/process-stats";
+    process-stats.url = "github:logos-co/process-stats/replace_qt";
     logos-package-manager.url = "github:logos-co/logos-package-manager";
   };
 
