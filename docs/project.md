@@ -22,21 +22,26 @@ logos-liblogos/
 │   │   ├── plugin_registry.h/cpp        # In-memory registry of discovered/loaded modules
 │   │   ├── plugin_launcher.h/cpp        # Spawns and manages logos_host subprocesses
 │   │   ├── dependency_resolver.h/cpp    # Topological sort with circular dependency detection
-│   │   └── qt/                          # Qt-specific implementations
-│   │       ├── qt_app_context.h/cpp     # QCoreApplication management
-│   │       └── qt_process_manager.h/cpp # QProcess-based subprocess management
+│   │   └── platform/                    # OS / portable abstractions (swap implementations here)
+│   │       ├── app_context.h/cpp        # Core event loop (Boost.Asio io_context poll + wait)
+│   │       ├── process_manager.h/cpp    # POSIX subprocess + token socket client
+│   │       ├── executable_path.h/cpp    # Resolve directory of the current executable
+│   │       ├── ipc_paths.h              # Token Unix socket path helper
+│   │       ├── logos_uuid.h             # Random UUID helper
+│   │       └── logos_logging.h          # logos_log_* facade (spdlog)
 │   └── logos_host/                      # Module subprocess host
 │       ├── logos_host.cpp               # Host entry point
 │       ├── command_line_parser.h/cpp    # CLI argument parsing (--name, --path)
 │       ├── plugin_initializer.h/cpp     # Plugin loading and token setup
-│       └── qt/                          # Qt-specific host implementations
-│           ├── qt_app.h/cpp             # Qt application setup for host
-│           └── qt_token_receiver.h/cpp  # Auth token reception via local socket
+│       ├── qt/
+│       │   └── host_app.h/cpp           # QCoreApplication for Qt SDK / plugins
+│       └── platform/
+│           └── token_receiver.h/cpp     # Auth token reception (Unix domain socket)
 ├── tests/                               # Google Test suite
 │   ├── CMakeLists.txt                   # Test build configuration
 │   ├── test_app_lifecycle.cpp           # AppLifecycle tests
 │   ├── test_plugin_manager.cpp          # PluginManager + PluginRegistry tests
-│   └── test_process_stats.cpp           # ProcessStats tests (external process-stats lib)
+│   └── test_process_stats.cpp           # ProcessStats (external lib) tests
 ├── nix/                                 # Nix build modules
 │   ├── default.nix                      # Common configuration (deps, flags, metadata)
 │   ├── build.nix                        # Shared build derivation
@@ -56,8 +61,10 @@ logos-liblogos/
 |-----------|---------|
 | **C++17** | Implementation language |
 | **CMake 3.14+** | Build system |
-| **Qt 6** (Core, RemoteObjects) | Event loop, plugin system, IPC, meta-object system |
-| **nlohmann_json** | JSON parsing/serialization (replaces Qt JSON internally) |
+| **Qt 6** (Core, RemoteObjects) | SDK IPC, `logos_host` event loop, plugin system (`QPluginLoader`) |
+| **Boost** (headers / Asio) | Lightweight `io_context` for `logos_core_process_events` |
+| **spdlog** | Default backend behind `logos_log_*` in [`logos_logging.h`](src/logos_core/platform/logos_logging.h) |
+| **nlohmann_json** | JSON parsing/serialization |
 | **CLI11** | Command-line argument parsing (logos_host) |
 | **zstd** | Compression (build dependency) |
 | **Google Test** | Unit testing framework |
@@ -70,8 +77,8 @@ logos-liblogos/
 | **[logos-cpp-sdk](https://github.com/logos-co/logos-cpp-sdk)** | C++ client library (LogosAPI, LogosAPIClient, TokenManager, PluginInterface) |
 | **[logos-module](https://github.com/logos-co/logos-module)** | Module library (metadata extraction, plugin loading utilities) |
 | **[logos-capability-module](https://github.com/logos-co/logos-capability-module)** | Built-in capability authorization module |
-| **[process-stats](https://github.com/logos-co/process-stats)** | CPU and memory monitoring for module processes |
 | **[logos-package-manager](https://github.com/logos-co/logos-package-manager-module)** | Package management library for installed module discovery |
+| **[process-stats](https://github.com/logos-co/process-stats)** | Qt-free CPU/memory stats for module PIDs (static lib + headers) |
 | **[logos-nix](https://github.com/logos-co/logos-nix)** | Common Nix tooling and nixpkgs pin |
 
 ## Core Modules
@@ -80,17 +87,17 @@ logos-liblogos/
 
 **Files:** `src/logos_core/app_lifecycle.h`, `src/logos_core/app_lifecycle.cpp`
 
-**Purpose:** Application lifecycle management. Delegates Qt-specific work to `QtAppContext`.
+**Purpose:** Application lifecycle management. Uses `AppContext` for blocking `exec()` / `processEvents()`.
 
 **API (namespace `AppLifecycle`):**
 
 | Method | Description |
 |--------|-------------|
-| `init(argc, argv)` | Initialize global state, create QCoreApplication if needed |
-| `start()` | Discover plugins, initialize capability module |
-| `exec() → int` | Run the Qt event loop |
+| `init(argc, argv)` | Initialize global state and core event context |
+| `start()` | Set `LOGOS_INSTANCE_ID` if unset, discover plugins, initialize capability module |
+| `exec() → int` | Block until `cleanup()` (returns -1 if not initialized) |
 | `cleanup()` | Terminate all module processes, clean up state |
-| `processEvents()` | Process Qt events without blocking |
+| `processEvents()` | Non-blocking pump of the core `io_context` |
 
 ### PluginManager
 
@@ -108,18 +115,18 @@ logos-liblogos/
 | `setPluginsDir(path)` | Set the primary plugin directory (clears existing) |
 | `addPluginsDir(path)` | Add an additional plugin directory |
 | `discoverInstalledModules()` | Scan all plugin directories and register discovered modules |
-| `processPlugin(path) → QString` | Extract metadata from a module file, register as known |
+| `processPlugin(path) → string` | Extract metadata from a module file, register as known |
 | `processPluginCStr(path) → char*` | C-string variant of processPlugin |
 | `loadPlugin(name) → bool` | Load a module (spawns `logos_host` process, sends auth token) |
 | `loadPluginWithDependencies(name) → bool` | Resolve dependency tree, load in topological order |
 | `initializeCapabilityModule() → bool` | Load the built-in capability module if available |
 | `unloadPlugin(name) → bool` | Terminate module process and update registry |
 | `terminateAll()` | Terminate all running module processes |
-| `resolveDependencies(modules) → QStringList` | Topological sort with circular dependency detection |
+| `resolveDependencies(modules) → vector<string>` | Topological sort with circular dependency detection |
 | `getLoadedPluginsCStr() → char**` | Return loaded module names as null-terminated C string array |
 | `getKnownPluginsCStr() → char**` | Return known module names as null-terminated C string array |
 | `isPluginLoaded(name) → bool` | Check if a module is currently loaded |
-| `getPluginProcessIds() → QHash` | Return module name → process ID mappings |
+| `getPluginProcessIds() → unordered_map<string,int64_t>` | Return module name → process ID mappings |
 
 ### PluginRegistry
 
@@ -128,9 +135,9 @@ logos-liblogos/
 **Purpose:** In-memory registry of discovered and loaded modules. Stores plugin paths, dependencies, and load state. All public methods are thread-safe: mutating methods acquire a `std::unique_lock` on an internal `std::shared_mutex`; read-only methods acquire a `std::shared_lock`, allowing concurrent reads.
 
 **Data:**
-- `PluginInfo` struct — holds `path`, `dependencies` (QStringList), `loaded` flag
-- `QHash<QString, PluginInfo> m_plugins` — plugin database keyed by name
-- `QStringList m_pluginsDirs` — configured plugin directories
+- `PluginInfo` struct — holds `path`, `dependencies` (`vector<string>`), `loaded` flag
+- `unordered_map<string, PluginInfo> m_plugins` — plugin database keyed by name
+- `vector<string> m_pluginsDirs` — configured plugin directories
 - `std::shared_mutex m_mutex` — reader-writer lock protecting all fields
 
 **API (class `PluginRegistry`):**
@@ -139,18 +146,18 @@ logos-liblogos/
 |--------|-------------|
 | `setPluginsDir(dir)` | Clear and set single plugin directory |
 | `addPluginsDir(dir)` | Add to plugin directory list |
-| `pluginsDirs() → QStringList` | Return configured directories |
+| `pluginsDirs() → vector<string>` | Return configured directories |
 | `discoverInstalledModules()` | Scan directories, parse manifest.json files |
-| `processPlugin(path) → QString` | Extract metadata from module file, register as known |
+| `processPlugin(path) → string` | Extract metadata from module file, register as known |
 | `registerPlugin(name, path, deps)` | Manually register a plugin |
 | `registerDependencies(name, deps)` | Set dependencies for a known plugin |
 | `isKnown(name) → bool` | Plugin exists in registry |
-| `pluginPath(name) → QString` | Get file path for a known plugin |
-| `pluginDependencies(name) → QStringList` | Get dependency list for a plugin |
-| `knownPluginNames() → QStringList` | All discovered module names |
+| `pluginPath(name) → string` | Get file path for a known plugin |
+| `pluginDependencies(name) → vector<string>` | Get dependency list for a plugin |
+| `knownPluginNames() → vector<string>` | All discovered module names |
 | `isLoaded(name) → bool` | Plugin is currently running |
 | `markLoaded(name)` / `markUnloaded(name)` | Update load state |
-| `loadedPluginNames() → QStringList` | Currently running module names |
+| `loadedPluginNames() → vector<string>` | Currently running module names |
 | `clearLoaded()` | Clear all loaded state |
 | `clear()` | Reset entire registry |
 
@@ -158,18 +165,18 @@ logos-liblogos/
 
 **Files:** `src/logos_core/plugin_launcher.h`, `src/logos_core/plugin_launcher.cpp`
 
-**Purpose:** Spawn and manage module subprocesses. Delegates to `QtProcessManager` for QProcess operations.
+**Purpose:** Spawn and manage module subprocesses via `ProcessManager` (POSIX + Unix socket token).
 
 **API (namespace `PluginLauncher`):**
 
 | Method | Description |
 |--------|-------------|
 | `launch(name, path, dirs, onTerminated) → bool` | Spawn `logos_host` process for a module |
-| `sendToken(name, token) → bool` | Send auth token to module process via stdin |
+| `sendToken(name, token) → bool` | Send auth token to module process via Unix domain socket |
 | `terminate(name)` | Kill a specific module process |
 | `terminateAll()` | Kill all module processes |
 | `hasProcess(name) → bool` | Check if a process exists for this module |
-| `getAllProcessIds() → QHash` | Map module names to process IDs |
+| `getAllProcessIds() → unordered_map<string,int64_t>` | Map module names to process IDs |
 
 ### DependencyResolver
 
@@ -181,24 +188,22 @@ logos-liblogos/
 
 | Method | Description |
 |--------|-------------|
-| `resolve(requested, isKnown, getDependencies) → QStringList` | Returns modules in load order (dependencies first) |
+| `resolve(requested, isKnown, getDependencies) → vector<string>` | Returns modules in load order (dependencies first) |
 
 Takes callback functions (`IsKnownFn`, `GetDependenciesFn`) so it has no coupling to the registry implementation.
 
-### Qt Integration Layer
+### AppContext / ProcessManager
 
-**Files:** `src/logos_core/qt/qt_app_context.h/cpp`, `src/logos_core/qt/qt_process_manager.h/cpp`
+**Files:** `src/logos_core/platform/app_context.h/cpp`, `src/logos_core/platform/process_manager.h/cpp`
 
-**Purpose:** Isolates all Qt-specific code behind internal interfaces.
+- **AppContext** — Condition-variable based `exec()` / `cleanup()`, plus `boost::asio::io_context::poll()` for `processEvents()`.
+- **ProcessManager** — POSIX `fork`/`execvp`/`pipe` for `logos_host` children, background reader thread for merged stdout/stderr, token delivery via Unix socket (`ipc_paths.h`).
 
-- **QtAppContext** — Creates/manages `QCoreApplication`, runs event loop, processes events
-- **QtProcessManager** — Manages `QProcess` instances for module subprocesses, handles exit/error signals, sends tokens via local socket. A `std::mutex` (`s_processesMutex`) protects the `s_processes` map against concurrent access from calling threads and async signal deliveries. All teardown paths use a shared `destroyProcess` helper that disconnects signals before waiting, preventing double-free from deferred `deleteLater` calls.
+### ProcessStats (external `process-stats`)
 
-### ProcessStats (external dependency)
+**Upstream:** [`github:logos-co/process-stats`](https://github.com/logos-co/process-stats) — linked via `PROCESS_STATS_ROOT` / Nix `processStats` input.
 
-**Source:** [process-stats](https://github.com/logos-co/process-stats) library (linked as a static dependency)
-
-**Purpose:** CPU and memory monitoring for loaded module processes.
+**Purpose:** CPU and memory monitoring for loaded module processes (macOS `libproc`, Linux `/proc`).
 
 **API (namespace `ProcessStats`):**
 
@@ -209,7 +214,7 @@ Takes callback functions (`IsKnownFn`, `GetDependenciesFn`) so it has no couplin
 
 ### LogosHost
 
-**Files:** `src/logos_host/logos_host.cpp`, `src/logos_host/command_line_parser.h/cpp`, `src/logos_host/plugin_initializer.h/cpp`, `src/logos_host/qt/qt_app.h/cpp`, `src/logos_host/qt/qt_token_receiver.h/cpp`
+**Files:** `src/logos_host/logos_host.cpp`, `src/logos_host/command_line_parser.h/cpp`, `src/logos_host/plugin_initializer.h/cpp`, `src/logos_host/qt/host_app.h/cpp`, `src/logos_host/platform/token_receiver.h/cpp`
 
 **Purpose:** Lightweight subprocess that loads a single module. Parses `--name` and `--path` arguments, loads the plugin, authenticates via token from the core, registers the module with the remote object registry, and runs the Qt event loop.
 
@@ -223,9 +228,9 @@ The public C API (`logos_core.h`) is the only exported interface. All functions 
 |----------|-------------|
 | `logos_core_init(argc, argv)` | Initialize the library |
 | `logos_core_start()` | Discover modules and initialize capability module |
-| `logos_core_exec() → int` | Run the Qt event loop |
+| `logos_core_exec() → int` | Block until cleanup (core event loop) |
 | `logos_core_cleanup()` | Terminate all modules and clean up |
-| `logos_core_process_events()` | Process Qt events without blocking |
+| `logos_core_process_events()` | Pump the core event loop without blocking |
 
 **Plugin Management:**
 

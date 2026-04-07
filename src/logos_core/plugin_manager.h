@@ -1,9 +1,10 @@
 #ifndef PLUGIN_MANAGER_H
 #define PLUGIN_MANAGER_H
 
-#include <QString>
-#include <QStringList>
-#include <QHash>
+#include <cstdint>
+#include <string>
+#include <unordered_map>
+#include <vector>
 
 class PluginRegistry;
 
@@ -15,7 +16,7 @@ namespace PluginManager {
 
     void discoverInstalledModules();
 
-    QString processPlugin(const QString& pluginPath);
+    std::string processPlugin(const std::string& pluginPath);
     char* processPluginCStr(const char* pluginPath);
     bool loadPlugin(const char* pluginName);
     bool loadPluginWithDependencies(const char* pluginName);
@@ -27,10 +28,10 @@ namespace PluginManager {
     char** getLoadedPluginsCStr();
     char** getKnownPluginsCStr();
 
-    bool isPluginLoaded(const QString& name);
-    QHash<QString, qint64> getPluginProcessIds();
+    bool isPluginLoaded(const std::string& name);
+    std::unordered_map<std::string, int64_t> getPluginProcessIds();
 
-    QStringList resolveDependencies(const QStringList& requestedModules);
+    std::vector<std::string> resolveDependencies(const std::vector<std::string>& requestedModules);
 }
 
-#endif // PLUGIN_MANAGER_H
+#endif

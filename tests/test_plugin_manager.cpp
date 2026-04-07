@@ -1,71 +1,73 @@
 #include <gtest/gtest.h>
+#include "logos_core.h"
 #include "plugin_manager.h"
 #include "plugin_registry.h"
-#include "logos_core.h"
-#include <QCoreApplication>
-#include <QDir>
-#include <QTemporaryDir>
-#include <nlohmann/json.hpp>
+#include <cstdlib>
 #include <cstring>
 #include <fstream>
-#include <QStringList>
+#include <nlohmann/json.hpp>
+#include <set>
+#include <string>
+#include <filesystem>
 
-static void clearPluginState() {
+static void clearPluginState()
+{
     PluginManager::terminateAll();
     PluginManager::registry().clear();
 }
 
 class PluginManagerTest : public ::testing::Test {
 protected:
-    void SetUp() override {
+    void SetUp() override
+    {
         clearPluginState();
     }
 
-    void TearDown() override {
+    void TearDown() override
+    {
         clearPluginState();
     }
 };
 
-// =============================================================================
-// Plugin Query Functions Tests
-// =============================================================================
-
-TEST_F(PluginManagerTest, GetLoadedPlugins_ReturnsEmptyList) {
-    EXPECT_TRUE(PluginManager::registry().loadedPluginNames().isEmpty());
+TEST_F(PluginManagerTest, GetLoadedPlugins_ReturnsEmptyList)
+{
+    EXPECT_TRUE(PluginManager::registry().loadedPluginNames().empty());
 }
 
-TEST_F(PluginManagerTest, GetKnownPlugins_ReturnsEmptyHash) {
-    EXPECT_TRUE(PluginManager::registry().knownPluginNames().isEmpty());
+TEST_F(PluginManagerTest, GetKnownPlugins_ReturnsEmptyList)
+{
+    EXPECT_TRUE(PluginManager::registry().knownPluginNames().empty());
 }
 
-TEST_F(PluginManagerTest, GetKnownPlugins_ReturnsCorrectHash) {
+TEST_F(PluginManagerTest, GetKnownPlugins_ReturnsCorrectEntries)
+{
     PluginManager::registry().registerPlugin("plugin1", "/path/to/plugin1.dylib");
     PluginManager::registry().registerPlugin("plugin2", "/path/to/plugin2.dylib");
 
-    ASSERT_EQ(PluginManager::registry().knownPluginNames().size(), 2);
-    EXPECT_EQ(PluginManager::registry().pluginPath("plugin1").toStdString(), "/path/to/plugin1.dylib");
-    EXPECT_EQ(PluginManager::registry().pluginPath("plugin2").toStdString(), "/path/to/plugin2.dylib");
+    ASSERT_EQ(PluginManager::registry().knownPluginNames().size(), 2u);
+    EXPECT_EQ(PluginManager::registry().pluginPath("plugin1"), "/path/to/plugin1.dylib");
+    EXPECT_EQ(PluginManager::registry().pluginPath("plugin2"), "/path/to/plugin2.dylib");
 }
 
-TEST_F(PluginManagerTest, IsPluginLoaded_ReturnsFalseForUnloaded) {
+TEST_F(PluginManagerTest, IsPluginLoaded_ReturnsFalseForUnloaded)
+{
     EXPECT_FALSE(PluginManager::isPluginLoaded("nonexistent_plugin"));
 }
 
-TEST_F(PluginManagerTest, IsPluginKnown_ReturnsFalseForUnknown) {
+TEST_F(PluginManagerTest, IsPluginKnown_ReturnsFalseForUnknown)
+{
     EXPECT_FALSE(PluginManager::registry().isKnown("nonexistent_plugin"));
 }
 
-TEST_F(PluginManagerTest, IsPluginKnown_ReturnsTrueForKnown) {
+TEST_F(PluginManagerTest, IsPluginKnown_ReturnsTrueForKnown)
+{
     PluginManager::registry().registerPlugin("test_plugin", "/path/to/plugin");
 
     EXPECT_TRUE(PluginManager::registry().isKnown("test_plugin"));
 }
 
-// =============================================================================
-// C String Array Functions Tests
-// =============================================================================
-
-TEST_F(PluginManagerTest, GetLoadedPluginsCStr_ReturnsNullTerminatedArrayWhenEmpty) {
+TEST_F(PluginManagerTest, GetLoadedPluginsCStr_ReturnsNullTerminatedArrayWhenEmpty)
+{
     char** result = PluginManager::getLoadedPluginsCStr();
 
     ASSERT_NE(result, nullptr);
@@ -74,7 +76,8 @@ TEST_F(PluginManagerTest, GetLoadedPluginsCStr_ReturnsNullTerminatedArrayWhenEmp
     delete[] result;
 }
 
-TEST_F(PluginManagerTest, GetKnownPluginsCStr_ReturnsNullTerminatedArrayWhenEmpty) {
+TEST_F(PluginManagerTest, GetKnownPluginsCStr_ReturnsNullTerminatedArrayWhenEmpty)
+{
     char** result = PluginManager::getKnownPluginsCStr();
 
     ASSERT_NE(result, nullptr);
@@ -83,7 +86,8 @@ TEST_F(PluginManagerTest, GetKnownPluginsCStr_ReturnsNullTerminatedArrayWhenEmpt
     delete[] result;
 }
 
-TEST_F(PluginManagerTest, GetKnownPluginsCStr_ReturnsCorrectArray) {
+TEST_F(PluginManagerTest, GetKnownPluginsCStr_ReturnsCorrectArray)
+{
     PluginManager::registry().registerPlugin("plugin1", "/path/to/plugin1");
     PluginManager::registry().registerPlugin("plugin2", "/path/to/plugin2");
 
@@ -94,83 +98,75 @@ TEST_F(PluginManagerTest, GetKnownPluginsCStr_ReturnsCorrectArray) {
     ASSERT_NE(result[1], nullptr);
     EXPECT_EQ(result[2], nullptr);
 
-    QStringList plugins;
-    plugins.append(QString::fromUtf8(result[0]));
-    plugins.append(QString::fromUtf8(result[1]));
+    std::set<std::string> plugins;
+    plugins.insert(result[0]);
+    plugins.insert(result[1]);
 
-    EXPECT_TRUE(plugins.contains("plugin1"));
-    EXPECT_TRUE(plugins.contains("plugin2"));
+    EXPECT_TRUE(plugins.count("plugin1"));
+    EXPECT_TRUE(plugins.count("plugin2"));
 
     delete[] result[0];
     delete[] result[1];
     delete[] result;
 }
 
-// =============================================================================
-// loadPlugin Error Cases Tests
-// =============================================================================
-
-TEST_F(PluginManagerTest, LoadPlugin_ReturnsFalseForUnknownPlugin) {
+TEST_F(PluginManagerTest, LoadPlugin_ReturnsFalseForUnknownPlugin)
+{
     bool result = PluginManager::loadPlugin("nonexistent_plugin");
     EXPECT_FALSE(result);
 }
 
-// =============================================================================
-// unloadPlugin Error Cases Tests
-// =============================================================================
-
-TEST_F(PluginManagerTest, UnloadPlugin_ReturnsFalseForNotLoaded) {
+TEST_F(PluginManagerTest, UnloadPlugin_ReturnsFalseForNotLoaded)
+{
     bool result = PluginManager::unloadPlugin("nonexistent_plugin");
     EXPECT_FALSE(result);
 }
 
-// =============================================================================
-// resolveDependencies Function Tests
-// =============================================================================
-
-TEST_F(PluginManagerTest, ResolveDependencies_ReturnsEmptyForEmptyInput) {
-    QStringList result = PluginManager::resolveDependencies(QStringList());
-    EXPECT_TRUE(result.isEmpty());
+TEST_F(PluginManagerTest, ResolveDependencies_ReturnsEmptyForEmptyInput)
+{
+    std::vector<std::string> result = PluginManager::resolveDependencies({});
+    EXPECT_TRUE(result.empty());
 }
 
-TEST_F(PluginManagerTest, ResolveDependencies_ReturnsEmptyForUnknownPlugin) {
-    QStringList requested;
-    requested.append("unknown_plugin");
+TEST_F(PluginManagerTest, ResolveDependencies_ReturnsEmptyForUnknownPlugin)
+{
+    std::vector<std::string> requested = {"unknown_plugin"};
 
-    QStringList result = PluginManager::resolveDependencies(requested);
-    EXPECT_TRUE(result.isEmpty());
+    std::vector<std::string> result = PluginManager::resolveDependencies(requested);
+    EXPECT_TRUE(result.empty());
 }
 
-TEST_F(PluginManagerTest, ResolveDependencies_ReturnsSinglePluginWithNoDeps) {
+TEST_F(PluginManagerTest, ResolveDependencies_ReturnsSinglePluginWithNoDeps)
+{
     PluginManager::registry().registerPlugin("plugin_a", "/path/to/plugin_a");
     PluginManager::registry().registerDependencies("plugin_a", {});
 
-    QStringList requested;
-    requested.append("plugin_a");
+    std::vector<std::string> requested = {"plugin_a"};
 
-    QStringList result = PluginManager::resolveDependencies(requested);
+    std::vector<std::string> result = PluginManager::resolveDependencies(requested);
 
-    ASSERT_EQ(result.size(), 1);
-    EXPECT_EQ(result[0].toStdString(), "plugin_a");
+    ASSERT_EQ(result.size(), 1u);
+    EXPECT_EQ(result[0], "plugin_a");
 }
 
-TEST_F(PluginManagerTest, ResolveDependencies_ReturnsCorrectOrder) {
+TEST_F(PluginManagerTest, ResolveDependencies_ReturnsCorrectOrder)
+{
     PluginManager::registry().registerPlugin("plugin_a", "/path/to/plugin_a");
     PluginManager::registry().registerPlugin("plugin_b", "/path/to/plugin_b");
     PluginManager::registry().registerDependencies("plugin_a", {"plugin_b"});
     PluginManager::registry().registerDependencies("plugin_b", {});
 
-    QStringList requested;
-    requested.append("plugin_a");
+    std::vector<std::string> requested = {"plugin_a"};
 
-    QStringList result = PluginManager::resolveDependencies(requested);
+    std::vector<std::string> result = PluginManager::resolveDependencies(requested);
 
-    ASSERT_EQ(result.size(), 2);
-    EXPECT_EQ(result[0].toStdString(), "plugin_b");
-    EXPECT_EQ(result[1].toStdString(), "plugin_a");
+    ASSERT_EQ(result.size(), 2u);
+    EXPECT_EQ(result[0], "plugin_b");
+    EXPECT_EQ(result[1], "plugin_a");
 }
 
-TEST_F(PluginManagerTest, ResolveDependencies_HandlesTransitiveDeps) {
+TEST_F(PluginManagerTest, ResolveDependencies_HandlesTransitiveDeps)
+{
     PluginManager::registry().registerPlugin("plugin_a", "/path/to/plugin_a");
     PluginManager::registry().registerPlugin("plugin_b", "/path/to/plugin_b");
     PluginManager::registry().registerPlugin("plugin_c", "/path/to/plugin_c");
@@ -178,177 +174,174 @@ TEST_F(PluginManagerTest, ResolveDependencies_HandlesTransitiveDeps) {
     PluginManager::registry().registerDependencies("plugin_b", {"plugin_c"});
     PluginManager::registry().registerDependencies("plugin_c", {});
 
-    QStringList requested;
-    requested.append("plugin_a");
+    std::vector<std::string> requested = {"plugin_a"};
 
-    QStringList result = PluginManager::resolveDependencies(requested);
+    std::vector<std::string> result = PluginManager::resolveDependencies(requested);
 
-    ASSERT_EQ(result.size(), 3);
-    EXPECT_EQ(result[0].toStdString(), "plugin_c");
-    EXPECT_EQ(result[1].toStdString(), "plugin_b");
-    EXPECT_EQ(result[2].toStdString(), "plugin_a");
+    ASSERT_EQ(result.size(), 3u);
+    EXPECT_EQ(result[0], "plugin_c");
+    EXPECT_EQ(result[1], "plugin_b");
+    EXPECT_EQ(result[2], "plugin_a");
 }
 
-// =============================================================================
-// C API: logos_core_load_plugin_with_dependencies Tests
-// =============================================================================
-
-TEST_F(PluginManagerTest, LoadPluginWithDependencies_AbortsForNull) {
+TEST_F(PluginManagerTest, LoadPluginWithDependencies_AbortsForNull)
+{
     EXPECT_DEATH(logos_core_load_plugin_with_dependencies(nullptr), "");
 }
 
-TEST_F(PluginManagerTest, LoadPluginWithDependencies_ReturnsZeroForUnknown) {
+TEST_F(PluginManagerTest, LoadPluginWithDependencies_ReturnsZeroForUnknown)
+{
     int result = logos_core_load_plugin_with_dependencies("unknown_plugin");
     EXPECT_EQ(result, 0);
 }
 
-// =============================================================================
-// Plugin Directory Management Tests
-// =============================================================================
-
-TEST_F(PluginManagerTest, SetPluginsDir_SetsFirstDirectory) {
+TEST_F(PluginManagerTest, SetPluginsDir_SetsFirstDirectory)
+{
     PluginManager::setPluginsDir("/tmp/test_plugins");
-    ASSERT_EQ(PluginManager::registry().pluginsDirs().size(), 1);
-    EXPECT_EQ(PluginManager::registry().pluginsDirs()[0].toStdString(), "/tmp/test_plugins");
+    ASSERT_EQ(PluginManager::registry().pluginsDirs().size(), 1u);
+    EXPECT_EQ(PluginManager::registry().pluginsDirs()[0], "/tmp/test_plugins");
 }
 
-TEST_F(PluginManagerTest, AddPluginsDir_AppendsDirectory) {
+TEST_F(PluginManagerTest, AddPluginsDir_AppendsDirectory)
+{
     PluginManager::setPluginsDir("/tmp/dir1");
     PluginManager::addPluginsDir("/tmp/dir2");
     PluginManager::addPluginsDir("/tmp/dir3");
 
-    ASSERT_EQ(PluginManager::registry().pluginsDirs().size(), 3);
-    EXPECT_EQ(PluginManager::registry().pluginsDirs()[0].toStdString(), "/tmp/dir1");
-    EXPECT_EQ(PluginManager::registry().pluginsDirs()[1].toStdString(), "/tmp/dir2");
-    EXPECT_EQ(PluginManager::registry().pluginsDirs()[2].toStdString(), "/tmp/dir3");
+    ASSERT_EQ(PluginManager::registry().pluginsDirs().size(), 3u);
+    EXPECT_EQ(PluginManager::registry().pluginsDirs()[0], "/tmp/dir1");
+    EXPECT_EQ(PluginManager::registry().pluginsDirs()[1], "/tmp/dir2");
+    EXPECT_EQ(PluginManager::registry().pluginsDirs()[2], "/tmp/dir3");
 }
 
-TEST_F(PluginManagerTest, GetPluginsDirs_ReturnsEmptyAfterClear) {
+TEST_F(PluginManagerTest, GetPluginsDirs_ReturnsEmptyAfterClear)
+{
     PluginManager::setPluginsDir("/tmp/dir1");
     clearPluginState();
-    EXPECT_TRUE(PluginManager::registry().pluginsDirs().isEmpty());
+    EXPECT_TRUE(PluginManager::registry().pluginsDirs().empty());
 }
 
-// =============================================================================
-// Discovery Tests — fake installed modules
-// =============================================================================
+static std::string make_temp_dir()
+{
+    static int counter = 0;
+    auto base = std::filesystem::temp_directory_path() / ("logos_pm_test_" + std::to_string(counter++));
+    std::filesystem::create_directories(base);
+    return base.string();
+}
 
-static void createFakeModule(const QString& parentDir,
-                             const QString& moduleName,
-                             const QString& mainFile,
-                             const QString& type = "core") {
-    QDir dir(parentDir);
-    dir.mkpath(moduleName);
+static void createFakeModule(const std::string& parentDir,
+                             const std::string& moduleName,
+                             const std::string& mainFile,
+                             const std::string& type = "core")
+{
+    const auto modDir = std::filesystem::path(parentDir) / moduleName;
+    std::filesystem::create_directories(modDir);
 
     nlohmann::json manifest;
-    manifest["name"] = moduleName.toStdString();
+    manifest["name"] = moduleName;
     manifest["version"] = "1.0.0";
-    manifest["type"] = type.toStdString();
-    manifest["main"] = mainFile.toStdString();
+    manifest["type"] = type;
+    manifest["main"] = mainFile;
     manifest["description"] = "Fake test module";
 
-    QString manifestPath = dir.filePath(moduleName + "/manifest.json");
-    std::ofstream mf(manifestPath.toStdString());
+    std::ofstream mf(modDir / "manifest.json");
     mf << manifest.dump();
     mf.close();
 
-    QString binaryPath = dir.filePath(moduleName + "/" + mainFile);
-    std::ofstream bf(binaryPath.toStdString());
+    std::ofstream bf(modDir / mainFile);
     bf << "fake";
     bf.close();
 }
 
-TEST_F(PluginManagerTest, DiscoverInstalledModules_DoesNotCrashWithEmptyDir) {
-    QTemporaryDir tmpDir;
-    ASSERT_TRUE(tmpDir.isValid());
+TEST_F(PluginManagerTest, DiscoverInstalledModules_DoesNotCrashWithEmptyDir)
+{
+    std::string tmpDir = make_temp_dir();
 
-    PluginManager::setPluginsDir(tmpDir.path().toUtf8().constData());
+    PluginManager::setPluginsDir(tmpDir.c_str());
     PluginManager::discoverInstalledModules();
 
-    EXPECT_TRUE(PluginManager::registry().knownPluginNames().isEmpty());
+    EXPECT_TRUE(PluginManager::registry().knownPluginNames().empty());
 }
 
-TEST_F(PluginManagerTest, DiscoverInstalledModules_DoesNotCrashWithNonexistentDir) {
+TEST_F(PluginManagerTest, DiscoverInstalledModules_DoesNotCrashWithNonexistentDir)
+{
     PluginManager::setPluginsDir("/tmp/nonexistent_dir_12345");
     PluginManager::discoverInstalledModules();
 
-    EXPECT_TRUE(PluginManager::registry().knownPluginNames().isEmpty());
+    EXPECT_TRUE(PluginManager::registry().knownPluginNames().empty());
 }
 
-TEST_F(PluginManagerTest, DiscoverInstalledModules_FindsFakeModulesWithoutCrash) {
-    QTemporaryDir tmpDir;
-    ASSERT_TRUE(tmpDir.isValid());
+TEST_F(PluginManagerTest, DiscoverInstalledModules_FindsFakeModulesWithoutCrash)
+{
+    std::string tmpDir = make_temp_dir();
 
-    createFakeModule(tmpDir.path(), "fake_module_a", "fake_module_a_plugin.so");
-    createFakeModule(tmpDir.path(), "fake_module_b", "fake_module_b_plugin.so");
+    createFakeModule(tmpDir, "fake_module_a", "fake_module_a_plugin.so");
+    createFakeModule(tmpDir, "fake_module_b", "fake_module_b_plugin.so");
 
-    PluginManager::setPluginsDir(tmpDir.path().toUtf8().constData());
+    PluginManager::setPluginsDir(tmpDir.c_str());
     PluginManager::discoverInstalledModules();
 
-    EXPECT_TRUE(PluginManager::registry().knownPluginNames().isEmpty());
+    EXPECT_TRUE(PluginManager::registry().knownPluginNames().empty());
 }
 
-TEST_F(PluginManagerTest, DiscoverInstalledModules_IgnoresModulesWithoutManifest) {
-    QTemporaryDir tmpDir;
-    ASSERT_TRUE(tmpDir.isValid());
+TEST_F(PluginManagerTest, DiscoverInstalledModules_IgnoresModulesWithoutManifest)
+{
+    std::string tmpDir = make_temp_dir();
 
-    QDir dir(tmpDir.path());
-    dir.mkpath("no_manifest_module");
-    QString binaryPath = dir.filePath("no_manifest_module/plugin.so");
-    std::ofstream bf(binaryPath.toStdString());
+    const auto modDir = std::filesystem::path(tmpDir) / "no_manifest_module";
+    std::filesystem::create_directories(modDir);
+    std::ofstream bf(modDir / "plugin.so");
     bf << "fake";
     bf.close();
 
-    PluginManager::setPluginsDir(tmpDir.path().toUtf8().constData());
+    PluginManager::setPluginsDir(tmpDir.c_str());
     PluginManager::discoverInstalledModules();
 
-    EXPECT_TRUE(PluginManager::registry().knownPluginNames().isEmpty());
+    EXPECT_TRUE(PluginManager::registry().knownPluginNames().empty());
 }
 
-TEST_F(PluginManagerTest, DiscoverInstalledModules_IgnoresUiTypeModules) {
-    QTemporaryDir tmpDir;
-    ASSERT_TRUE(tmpDir.isValid());
+TEST_F(PluginManagerTest, DiscoverInstalledModules_IgnoresUiTypeModules)
+{
+    std::string tmpDir = make_temp_dir();
 
-    createFakeModule(tmpDir.path(), "ui_module", "ui_module_plugin.so", "ui");
+    createFakeModule(tmpDir, "ui_module", "ui_module_plugin.so", "ui");
 
-    PluginManager::setPluginsDir(tmpDir.path().toUtf8().constData());
+    PluginManager::setPluginsDir(tmpDir.c_str());
     PluginManager::discoverInstalledModules();
 
-    EXPECT_TRUE(PluginManager::registry().knownPluginNames().isEmpty());
+    EXPECT_TRUE(PluginManager::registry().knownPluginNames().empty());
 }
 
-TEST_F(PluginManagerTest, DiscoverInstalledModules_MultipleDirectories) {
-    QTemporaryDir tmpDir1;
-    QTemporaryDir tmpDir2;
-    ASSERT_TRUE(tmpDir1.isValid());
-    ASSERT_TRUE(tmpDir2.isValid());
+TEST_F(PluginManagerTest, DiscoverInstalledModules_MultipleDirectories)
+{
+    std::string tmpDir1 = make_temp_dir();
+    std::string tmpDir2 = make_temp_dir();
 
-    createFakeModule(tmpDir1.path(), "module_in_dir1", "module_in_dir1_plugin.so");
-    createFakeModule(tmpDir2.path(), "module_in_dir2", "module_in_dir2_plugin.so");
+    createFakeModule(tmpDir1, "module_in_dir1", "module_in_dir1_plugin.so");
+    createFakeModule(tmpDir2, "module_in_dir2", "module_in_dir2_plugin.so");
 
-    PluginManager::setPluginsDir(tmpDir1.path().toUtf8().constData());
-    PluginManager::addPluginsDir(tmpDir2.path().toUtf8().constData());
+    PluginManager::setPluginsDir(tmpDir1.c_str());
+    PluginManager::addPluginsDir(tmpDir2.c_str());
 
-    ASSERT_EQ(PluginManager::registry().pluginsDirs().size(), 2);
+    ASSERT_EQ(PluginManager::registry().pluginsDirs().size(), 2u);
 
     PluginManager::discoverInstalledModules();
 
-    EXPECT_TRUE(PluginManager::registry().knownPluginNames().isEmpty());
+    EXPECT_TRUE(PluginManager::registry().knownPluginNames().empty());
 }
 
-TEST_F(PluginManagerTest, DiscoverInstalledModules_InvalidManifestJson) {
-    QTemporaryDir tmpDir;
-    ASSERT_TRUE(tmpDir.isValid());
+TEST_F(PluginManagerTest, DiscoverInstalledModules_InvalidManifestJson)
+{
+    std::string tmpDir = make_temp_dir();
 
-    QDir dir(tmpDir.path());
-    dir.mkpath("bad_manifest_module");
-    QString manifestPath = dir.filePath("bad_manifest_module/manifest.json");
-    std::ofstream mf(manifestPath.toStdString());
+    const auto modDir = std::filesystem::path(tmpDir) / "bad_manifest_module";
+    std::filesystem::create_directories(modDir);
+    std::ofstream mf(modDir / "manifest.json");
     mf << "{ this is not valid json }}}";
     mf.close();
 
-    PluginManager::setPluginsDir(tmpDir.path().toUtf8().constData());
+    PluginManager::setPluginsDir(tmpDir.c_str());
     PluginManager::discoverInstalledModules();
 
-    EXPECT_TRUE(PluginManager::registry().knownPluginNames().isEmpty());
+    EXPECT_TRUE(PluginManager::registry().knownPluginNames().empty());
 }

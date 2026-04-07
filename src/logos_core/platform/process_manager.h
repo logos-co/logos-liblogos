@@ -1,13 +1,13 @@
-#ifndef QT_PROCESS_MANAGER_H
-#define QT_PROCESS_MANAGER_H
+#ifndef PROCESS_MANAGER_H
+#define PROCESS_MANAGER_H
 
-#include <string>
-#include <vector>
-#include <unordered_map>
-#include <functional>
 #include <cstdint>
+#include <functional>
+#include <string>
+#include <unordered_map>
+#include <vector>
 
-namespace QtProcessManager {
+namespace ProcessManager {
 
     struct ProcessCallbacks {
         std::function<void(const std::string& name, int exitCode, bool crashed)> onFinished;
@@ -27,4 +27,4 @@ namespace QtProcessManager {
     void registerProcess(const std::string& name);
 }
 
-#endif // QT_PROCESS_MANAGER_H
+#endif

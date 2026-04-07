@@ -1,11 +1,12 @@
-#ifndef QT_APP_CONTEXT_H
-#define QT_APP_CONTEXT_H
+#ifndef APP_CONTEXT_H
+#define APP_CONTEXT_H
 
-namespace QtAppContext {
+namespace AppContext {
     void init(int argc, char* argv[]);
     int exec();
     void cleanup();
     void processEvents();
+    void requestStop();
 }
 
-#endif // QT_APP_CONTEXT_H
+#endif

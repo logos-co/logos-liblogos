@@ -29,8 +29,8 @@ pkgs.stdenv.mkDerivation {
       -GNinja \
       -DLOGOS_CPP_SDK_ROOT=${common.env.LOGOS_CPP_SDK_ROOT} \
       -DLOGOS_MODULE_ROOT=${common.env.LOGOS_MODULE_ROOT} \
-      -DPROCESS_STATS_ROOT=${common.env.PROCESS_STATS_ROOT} \
       -DLOGOS_PACKAGE_MANAGER_ROOT=${common.env.LOGOS_PACKAGE_MANAGER_ROOT} \
+      -DPROCESS_STATS_ROOT=${common.env.PROCESS_STATS_ROOT} \
       -DCMAKE_BUILD_TYPE=Release \
       -DCMAKE_INSTALL_PREFIX=$out
     

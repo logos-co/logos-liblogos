@@ -1,8 +1,9 @@
 #include "plugin_initializer.h"
-#include "qt/qt_token_receiver.h"
+#include "logos_logging.h"
+#include "token_receiver.h"
 #include <QObject>
-#include <QDebug>
-#include <QFileInfo>
+#include <QString>
+#include <filesystem>
 #include "interface.h"
 #include "logos_api.h"
 #include "logos_api_provider.h"
@@ -11,43 +12,46 @@
 
 using namespace ModuleLib;
 
-LogosModule loadPlugin(const QString& pluginPath, const QString& expectedName)
+LogosModule loadPlugin(const std::string& pluginPath, const std::string& expectedName)
 {
-    // Load the plugin using module_lib for abstraction
     QString errorString;
-    LogosModule module = LogosModule::loadFromPath(pluginPath, &errorString);
+    // logos-module / SDK boundary: paths are QString
+    LogosModule module = LogosModule::loadFromPath(QString::fromStdString(pluginPath), &errorString);
 
     if (!module.isValid()) {
-        qCritical() << "Failed to load plugin:" << errorString;
+        logos_log_critical("Failed to load plugin: {}", errorString.toStdString());
         return LogosModule();
     }
 
-    PluginInterface *basePlugin = module.as<PluginInterface>();
+    PluginInterface* basePlugin = module.as<PluginInterface>();
     if (!basePlugin) {
-        qCritical() << "Plugin does not implement the PluginInterface";
+        logos_log_critical("Plugin does not implement the PluginInterface");
         return LogosModule();
     }
 
-    if (expectedName != basePlugin->name()) {
-        qWarning() << "Plugin name mismatch: expected" << expectedName << "got" << basePlugin->name();
+    if (expectedName != basePlugin->name().toStdString()) {
+        logos_log_warn("Plugin name mismatch: expected {} got {}", expectedName, basePlugin->name().toStdString());
     }
 
     return module;
 }
 
-LogosAPI* initializeLogosAPI(const QString& pluginName, QObject* plugin, 
-                              PluginInterface* basePlugin, const QString& authToken,
-                              const QString& pluginPath)
+LogosAPI* initializeLogosAPI(const std::string& pluginName, QObject* plugin,
+                             PluginInterface* basePlugin, const std::string& authToken,
+                             const std::string& pluginPath)
 {
-    LogosAPI* logos_api = new LogosAPI(pluginName, plugin);
-    logos_api->setProperty("modulePath", QFileInfo(pluginPath).absolutePath());
+    // logos-cpp-sdk boundary: LogosAPI and QObject use Qt types
+    LogosAPI* logos_api = new LogosAPI(QString::fromStdString(pluginName), plugin);
+    const std::filesystem::path absParent =
+        std::filesystem::absolute(std::filesystem::path(pluginPath)).parent_path();
+    logos_api->setProperty("modulePath", QString::fromStdString(absParent.string()));
 
     bool success = logos_api->getProvider()->registerObject(basePlugin->name(), plugin);
     if (success) {
-        logos_api->getTokenManager()->saveToken("core", authToken);
-        logos_api->getTokenManager()->saveToken("capability_module", authToken);
+        logos_api->getTokenManager()->saveToken("core", QString::fromStdString(authToken));
+        logos_api->getTokenManager()->saveToken("capability_module", QString::fromStdString(authToken));
     } else {
-        qCritical() << "Failed to register plugin for remote access:" << basePlugin->name();
+        logos_log_critical("Failed to register plugin for remote access: {}", basePlugin->name().toStdString());
         delete plugin;
         delete logos_api;
         return nullptr;
@@ -56,27 +60,21 @@ LogosAPI* initializeLogosAPI(const QString& pluginName, QObject* plugin,
     return logos_api;
 }
 
-LogosAPI* setupPlugin(const QString& pluginName, const QString& pluginPath)
+LogosAPI* setupPlugin(const std::string& pluginName, const std::string& pluginPath)
 {
-    // 1. Receive auth token securely
-    QString authToken = QtTokenReceiver::receiveAuthToken(pluginName);
-    if (authToken.isEmpty()) {
+    std::string authToken = TokenReceiver::receiveAuthToken(pluginName);
+    if (authToken.empty())
         return nullptr;
-    }
 
-    // 2. Load and validate plugin
     LogosModule module = loadPlugin(pluginPath, pluginName);
-    if (!module.isValid()) {
+    if (!module.isValid())
         return nullptr;
-    }
 
-    // 3. Initialize LogosAPI and register plugin
     PluginInterface* basePlugin = module.as<PluginInterface>();
-    LogosAPI* logos_api = initializeLogosAPI(pluginName, module.instance(), 
-                                              basePlugin, authToken, pluginPath);
-    
-    // Release module ownership so the plugin stays loaded
+    LogosAPI* logos_api =
+        initializeLogosAPI(pluginName, module.instance(), basePlugin, authToken, pluginPath);
+
     module.release();
-    
+
     return logos_api;
 }

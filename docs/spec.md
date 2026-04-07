@@ -73,7 +73,7 @@ Each module runs in its own process for isolation:
 
 Since the remote object registry has no built-in security mechanisms, all RPC calls require an authentication token. This is transparent to module developers when using the SDK:
 
-1. **Core → Module**: When a module is loaded, the core generates a UUID token and sends it to the module process via local socket. The module uses this token to authenticate calls from the core.
+1. **Core → Module**: When a module is loaded, the core generates a UUID token and sends it to the module process via a Unix domain socket (path under the system temp directory: `logos_token_<moduleName>`). The module uses this token to authenticate calls from the core.
 2. **Module → Module**: When modules need to communicate, they request authorization from the Capability Module, which issues a token and notifies both parties. The modules then use this token for subsequent requests.
 3. **Token Storage**: Each module stores tokens in a thread-safe `TokenManager` (part of the SDK). `ModuleProxy` validates tokens before dispatching method calls.
 
@@ -159,13 +159,13 @@ The platform supports two build variants:
 
 | Function | Purpose |
 |----------|---------|
-| `logos_core_init(argc, argv)` | Initialize global state, optionally set plugin directory. Creates a QCoreApplication if one does not exist. |
+| `logos_core_init(argc, argv)` | Initialize global state, optionally set plugin directory. Prepares the core event loop (no GUI toolkit). |
 | `logos_core_set_plugins_dir(path)` | Set the plugin directory. Must be called before starting. |
 | `logos_core_add_plugins_dir(path)` | Add an additional plugin directory to scan. |
 | `logos_core_start()` | Scan plugin directories, process metadata, create Core Manager, load built-in modules, start remote object registry. |
-| `logos_core_exec()` | Run the Qt event loop. Returns when the application exits. |
+| `logos_core_exec()` | Block until `logos_core_cleanup()` is called (core event loop). Returns 0 on normal shutdown, -1 if the core was not initialized. |
 | `logos_core_cleanup()` | Unload all modules, stop processes, clean up global state. |
-| `logos_core_process_events()` | Process Qt events without blocking, for integration with external event loops. |
+| `logos_core_process_events()` | Pump the core event loop without blocking, for integration with external event loops. |
 
 ### Plugin Management
 
@@ -226,4 +226,4 @@ The SDK abstracts away registry lookup, token management, and async invocation.
 
 - **Signature support** — Signing and verifying module packages
 - **Cross-language modules** — Modules in languages other than C++
-- **Move away from Qt** - Logos API will move away from QT. this should be abstracted from liblogos perspective.
+- **Move away from Qt** — `logos_core` no longer uses Qt for process management, filesystem, or logging; Qt remains required for the SDK (`LogosAPI`, Remote Objects) and `logos_host` until the API layer is migrated.

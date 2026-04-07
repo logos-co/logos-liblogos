@@ -70,7 +70,7 @@ LOGOS_CORE_EXPORT char* logos_core_get_module_stats();
 LOGOS_CORE_EXPORT void logos_core_refresh_plugins();
 
 
-// Process Qt events without blocking (for integration with other event loops)
+// Pump the core event loop without blocking (for integration with other event loops)
 LOGOS_CORE_EXPORT void logos_core_process_events();
 
 #ifdef __cplusplus

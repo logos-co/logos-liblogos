@@ -1,27 +1,25 @@
-#include <QString>
 #include "command_line_parser.h"
+#include "host_app.h"
 #include "plugin_initializer.h"
-#include "qt/qt_app.h"
 #include "logos_api.h"
 
-int main(int argc, char *argv[])
+int main(int argc, char* argv[])
 {
     PluginArgs args = parseCommandLineArgs(argc, argv);
-    if (!args.valid) {
+    if (!args.valid)
         return 1;
-    }
 
-    QtApp::init(argc, argv);
+    HostApp::init(argc, argv);
 
-    LogosAPI* logos_api = setupPlugin(QString::fromStdString(args.name),
-                                      QString::fromStdString(args.path));
+    LogosAPI* logos_api = setupPlugin(args.name, args.path);
     if (!logos_api) {
+        HostApp::cleanup();
         return 1;
     }
 
-    int result = QtApp::exec();
+    int result = HostApp::exec();
     delete logos_api;
-    QtApp::cleanup();
+    HostApp::cleanup();
 
     return result;
 }

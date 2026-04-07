@@ -7,8 +7,8 @@
     logos-cpp-sdk.url = "github:logos-co/logos-cpp-sdk";
     logos-capability-module.url = "github:logos-co/logos-capability-module";
     logos-module.url = "github:logos-co/logos-module";
-    process-stats.url = "github:logos-co/process-stats";
     logos-package-manager.url = "github:logos-co/logos-package-manager";
+    process-stats.url = "github:logos-co/process-stats/replace_qt";
   };
 
   outputs = { self, nixpkgs, logos-nix, logos-cpp-sdk, logos-capability-module, logos-module, logos-package-manager, process-stats }:
@@ -21,27 +21,30 @@
         logosSdk = logos-cpp-sdk.packages.${system}.default;
         capabilityModule = logos-capability-module.packages.${system}.default;
         logosModule = logos-module.packages.${system}.default;
-        processStats = process-stats.packages.${system}.default;
         logosPackageManager = logos-package-manager.packages.${system}.lib;
         logosPackageManagerPortable = logos-package-manager.packages.${system}.lib-portable;
+        processStatsPkg = process-stats.packages.${system}.default;
       });
     in
     {
-      packages = forAllSystems ({ pkgs, system, logosSdk, capabilityModule, logosModule, processStats, logosPackageManager, logosPackageManagerPortable }:
+      packages = forAllSystems ({ pkgs, system, logosSdk, capabilityModule, logosModule, logosPackageManager, logosPackageManagerPortable, processStatsPkg }:
         let
-          # Common configuration (dev, default)
-          common = import ./nix/default.nix { inherit pkgs logosSdk logosModule processStats logosPackageManager; };
-          # Common configuration (portable)
-          commonPortable = import ./nix/default.nix { inherit pkgs logosSdk logosModule processStats; logosPackageManager = logosPackageManagerPortable; portableBuild = true; };
+          common = import ./nix/default.nix {
+            inherit pkgs logosSdk logosModule logosPackageManager;
+            processStats = processStatsPkg;
+            portableBuild = false;
+          };
+          commonPortable = import ./nix/default.nix {
+            inherit pkgs logosSdk logosModule;
+            logosPackageManager = logosPackageManagerPortable;
+            processStats = processStatsPkg;
+            portableBuild = true;
+          };
           src = ./.;
 
-          # Shared build that compiles everything (dev)
           build = import ./nix/build.nix { inherit pkgs common src; };
-
-          # Shared build (portable)
           buildPortable = import ./nix/build.nix { inherit pkgs src; common = commonPortable; };
 
-          # Individual package components (reference the shared build)
           lib = import ./nix/lib.nix { inherit pkgs common build; };
           modules = import ./nix/modules.nix { inherit pkgs common capabilityModule; };
           modulesPortable = import ./nix/modules.nix { inherit pkgs capabilityModule; common = commonPortable; portableBuild = true; };
@@ -49,38 +52,29 @@
           include = import ./nix/include.nix { inherit pkgs common src logosSdk; };
           tests = import ./nix/tests.nix { inherit pkgs common build; };
 
-          # Portable package components
           libPortable = import ./nix/lib.nix { inherit pkgs; common = commonPortable; build = buildPortable; };
           binPortable = import ./nix/bin.nix { inherit pkgs; common = commonPortable; build = buildPortable; lib = libPortable; modules = modulesPortable; };
           includePortable = import ./nix/include.nix { inherit pkgs src logosSdk; common = commonPortable; };
 
-          # Combined package (dev)
           liblogos = pkgs.symlinkJoin {
             name = "logos-liblogos";
             paths = [ bin lib include ];
           };
 
-          # Combined package (portable)
           liblogosPortable = pkgs.symlinkJoin {
             name = "logos-liblogos-portable";
             paths = [ binPortable libPortable includePortable ];
           };
         in
         {
-          # Individual outputs
           logos-liblogos-bin = bin;
           logos-liblogos-lib = lib;
           logos-liblogos-include = include;
           logos-liblogos-tests = tests;
           logos-liblogos-modules = modules;
 
-          # Combined output
           logos-liblogos = liblogos;
-
-          # Portable output (compiled with LOGOS_PORTABLE_BUILD)
           portable = liblogosPortable;
-
-          # Default package (dev)
           default = liblogos;
         }
       );
@@ -103,7 +97,7 @@
         }
       );
 
-      devShells = forAllSystems ({ pkgs, ... }: {
+      devShells = forAllSystems ({ pkgs, system, ... }: {
         default = pkgs.mkShell {
           nativeBuildInputs = [
             pkgs.cmake
@@ -111,9 +105,12 @@
             pkgs.pkg-config
           ];
           buildInputs = [
+            pkgs.boost
+            pkgs.spdlog
             pkgs.qt6.qtbase
             pkgs.qt6.qtremoteobjects
             pkgs.zstd
+            process-stats.packages.${system}.default
           ];
         };
       });

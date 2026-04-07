@@ -1,38 +1,40 @@
 #include <gtest/gtest.h>
-#include <process_stats/process_stats.h>
-#include <QCoreApplication>
-#include <QProcess>
+#include "process_stats.h"
 #include <nlohmann/json.hpp>
+#include <chrono>
+#include <csignal>
 #include <cstring>
+#include <thread>
+#include <unordered_map>
+#include <vector>
 #include <unistd.h>
+#include <sys/wait.h>
 
 class ProcessStatsTest : public ::testing::Test {
 protected:
-    QList<QProcess*> m_processes;
+    std::vector<pid_t> m_childPids;
 
-    void SetUp() override {
+    void SetUp() override
+    {
         ProcessStats::clearHistory();
     }
 
-    void TearDown() override {
+    void TearDown() override
+    {
         ProcessStats::clearHistory();
-        for (QProcess* process : m_processes) {
-            if (process) {
-                process->terminate();
-                process->waitForFinished(1000);
-                delete process;
+        for (pid_t pid : m_childPids) {
+            if (pid > 0) {
+                kill(pid, SIGTERM);
+                int st = 0;
+                waitpid(pid, &st, 0);
             }
         }
-        m_processes.clear();
+        m_childPids.clear();
     }
 };
 
-// =============================================================================
-// getProcessStats Tests
-// =============================================================================
-
-// Verifies that getProcessStats() returns zeroed stats for negative PID
-TEST_F(ProcessStatsTest, GetProcessStats_ReturnsZeroedStatsForNegativePid) {
+TEST_F(ProcessStatsTest, GetProcessStats_ReturnsZeroedStatsForNegativePid)
+{
     ProcessStats::ProcessStatsData stats = ProcessStats::getProcessStats(-1);
 
     EXPECT_EQ(stats.cpuPercent, 0.0);
@@ -40,8 +42,8 @@ TEST_F(ProcessStatsTest, GetProcessStats_ReturnsZeroedStatsForNegativePid) {
     EXPECT_EQ(stats.memoryMB, 0.0);
 }
 
-// Verifies that getProcessStats() returns zeroed stats for zero PID
-TEST_F(ProcessStatsTest, GetProcessStats_ReturnsZeroedStatsForZeroPid) {
+TEST_F(ProcessStatsTest, GetProcessStats_ReturnsZeroedStatsForZeroPid)
+{
     ProcessStats::ProcessStatsData stats = ProcessStats::getProcessStats(0);
 
     EXPECT_EQ(stats.cpuPercent, 0.0);
@@ -49,9 +51,9 @@ TEST_F(ProcessStatsTest, GetProcessStats_ReturnsZeroedStatsForZeroPid) {
     EXPECT_EQ(stats.memoryMB, 0.0);
 }
 
-// Verifies that getProcessStats() returns valid stats for the current process
-TEST_F(ProcessStatsTest, GetProcessStats_ReturnsValidStatsForCurrentProcess) {
-    qint64 currentPid = getpid();
+TEST_F(ProcessStatsTest, GetProcessStats_ReturnsValidStatsForCurrentProcess)
+{
+    int64_t currentPid = static_cast<int64_t>(getpid());
 
     ProcessStats::ProcessStatsData stats = ProcessStats::getProcessStats(currentPid);
 
@@ -59,36 +61,36 @@ TEST_F(ProcessStatsTest, GetProcessStats_ReturnsValidStatsForCurrentProcess) {
     EXPECT_GE(stats.cpuTimeSeconds, 0.0);
 }
 
-// Verifies that memory usage is non-negative for a valid process
-TEST_F(ProcessStatsTest, GetProcessStats_MemoryIsNonNegative) {
-    qint64 currentPid = getpid();
+TEST_F(ProcessStatsTest, GetProcessStats_MemoryIsNonNegative)
+{
+    int64_t currentPid = static_cast<int64_t>(getpid());
 
     ProcessStats::ProcessStatsData stats = ProcessStats::getProcessStats(currentPid);
 
     EXPECT_GE(stats.memoryMB, 0.0);
 }
 
-// Verifies that CPU time is non-negative for a valid process
-TEST_F(ProcessStatsTest, GetProcessStats_CpuTimeIsNonNegative) {
-    qint64 currentPid = getpid();
+TEST_F(ProcessStatsTest, GetProcessStats_CpuTimeIsNonNegative)
+{
+    int64_t currentPid = static_cast<int64_t>(getpid());
 
     ProcessStats::ProcessStatsData stats = ProcessStats::getProcessStats(currentPid);
 
     EXPECT_GE(stats.cpuTimeSeconds, 0.0);
 }
 
-// Verifies that CPU percent is zero on first call (no previous data)
-TEST_F(ProcessStatsTest, GetProcessStats_CpuPercentIsZeroOnFirstCall) {
-    qint64 currentPid = getpid();
+TEST_F(ProcessStatsTest, GetProcessStats_CpuPercentIsZeroOnFirstCall)
+{
+    int64_t currentPid = static_cast<int64_t>(getpid());
 
     ProcessStats::ProcessStatsData stats = ProcessStats::getProcessStats(currentPid);
 
     EXPECT_EQ(stats.cpuPercent, 0.0);
 }
 
-// Verifies that CPU percent is calculated after the initial call
-TEST_F(ProcessStatsTest, GetProcessStats_CpuPercentUpdatesOnSecondCall) {
-    qint64 currentPid = getpid();
+TEST_F(ProcessStatsTest, GetProcessStats_CpuPercentUpdatesOnSecondCall)
+{
+    int64_t currentPid = static_cast<int64_t>(getpid());
 
     ProcessStats::getProcessStats(currentPid);
 
@@ -97,20 +99,16 @@ TEST_F(ProcessStatsTest, GetProcessStats_CpuPercentUpdatesOnSecondCall) {
         sum += i * 0.1;
     }
 
-    usleep(10000); // 10ms
+    usleep(10000);
 
     ProcessStats::ProcessStatsData stats = ProcessStats::getProcessStats(currentPid);
 
     EXPECT_GE(stats.cpuPercent, 0.0);
 }
 
-// =============================================================================
-// getModuleStats Tests
-// =============================================================================
-
-// Verifies that getModuleStats() returns an empty JSON array when no plugins are loaded
-TEST_F(ProcessStatsTest, GetModuleStats_ReturnsEmptyArrayWhenNoPlugins) {
-    QHash<QString, qint64> processes;
+TEST_F(ProcessStatsTest, GetModuleStats_ReturnsEmptyArrayWhenNoPlugins)
+{
+    std::unordered_map<std::string, int64_t> processes;
     char* result = ProcessStats::getModuleStats(processes);
 
     ASSERT_NE(result, nullptr);
@@ -118,14 +116,14 @@ TEST_F(ProcessStatsTest, GetModuleStats_ReturnsEmptyArrayWhenNoPlugins) {
     nlohmann::json doc = nlohmann::json::parse(result);
 
     EXPECT_TRUE(doc.is_array());
-    EXPECT_EQ(doc.size(), 0);
+    EXPECT_EQ(doc.size(), 0u);
 
     delete[] result;
 }
 
-// Verifies that getModuleStats() returns a non-null pointer
-TEST_F(ProcessStatsTest, GetModuleStats_ReturnsNonNullPointer) {
-    QHash<QString, qint64> processes;
+TEST_F(ProcessStatsTest, GetModuleStats_ReturnsNonNullPointer)
+{
+    std::unordered_map<std::string, int64_t> processes;
     char* result = ProcessStats::getModuleStats(processes);
 
     ASSERT_NE(result, nullptr);
@@ -133,18 +131,20 @@ TEST_F(ProcessStatsTest, GetModuleStats_ReturnsNonNullPointer) {
     delete[] result;
 }
 
-// Verifies that getModuleStats() returns valid JSON structure with correct fields
-TEST_F(ProcessStatsTest, GetModuleStats_ReturnsValidJsonStructure) {
-    QProcess* dummyProcess = new QProcess();
-    m_processes.append(dummyProcess);
-    dummyProcess->start("sleep", QStringList() << "1");
-    dummyProcess->waitForStarted();
+TEST_F(ProcessStatsTest, GetModuleStats_ReturnsValidJsonStructure)
+{
+    pid_t pid = fork();
+    ASSERT_GE(pid, 0);
+    if (pid == 0) {
+        execlp("sleep", "sleep", "2", nullptr);
+        _exit(127);
+    }
+    m_childPids.push_back(pid);
 
-    qint64 pid = dummyProcess->processId();
-    ASSERT_GT(pid, 0);
+    std::this_thread::sleep_for(std::chrono::milliseconds(50));
 
-    QHash<QString, qint64> processes;
-    processes.insert("test_plugin", pid);
+    std::unordered_map<std::string, int64_t> processes;
+    processes["test_plugin"] = static_cast<int64_t>(pid);
 
     char* result = ProcessStats::getModuleStats(processes);
 
@@ -153,7 +153,7 @@ TEST_F(ProcessStatsTest, GetModuleStats_ReturnsValidJsonStructure) {
     nlohmann::json doc = nlohmann::json::parse(result);
 
     EXPECT_TRUE(doc.is_array());
-    ASSERT_EQ(doc.size(), 1);
+    ASSERT_EQ(doc.size(), 1u);
 
     auto moduleObj = doc[0];
     EXPECT_TRUE(moduleObj.contains("name"));
