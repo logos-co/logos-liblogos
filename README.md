@@ -150,6 +150,12 @@ The library supports two build modes controlled by the `LOGOS_PORTABLE_BUILD` CM
 Build the portable variant with `nix build '.#portable'`.
 
 ## Supported Platforms
-
 - macOS (aarch64-darwin, x86_64-darwin)
 - Linux (aarch64-linux, x86_64-linux)
+
+## Disclaimer
+This repository is part of an experimental development environment. Components are under active development and may be incomplete, unstable, modified or discontinued at any time.
+
+The software is provided for development and testing purposes only and is not intended for production use. 
+
+The code and related materials are made available on an open-source, “as-is” basis without warranties or guarantees of any kind, express or implied, including warranties of correctness, security, performance or fitness for a particular purpose. Use at your own risk.
