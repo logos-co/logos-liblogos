@@ -659,16 +659,15 @@
         ]
       },
       "locked": {
-        "lastModified": 1775584786,
+        "lastModified": 1775744159,
         "narHash": "sha256-hTVAnDREBQOVHML6KU3K7Ge0CRBqnFIg7uYL7qDnD8o=",
         "owner": "logos-co",
         "repo": "process-stats",
-        "rev": "36fa020c2ef75d888f5e724701566233aeded2d2",
+        "rev": "33ace1270f90c89b3565e803139c0970fcd1ce8f",
         "type": "github"
       },
       "original": {
         "owner": "logos-co",
-        "ref": "replace_qt",
         "repo": "process-stats",
         "type": "github"
       }
