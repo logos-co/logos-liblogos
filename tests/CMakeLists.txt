@@ -11,6 +11,14 @@ add_executable(logos_core_tests
     test_app_lifecycle.cpp
     test_plugin_manager.cpp
     test_process_stats.cpp
+    test_dependency_resolver.cpp
+    test_process_manager.cpp
+    test_token_exchange.cpp
+    # qt_token_receiver lives in logos_host (not in the logos_core shared
+    # library), but the token-exchange unit tests exercise it directly. The
+    # file is tiny (~40 lines) and has no cross-compilation-unit state, so
+    # compiling it into the test binary is safe.
+    ${CMAKE_SOURCE_DIR}/src/logos_host/qt/qt_token_receiver.cpp
 )
 
 target_link_libraries(logos_core_tests PRIVATE
@@ -18,12 +26,14 @@ target_link_libraries(logos_core_tests PRIVATE
     process_stats
     GTest::gtest
     Qt${QT_VERSION_MAJOR}::Core
+    Qt${QT_VERSION_MAJOR}::Network
     Qt${QT_VERSION_MAJOR}::RemoteObjects
 )
 
 target_include_directories(logos_core_tests PRIVATE
     ${CMAKE_SOURCE_DIR}/src
     ${CMAKE_SOURCE_DIR}/src/logos_core
+    ${CMAKE_SOURCE_DIR}/src/logos_host
 )
 
 # Propagate portable build flag to tests so manifest variant keys match

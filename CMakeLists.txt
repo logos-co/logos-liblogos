@@ -5,8 +5,12 @@ set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 
 # Find Qt packages
-find_package(QT NAMES Qt6 Qt5 REQUIRED COMPONENTS Core RemoteObjects)
-find_package(Qt${QT_VERSION_MAJOR} REQUIRED COMPONENTS Core RemoteObjects)
+# Network is needed explicitly by the token-exchange tests (QLocalServer /
+# QLocalSocket); it is also pulled transitively by RemoteObjects in the
+# runtime build, but we declare it here so the test target can link it
+# explicitly without depending on that transitive resolution.
+find_package(QT NAMES Qt6 Qt5 REQUIRED COMPONENTS Core Network RemoteObjects)
+find_package(Qt${QT_VERSION_MAJOR} REQUIRED COMPONENTS Core Network RemoteObjects)
 
 # Find nlohmann_json
 find_package(nlohmann_json REQUIRED)
