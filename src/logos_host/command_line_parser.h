@@ -6,6 +6,7 @@
 struct PluginArgs {
     std::string name;
     std::string path;
+    std::string instancePersistencePath;
     bool valid;
 };
 

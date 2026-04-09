@@ -13,6 +13,8 @@ PluginArgs parseCommandLineArgs(int argc, char *argv[])
         ->required();
     app.add_option("-p,--path", result.path, "Path to the plugin file")
         ->required();
+    app.add_option("--instance-persistence-path", result.instancePersistencePath,
+        "Instance persistence directory for the plugin");
 
     try {
         app.parse(argc, argv);

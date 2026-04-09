@@ -113,6 +113,9 @@ void logos_core_cleanup();
 void logos_core_set_plugins_dir(const char* dir);
 void logos_core_add_plugins_dir(const char* dir);
 
+// Instance persistence
+void logos_core_set_persistence_base_path(const char* path);
+
 // Plugin management
 int  logos_core_load_plugin(const char* name);
 int  logos_core_load_plugin_with_dependencies(const char* name);

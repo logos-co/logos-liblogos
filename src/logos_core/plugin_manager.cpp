@@ -10,6 +10,7 @@
 #include "logos_api.h"
 #include "logos_api_client.h"
 #include "token_manager.h"
+#include "instance_persistence.h"
 
 namespace {
     PluginRegistry& registryInstance() {
@@ -20,6 +21,11 @@ namespace {
     std::mutex& loadMutex() {
         static std::mutex mutex;
         return mutex;
+    }
+
+    QString& persistenceBasePath() {
+        static QString path;
+        return path;
     }
 
     char** toNullTerminatedArray(const QStringList& list) {
@@ -72,11 +78,19 @@ namespace {
 
         QString pluginPath = registryInstance().pluginPath(name);
 
+        // Resolve instance persistence path if a base path has been configured
+        QString instancePersistencePath;
+        if (!persistenceBasePath().isEmpty()) {
+            auto info = ModuleLib::InstancePersistence::resolveInstance(persistenceBasePath(), name);
+            instancePersistencePath = info.persistencePath;
+        }
+
         auto onTerminated = [](const QString& n) {
             registryInstance().markUnloaded(n);
         };
 
-        if (!PluginLauncher::launch(name, pluginPath, registryInstance().pluginsDirs(), onTerminated))
+        if (!PluginLauncher::launch(name, pluginPath, registryInstance().pluginsDirs(),
+                                    instancePersistencePath, onTerminated))
             return false;
 
         QString authToken = QUuid::createUuid().toString(QUuid::WithoutBraces);
@@ -110,6 +124,11 @@ namespace PluginManager {
     void addPluginsDir(const char* plugins_dir) {
         assert(plugins_dir != nullptr);
         registryInstance().addPluginsDir(QString(plugins_dir));
+    }
+
+    void setPersistenceBasePath(const char* path) {
+        assert(path != nullptr);
+        persistenceBasePath() = QString::fromUtf8(path);
     }
 
     void discoverInstalledModules() {

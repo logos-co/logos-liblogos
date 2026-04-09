@@ -65,6 +65,11 @@ LOGOS_CORE_EXPORT char* logos_core_get_token(const char* key);
 // The returned string must be freed by the caller
 LOGOS_CORE_EXPORT char* logos_core_get_module_stats();
 
+// Set the base directory for module instance persistence.
+// Each module gets a subdirectory: {path}/{module_name}/{instance_id}/
+// Must be called before logos_core_start().
+LOGOS_CORE_EXPORT void logos_core_set_persistence_base_path(const char* path);
+
 // Re-scan all plugin directories and update known plugins.
 // Call after installing new modules so they become discoverable.
 LOGOS_CORE_EXPORT void logos_core_refresh_plugins();
