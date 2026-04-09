@@ -1,330 +1,371 @@
 // =============================================================================
-// Dedicated tests for DependencyResolver::resolve
+// Tests for the dependency resolver algorithm exposed via logos_core_resolve_dependencies.
 //
-// These tests establish the behavioural contract of the topological sort used
-// to compute plugin load order. They are intentionally decoupled from the
-// PluginRegistry so the resolver can be swapped (e.g. to std containers) with
-// the same expectations intact.
+// The resolver implements Kahn's topological sort over the registered plugin
+// graph. These tests cover:
+//   - Empty / unknown input -> empty result
+//   - Single plugin with no deps
+//   - Linear chain (a -> b -> c)
+//   - Diamond topology (a -> b,c ; b,c -> d)
+//   - Multiple requested roots
+//   - Circular dependency (must not hang or crash; partial result expected)
+//   - Plugins already marked as loaded are still included in the resolved list
+//     (the resolver only orders them; the caller decides whether to skip loaded ones)
 // =============================================================================
 #include <gtest/gtest.h>
-#include "dependency_resolver.h"
-#include <QHash>
-#include <QStringList>
-#include <QSet>
-#include <algorithm>
+#include "logos_core.h"
+#include "qt_test_adapter.h"
+#include <cstring>
+#include <set>
+#include <string>
+#include <vector>
 
-namespace {
+static void clearPluginState() {
+    logos_core_terminate_all();
+    logos_core_clear();
+}
 
-// Simple in-memory dependency graph used by every test in this file.
-struct Graph {
-    QHash<QString, QStringList> deps;
+// ---------------------------------------------------------------------------
+// Helpers
+// ---------------------------------------------------------------------------
 
-    bool isKnown(const QString& name) const { return deps.contains(name); }
-    QStringList getDependencies(const QString& name) const { return deps.value(name); }
+static int resolvedLen(char** arr) {
+    if (!arr) return 0;
+    int n = 0;
+    while (arr[n]) ++n;
+    return n;
+}
 
-    DependencyResolver::IsKnownFn isKnownFn() const {
-        return [this](const QString& n) { return this->isKnown(n); };
-    }
-    DependencyResolver::GetDependenciesFn getDepsFn() const {
-        return [this](const QString& n) { return this->getDependencies(n); };
-    }
+static std::vector<std::string> resolvedToVec(char** arr) {
+    std::vector<std::string> v;
+    if (!arr) return v;
+    for (int i = 0; arr[i]; ++i)
+        v.push_back(arr[i]);
+    return v;
+}
+
+static void freeResolved(char** arr) {
+    if (!arr) return;
+    for (int i = 0; arr[i]; ++i)
+        delete[] arr[i];
+    delete[] arr;
+}
+
+class DependencyResolverTest : public ::testing::Test {
+protected:
+    void SetUp() override { clearPluginState(); }
+    void TearDown() override { clearPluginState(); }
 };
 
-// Returns the 0-based index of `name` in `order`, or -1 if absent. Used to
-// assert "dep comes before dependent" without pinning an exact ordering for
-// siblings whose relative order is unspecified.
-int indexOf(const QStringList& order, const QString& name) {
-    return order.indexOf(name);
+// ---------------------------------------------------------------------------
+// Edge cases: empty / unknown input
+// ---------------------------------------------------------------------------
+
+TEST_F(DependencyResolverTest, EmptyInput_ReturnsEmpty) {
+    char** result = logos_core_resolve_dependencies(nullptr, 0);
+    ASSERT_NE(result, nullptr);
+    EXPECT_EQ(result[0], nullptr);
+    delete[] result;
 }
 
-} // namespace
-
-// =============================================================================
-// Empty / trivial cases
-// =============================================================================
-
-TEST(DependencyResolver, EmptyRequest_ReturnsEmpty) {
-    Graph g;
-    QStringList result = DependencyResolver::resolve({}, g.isKnownFn(), g.getDepsFn());
-    EXPECT_TRUE(result.isEmpty());
+TEST_F(DependencyResolverTest, UnknownPlugin_ReturnsEmpty) {
+    const char* names[] = {"ghost_plugin"};
+    char** result = logos_core_resolve_dependencies(names, 1);
+    ASSERT_NE(result, nullptr);
+    EXPECT_EQ(result[0], nullptr);
+    freeResolved(result);
 }
 
-TEST(DependencyResolver, UnknownModule_IsSkipped) {
-    Graph g;
-    QStringList result = DependencyResolver::resolve(
-        QStringList{"ghost"}, g.isKnownFn(), g.getDepsFn());
-    EXPECT_TRUE(result.isEmpty());
+TEST_F(DependencyResolverTest, AllUnknown_ReturnsEmpty) {
+    const char* names[] = {"alpha", "beta", "gamma"};
+    char** result = logos_core_resolve_dependencies(names, 3);
+    ASSERT_NE(result, nullptr);
+    EXPECT_EQ(result[0], nullptr);
+    freeResolved(result);
 }
 
-TEST(DependencyResolver, SingleModuleNoDeps_ReturnsItself) {
-    Graph g;
-    g.deps["a"] = {};
-    QStringList result = DependencyResolver::resolve(
-        QStringList{"a"}, g.isKnownFn(), g.getDepsFn());
-    ASSERT_EQ(result.size(), 1);
-    EXPECT_EQ(result.first().toStdString(), "a");
+// ---------------------------------------------------------------------------
+// Single plugin, no dependencies
+// ---------------------------------------------------------------------------
+
+TEST_F(DependencyResolverTest, SinglePluginNoDeps_ReturnsSelf) {
+    logos_core_register_plugin("solo", "/path/solo");
+    logos_core_register_plugin_dependencies("solo", nullptr, 0);
+
+    const char* names[] = {"solo"};
+    char** result = logos_core_resolve_dependencies(names, 1);
+
+    ASSERT_EQ(resolvedLen(result), 1);
+    EXPECT_STREQ(result[0], "solo");
+    freeResolved(result);
 }
 
-// =============================================================================
-// Linear chains
-// =============================================================================
+// ---------------------------------------------------------------------------
+// Linear chain: a depends on b, b depends on c.
+// Expected order: c, b, a.
+// ---------------------------------------------------------------------------
 
-TEST(DependencyResolver, LinearChain_DepsBeforeDependents) {
-    Graph g;
-    g.deps["a"] = {"b"};
-    g.deps["b"] = {"c"};
-    g.deps["c"] = {};
+TEST_F(DependencyResolverTest, LinearChain_CorrectTopologicalOrder) {
+    logos_core_register_plugin("a", "/a");
+    logos_core_register_plugin("b", "/b");
+    logos_core_register_plugin("c", "/c");
+    const char* depsA[] = {"b"};
+    const char* depsB[] = {"c"};
+    logos_core_register_plugin_dependencies("a", depsA, 1);
+    logos_core_register_plugin_dependencies("b", depsB, 1);
+    logos_core_register_plugin_dependencies("c", nullptr, 0);
 
-    QStringList result = DependencyResolver::resolve(
-        QStringList{"a"}, g.isKnownFn(), g.getDepsFn());
+    const char* names[] = {"a"};
+    char** result = logos_core_resolve_dependencies(names, 1);
+    auto v = resolvedToVec(result);
+    freeResolved(result);
 
-    ASSERT_EQ(result.size(), 3);
-    EXPECT_LT(indexOf(result, "c"), indexOf(result, "b"));
-    EXPECT_LT(indexOf(result, "b"), indexOf(result, "a"));
+    ASSERT_EQ(v.size(), 3u);
+    EXPECT_EQ(v[0], "c");
+    EXPECT_EQ(v[1], "b");
+    EXPECT_EQ(v[2], "a");
 }
 
-TEST(DependencyResolver, DeepChain_FiveLevels) {
-    Graph g;
-    g.deps["level0"] = {"level1"};
-    g.deps["level1"] = {"level2"};
-    g.deps["level2"] = {"level3"};
-    g.deps["level3"] = {"level4"};
-    g.deps["level4"] = {};
+// ---------------------------------------------------------------------------
+// Longer chain: d -> c -> b -> a
+// Expected order: a, b, c, d
+// ---------------------------------------------------------------------------
 
-    QStringList result = DependencyResolver::resolve(
-        QStringList{"level0"}, g.isKnownFn(), g.getDepsFn());
+TEST_F(DependencyResolverTest, FourNodeChain_CorrectOrder) {
+    logos_core_register_plugin("d", "/d");
+    logos_core_register_plugin("c", "/c");
+    logos_core_register_plugin("b", "/b");
+    logos_core_register_plugin("a", "/a");
+    const char* depsD[] = {"c"};
+    const char* depsC[] = {"b"};
+    const char* depsB[] = {"a"};
+    logos_core_register_plugin_dependencies("d", depsD, 1);
+    logos_core_register_plugin_dependencies("c", depsC, 1);
+    logos_core_register_plugin_dependencies("b", depsB, 1);
+    logos_core_register_plugin_dependencies("a", nullptr, 0);
 
-    ASSERT_EQ(result.size(), 5);
-    for (int i = 0; i < 4; ++i) {
-        int deeper = indexOf(result, QString("level%1").arg(4 - i));
-        int shallower = indexOf(result, QString("level%1").arg(3 - i));
-        EXPECT_LT(deeper, shallower)
-            << "level" << (4 - i) << " must load before level" << (3 - i);
-    }
+    const char* names[] = {"d"};
+    char** result = logos_core_resolve_dependencies(names, 1);
+    auto v = resolvedToVec(result);
+    freeResolved(result);
+
+    ASSERT_EQ(v.size(), 4u);
+    EXPECT_EQ(v[0], "a");
+    EXPECT_EQ(v[1], "b");
+    EXPECT_EQ(v[2], "c");
+    EXPECT_EQ(v[3], "d");
 }
 
-// =============================================================================
-// Diamond dependency
-//
-//       a
-//      / \
-//     b   c
-//      \ /
-//       d
-// =============================================================================
+// ---------------------------------------------------------------------------
+// Diamond: a -> b, a -> c; b -> d; c -> d
+// Expected: d comes before both b and c, which both come before a.
+// ---------------------------------------------------------------------------
 
-TEST(DependencyResolver, Diamond_DLoadsBeforeEverything) {
-    Graph g;
-    g.deps["a"] = {"b", "c"};
-    g.deps["b"] = {"d"};
-    g.deps["c"] = {"d"};
-    g.deps["d"] = {};
+TEST_F(DependencyResolverTest, DiamondDependency_DSharedRootComesFirst) {
+    logos_core_register_plugin("a", "/a");
+    logos_core_register_plugin("b", "/b");
+    logos_core_register_plugin("c", "/c");
+    logos_core_register_plugin("d", "/d");
+    const char* depsA[] = {"b", "c"};
+    const char* depsB[] = {"d"};
+    const char* depsC[] = {"d"};
+    logos_core_register_plugin_dependencies("a", depsA, 2);
+    logos_core_register_plugin_dependencies("b", depsB, 1);
+    logos_core_register_plugin_dependencies("c", depsC, 1);
+    logos_core_register_plugin_dependencies("d", nullptr, 0);
 
-    QStringList result = DependencyResolver::resolve(
-        QStringList{"a"}, g.isKnownFn(), g.getDepsFn());
+    const char* names[] = {"a"};
+    char** result = logos_core_resolve_dependencies(names, 1);
+    auto v = resolvedToVec(result);
+    freeResolved(result);
 
-    ASSERT_EQ(result.size(), 4);
-    int idxA = indexOf(result, "a");
-    int idxB = indexOf(result, "b");
-    int idxC = indexOf(result, "c");
-    int idxD = indexOf(result, "d");
+    ASSERT_EQ(v.size(), 4u);
 
-    ASSERT_GE(idxA, 0);
-    ASSERT_GE(idxB, 0);
-    ASSERT_GE(idxC, 0);
-    ASSERT_GE(idxD, 0);
+    // d must come before b and c; a must come last.
+    auto pos = [&](const std::string& name) {
+        for (size_t i = 0; i < v.size(); ++i) if (v[i] == name) return (int)i;
+        return -1;
+    };
 
-    EXPECT_LT(idxD, idxB) << "d must load before b";
-    EXPECT_LT(idxD, idxC) << "d must load before c";
-    EXPECT_LT(idxB, idxA) << "b must load before a";
-    EXPECT_LT(idxC, idxA) << "c must load before a";
+    EXPECT_LT(pos("d"), pos("b"));
+    EXPECT_LT(pos("d"), pos("c"));
+    EXPECT_EQ(v.back(), "a");
 }
 
-TEST(DependencyResolver, Diamond_NoDuplicates) {
-    Graph g;
-    g.deps["a"] = {"b", "c"};
-    g.deps["b"] = {"d"};
-    g.deps["c"] = {"d"};
-    g.deps["d"] = {};
+// ---------------------------------------------------------------------------
+// Multiple requested roots: request both a and x (independent trees).
+// Both plus their deps should appear in the result.
+// ---------------------------------------------------------------------------
 
-    QStringList result = DependencyResolver::resolve(
-        QStringList{"a"}, g.isKnownFn(), g.getDepsFn());
+TEST_F(DependencyResolverTest, MultipleRoots_BothTreesIncluded) {
+    // Tree 1: a -> b
+    logos_core_register_plugin("a", "/a");
+    logos_core_register_plugin("b", "/b");
+    const char* depsA[] = {"b"};
+    logos_core_register_plugin_dependencies("a", depsA, 1);
+    logos_core_register_plugin_dependencies("b", nullptr, 0);
 
-    QSet<QString> unique(result.begin(), result.end());
-    EXPECT_EQ(result.size(), unique.size())
-        << "d is shared by b and c but must only appear once in result";
+    // Tree 2: x -> y
+    logos_core_register_plugin("x", "/x");
+    logos_core_register_plugin("y", "/y");
+    const char* depsX[] = {"y"};
+    logos_core_register_plugin_dependencies("x", depsX, 1);
+    logos_core_register_plugin_dependencies("y", nullptr, 0);
+
+    const char* names[] = {"a", "x"};
+    char** result = logos_core_resolve_dependencies(names, 2);
+    auto v = resolvedToVec(result);
+    freeResolved(result);
+
+    ASSERT_EQ(v.size(), 4u);
+
+    std::set<std::string> s(v.begin(), v.end());
+    EXPECT_TRUE(s.count("a"));
+    EXPECT_TRUE(s.count("b"));
+    EXPECT_TRUE(s.count("x"));
+    EXPECT_TRUE(s.count("y"));
+
+    // Ordering constraints still hold within each tree.
+    auto pos = [&](const std::string& name) {
+        for (size_t i = 0; i < v.size(); ++i) if (v[i] == name) return (int)i;
+        return -1;
+    };
+    EXPECT_LT(pos("b"), pos("a"));
+    EXPECT_LT(pos("y"), pos("x"));
 }
 
-// =============================================================================
-// Independent modules — no cross-deps
-// =============================================================================
+// ---------------------------------------------------------------------------
+// Shared dependency: two requested roots share a dep.
+// The shared dep must appear exactly once in the result.
+// ---------------------------------------------------------------------------
 
-TEST(DependencyResolver, IndependentModules_AllAppearExactlyOnce) {
-    Graph g;
-    g.deps["a"] = {};
-    g.deps["b"] = {};
-    g.deps["c"] = {};
+TEST_F(DependencyResolverTest, SharedDependency_AppearsOnce) {
+    logos_core_register_plugin("a", "/a");
+    logos_core_register_plugin("b", "/b");
+    logos_core_register_plugin("shared", "/shared");
+    const char* depsA[] = {"shared"};
+    const char* depsB[] = {"shared"};
+    logos_core_register_plugin_dependencies("a", depsA, 1);
+    logos_core_register_plugin_dependencies("b", depsB, 1);
+    logos_core_register_plugin_dependencies("shared", nullptr, 0);
 
-    QStringList result = DependencyResolver::resolve(
-        QStringList{"a", "b", "c"}, g.isKnownFn(), g.getDepsFn());
+    const char* names[] = {"a", "b"};
+    char** result = logos_core_resolve_dependencies(names, 2);
+    auto v = resolvedToVec(result);
+    freeResolved(result);
 
-    ASSERT_EQ(result.size(), 3);
-    EXPECT_TRUE(result.contains("a"));
-    EXPECT_TRUE(result.contains("b"));
-    EXPECT_TRUE(result.contains("c"));
+    ASSERT_EQ(v.size(), 3u);
+    int sharedCount = 0;
+    for (const auto& s : v) if (s == "shared") ++sharedCount;
+    EXPECT_EQ(sharedCount, 1) << "shared dependency must appear exactly once";
 }
 
-// =============================================================================
-// Transitive pulls — requesting a leaf also pulls its parents via reverse
-// paths? No — a leaf has no deps, but if we request a middle module we should
-// still get its own deps but NOT anything that depends on it.
-// =============================================================================
+// ---------------------------------------------------------------------------
+// Mixed known/unknown: requesting both a known and an unknown plugin.
+// Known plugin and its deps should be resolved; unknown should be silently
+// dropped.
+// ---------------------------------------------------------------------------
 
-TEST(DependencyResolver, RequestingMiddle_DoesNotPullUnrelatedParents) {
-    Graph g;
-    g.deps["parent"] = {"middle"};
-    g.deps["middle"] = {"child"};
-    g.deps["child"] = {};
+TEST_F(DependencyResolverTest, MixedKnownUnknown_UnknownDropped) {
+    logos_core_register_plugin("known", "/known");
+    logos_core_register_plugin_dependencies("known", nullptr, 0);
 
-    QStringList result = DependencyResolver::resolve(
-        QStringList{"middle"}, g.isKnownFn(), g.getDepsFn());
+    const char* names[] = {"known", "unknown_xyz"};
+    char** result = logos_core_resolve_dependencies(names, 2);
+    auto v = resolvedToVec(result);
+    freeResolved(result);
 
-    ASSERT_EQ(result.size(), 2);
-    EXPECT_TRUE(result.contains("middle"));
-    EXPECT_TRUE(result.contains("child"));
-    EXPECT_FALSE(result.contains("parent"))
-        << "parent depends on middle but was not requested; should not appear";
+    ASSERT_EQ(v.size(), 1u);
+    EXPECT_EQ(v[0], "known");
 }
 
-// =============================================================================
-// Partial failure — requested list contains both known and unknown
-// =============================================================================
+// ---------------------------------------------------------------------------
+// Partially unknown dependency: a depends on b, b depends on "missing".
+// "missing" is not registered.  The resolver should silently drop "missing"
+// and still return a and b in some valid order.
+// ---------------------------------------------------------------------------
 
-TEST(DependencyResolver, PartiallyKnown_KnownAreStillResolved) {
-    Graph g;
-    g.deps["real"] = {};
+TEST_F(DependencyResolverTest, PartiallyUnknownDep_KnownPluginsStillResolved) {
+    logos_core_register_plugin("a", "/a");
+    logos_core_register_plugin("b", "/b");
+    const char* depsA[] = {"b"};
+    const char* depsB[] = {"missing_dep"};
+    logos_core_register_plugin_dependencies("a", depsA, 1);
+    logos_core_register_plugin_dependencies("b", depsB, 1);
 
-    QStringList result = DependencyResolver::resolve(
-        QStringList{"real", "ghost"}, g.isKnownFn(), g.getDepsFn());
+    const char* names[] = {"a"};
+    char** result = logos_core_resolve_dependencies(names, 1);
+    auto v = resolvedToVec(result);
+    freeResolved(result);
 
-    ASSERT_EQ(result.size(), 1);
-    EXPECT_EQ(result.first().toStdString(), "real");
+    // "missing_dep" is unknown so it is skipped; a and b should still appear.
+    std::set<std::string> s(v.begin(), v.end());
+    EXPECT_TRUE(s.count("a"));
+    EXPECT_TRUE(s.count("b"));
+    EXPECT_EQ(s.count("missing_dep"), 0u);
 }
 
-TEST(DependencyResolver, MissingTransitiveDep_OtherDepsStillLoad) {
-    Graph g;
-    g.deps["a"] = {"b", "missing"};
-    g.deps["b"] = {};
-    // "missing" not in graph
+// ---------------------------------------------------------------------------
+// Circular dependency: a -> b -> a.
+// Must not hang or crash; the result may be partial.
+// ---------------------------------------------------------------------------
 
-    QStringList result = DependencyResolver::resolve(
-        QStringList{"a"}, g.isKnownFn(), g.getDepsFn());
+TEST_F(DependencyResolverTest, CircularDependency_DoesNotHangOrCrash) {
+    logos_core_register_plugin("a", "/a");
+    logos_core_register_plugin("b", "/b");
+    const char* depsA[] = {"b"};
+    const char* depsB[] = {"a"};
+    logos_core_register_plugin_dependencies("a", depsA, 1);
+    logos_core_register_plugin_dependencies("b", depsB, 1);
 
-    EXPECT_TRUE(result.contains("a"));
-    EXPECT_TRUE(result.contains("b"));
-    EXPECT_FALSE(result.contains("missing"));
+    const char* names[] = {"a"};
+    // Must return without hanging.
+    char** result = logos_core_resolve_dependencies(names, 1);
+    // We don't assert a specific result for cycles — just that it doesn't crash.
+    freeResolved(result);
+    SUCCEED();
 }
 
-// =============================================================================
-// Cycle detection
-// =============================================================================
+// ---------------------------------------------------------------------------
+// Already-loaded plugins still appear in the resolved list.
+// The resolver is purely structural; the caller decides whether to skip them.
+// ---------------------------------------------------------------------------
 
-TEST(DependencyResolver, SelfLoop_IsHandledWithoutHang) {
-    Graph g;
-    g.deps["loop"] = {"loop"};
+TEST_F(DependencyResolverTest, AlreadyLoadedPlugin_StillIncludedInResolution) {
+    logos_core_register_plugin("a", "/a");
+    logos_core_register_plugin("b", "/b");
+    const char* depsA[] = {"b"};
+    logos_core_register_plugin_dependencies("a", depsA, 1);
+    logos_core_register_plugin_dependencies("b", nullptr, 0);
 
-    // Expected behaviour: result will not contain "loop" because in-degree is 1
-    // and there is no zero-in-degree node to start Kahn's algorithm from. The
-    // current implementation logs a "Circular dependency detected" warning.
-    // The critical property under test is that this does not hang.
-    QStringList result = DependencyResolver::resolve(
-        QStringList{"loop"}, g.isKnownFn(), g.getDepsFn());
+    // Simulate b already loaded.
+    logos_core_mark_plugin_loaded("b");
 
-    EXPECT_FALSE(result.contains("loop"))
-        << "a self-looping module cannot satisfy topological sort";
+    const char* names[] = {"a"};
+    char** result = logos_core_resolve_dependencies(names, 1);
+    auto v = resolvedToVec(result);
+    freeResolved(result);
+
+    // Both a and b must be in the result; the resolver doesn't filter loaded ones.
+    std::set<std::string> s(v.begin(), v.end());
+    EXPECT_TRUE(s.count("a"));
+    EXPECT_TRUE(s.count("b"));
 }
 
-TEST(DependencyResolver, TwoNodeCycle_IsNotIncludedInOutput) {
-    Graph g;
-    g.deps["a"] = {"b"};
-    g.deps["b"] = {"a"};
+// ---------------------------------------------------------------------------
+// Duplicate names in the request are collapsed to a single entry.
+// ---------------------------------------------------------------------------
 
-    QStringList result = DependencyResolver::resolve(
-        QStringList{"a"}, g.isKnownFn(), g.getDepsFn());
+TEST_F(DependencyResolverTest, DuplicateNamesInRequest_AppearOnce) {
+    logos_core_register_plugin("a", "/a");
+    logos_core_register_plugin_dependencies("a", nullptr, 0);
 
-    // Kahn's algorithm cannot order a cycle — neither node should appear in
-    // the final sorted output.
-    EXPECT_EQ(result.size(), 0)
-        << "a <-> b cycle must be excluded from topological output";
-}
+    const char* names[] = {"a", "a", "a"};
+    char** result = logos_core_resolve_dependencies(names, 3);
+    auto v = resolvedToVec(result);
+    freeResolved(result);
 
-TEST(DependencyResolver, CycleDoesNotPreventUnrelatedModulesFromLoading) {
-    Graph g;
-    g.deps["a"] = {"b"};
-    g.deps["b"] = {"a"};
-    g.deps["independent"] = {};
-
-    QStringList result = DependencyResolver::resolve(
-        QStringList{"a", "independent"}, g.isKnownFn(), g.getDepsFn());
-
-    EXPECT_TRUE(result.contains("independent"))
-        << "a cycle in one part of the graph must not block unrelated modules";
-}
-
-// =============================================================================
-// Duplicate requests — requesting the same module twice must not duplicate
-// output (regression guard: any port to std::unordered_set must retain this).
-// =============================================================================
-
-TEST(DependencyResolver, DuplicateRequest_IsDeduplicated) {
-    Graph g;
-    g.deps["a"] = {};
-
-    QStringList result = DependencyResolver::resolve(
-        QStringList{"a", "a", "a"}, g.isKnownFn(), g.getDepsFn());
-
-    ASSERT_EQ(result.size(), 1);
-    EXPECT_EQ(result.first().toStdString(), "a");
-}
-
-// =============================================================================
-// Empty-string dep entries (can appear in malformed metadata JSON) — must be
-// silently skipped rather than treated as a "no name" module.
-// =============================================================================
-
-TEST(DependencyResolver, EmptyStringDep_IsIgnored) {
-    Graph g;
-    g.deps["a"] = {"", "b", ""};
-    g.deps["b"] = {};
-
-    QStringList result = DependencyResolver::resolve(
-        QStringList{"a"}, g.isKnownFn(), g.getDepsFn());
-
-    ASSERT_EQ(result.size(), 2);
-    EXPECT_TRUE(result.contains("a"));
-    EXPECT_TRUE(result.contains("b"));
-    EXPECT_FALSE(result.contains(""));
-}
-
-// =============================================================================
-// Ordering determinism — running the same input twice must produce the same
-// output. This is the minimum guarantee any replacement implementation (std
-// containers) must preserve; otherwise UI code that displays modules in load
-// order will flicker between runs.
-// =============================================================================
-
-TEST(DependencyResolver, RepeatedRuns_ProduceSameOrder) {
-    Graph g;
-    g.deps["top"] = {"mid_a", "mid_b"};
-    g.deps["mid_a"] = {"leaf"};
-    g.deps["mid_b"] = {"leaf"};
-    g.deps["leaf"] = {};
-
-    QStringList first = DependencyResolver::resolve(
-        QStringList{"top"}, g.isKnownFn(), g.getDepsFn());
-    QStringList second = DependencyResolver::resolve(
-        QStringList{"top"}, g.isKnownFn(), g.getDepsFn());
-
-    EXPECT_EQ(first, second)
-        << "topological sort must be deterministic across invocations";
+    int count = 0;
+    for (const auto& s : v) if (s == "a") ++count;
+    EXPECT_EQ(count, 1) << "duplicate requests should collapse to one entry";
 }

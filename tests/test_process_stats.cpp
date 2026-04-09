@@ -1,16 +1,40 @@
 #include <gtest/gtest.h>
 #include <process_stats/process_stats.h>
-#include <QCoreApplication>
-#include <QProcess>
 #include <nlohmann/json.hpp>
 #include <cstring>
 #include <string>
 #include <unordered_map>
+#include <vector>
+#include <cstdint>
+#include <signal.h>
+#include <spawn.h>
+#include <sys/wait.h>
 #include <unistd.h>
+
+extern char** environ;
+
+// Spawn a child process and return its PID (0 on failure).
+static pid_t spawnProcess(const char* path, char* const argv[]) {
+    pid_t pid = 0;
+    posix_spawnattr_t attr;
+    posix_spawnattr_init(&attr);
+    int rc = posix_spawn(&pid, path, nullptr, &attr,
+                         const_cast<char* const*>(argv), environ);
+    posix_spawnattr_destroy(&attr);
+    return (rc == 0) ? pid : 0;
+}
+
+// Kill a child process and reap it.
+static void killProcess(pid_t pid) {
+    if (pid <= 0) return;
+    kill(pid, SIGTERM);
+    int status;
+    waitpid(pid, &status, 0);
+}
 
 class ProcessStatsTest : public ::testing::Test {
 protected:
-    QList<QProcess*> m_processes;
+    std::vector<pid_t> m_processes;
 
     void SetUp() override {
         ProcessStats::clearHistory();
@@ -18,12 +42,8 @@ protected:
 
     void TearDown() override {
         ProcessStats::clearHistory();
-        for (QProcess* process : m_processes) {
-            if (process) {
-                process->terminate();
-                process->waitForFinished(1000);
-                delete process;
-            }
+        for (pid_t pid : m_processes) {
+            killProcess(pid);
         }
         m_processes.clear();
     }
@@ -33,7 +53,6 @@ protected:
 // getProcessStats Tests
 // =============================================================================
 
-// Verifies that getProcessStats() returns zeroed stats for negative PID
 TEST_F(ProcessStatsTest, GetProcessStats_ReturnsZeroedStatsForNegativePid) {
     ProcessStats::ProcessStatsData stats = ProcessStats::getProcessStats(-1);
 
@@ -42,7 +61,6 @@ TEST_F(ProcessStatsTest, GetProcessStats_ReturnsZeroedStatsForNegativePid) {
     EXPECT_EQ(stats.memoryMB, 0.0);
 }
 
-// Verifies that getProcessStats() returns zeroed stats for zero PID
 TEST_F(ProcessStatsTest, GetProcessStats_ReturnsZeroedStatsForZeroPid) {
     ProcessStats::ProcessStatsData stats = ProcessStats::getProcessStats(0);
 
@@ -51,9 +69,8 @@ TEST_F(ProcessStatsTest, GetProcessStats_ReturnsZeroedStatsForZeroPid) {
     EXPECT_EQ(stats.memoryMB, 0.0);
 }
 
-// Verifies that getProcessStats() returns valid stats for the current process
 TEST_F(ProcessStatsTest, GetProcessStats_ReturnsValidStatsForCurrentProcess) {
-    qint64 currentPid = getpid();
+    int64_t currentPid = static_cast<int64_t>(getpid());
 
     ProcessStats::ProcessStatsData stats = ProcessStats::getProcessStats(currentPid);
 
@@ -61,36 +78,32 @@ TEST_F(ProcessStatsTest, GetProcessStats_ReturnsValidStatsForCurrentProcess) {
     EXPECT_GE(stats.cpuTimeSeconds, 0.0);
 }
 
-// Verifies that memory usage is non-negative for a valid process
 TEST_F(ProcessStatsTest, GetProcessStats_MemoryIsNonNegative) {
-    qint64 currentPid = getpid();
+    int64_t currentPid = static_cast<int64_t>(getpid());
 
     ProcessStats::ProcessStatsData stats = ProcessStats::getProcessStats(currentPid);
 
     EXPECT_GE(stats.memoryMB, 0.0);
 }
 
-// Verifies that CPU time is non-negative for a valid process
 TEST_F(ProcessStatsTest, GetProcessStats_CpuTimeIsNonNegative) {
-    qint64 currentPid = getpid();
+    int64_t currentPid = static_cast<int64_t>(getpid());
 
     ProcessStats::ProcessStatsData stats = ProcessStats::getProcessStats(currentPid);
 
     EXPECT_GE(stats.cpuTimeSeconds, 0.0);
 }
 
-// Verifies that CPU percent is zero on first call (no previous data)
 TEST_F(ProcessStatsTest, GetProcessStats_CpuPercentIsZeroOnFirstCall) {
-    qint64 currentPid = getpid();
+    int64_t currentPid = static_cast<int64_t>(getpid());
 
     ProcessStats::ProcessStatsData stats = ProcessStats::getProcessStats(currentPid);
 
     EXPECT_EQ(stats.cpuPercent, 0.0);
 }
 
-// Verifies that CPU percent is calculated after the initial call
 TEST_F(ProcessStatsTest, GetProcessStats_CpuPercentUpdatesOnSecondCall) {
-    qint64 currentPid = getpid();
+    int64_t currentPid = static_cast<int64_t>(getpid());
 
     ProcessStats::getProcessStats(currentPid);
 
@@ -110,7 +123,6 @@ TEST_F(ProcessStatsTest, GetProcessStats_CpuPercentUpdatesOnSecondCall) {
 // getModuleStats Tests
 // =============================================================================
 
-// Verifies that getModuleStats() returns an empty JSON array when no plugins are loaded
 TEST_F(ProcessStatsTest, GetModuleStats_ReturnsEmptyArrayWhenNoPlugins) {
     std::unordered_map<std::string, int64_t> processes;
     char* result = ProcessStats::getModuleStats(processes);
@@ -125,7 +137,6 @@ TEST_F(ProcessStatsTest, GetModuleStats_ReturnsEmptyArrayWhenNoPlugins) {
     delete[] result;
 }
 
-// Verifies that getModuleStats() returns a non-null pointer
 TEST_F(ProcessStatsTest, GetModuleStats_ReturnsNonNullPointer) {
     std::unordered_map<std::string, int64_t> processes;
     char* result = ProcessStats::getModuleStats(processes);
@@ -135,15 +146,18 @@ TEST_F(ProcessStatsTest, GetModuleStats_ReturnsNonNullPointer) {
     delete[] result;
 }
 
-// Verifies that getModuleStats() returns valid JSON structure with correct fields
 TEST_F(ProcessStatsTest, GetModuleStats_ReturnsValidJsonStructure) {
-    QProcess* dummyProcess = new QProcess();
-    m_processes.append(dummyProcess);
-    dummyProcess->start("sleep", QStringList() << "1");
-    dummyProcess->waitForStarted();
-
-    qint64 pid = dummyProcess->processId();
-    ASSERT_GT(pid, 0);
+    // Spawn a real "sleep 1" child process so we have a valid PID.
+    const char* sleepPath = "/bin/sleep";
+    char* argv[] = {(char*)"sleep", (char*)"2", nullptr};
+    pid_t pid = spawnProcess(sleepPath, argv);
+    if (pid == 0) {
+        // Try /usr/bin/sleep on some systems
+        sleepPath = "/usr/bin/sleep";
+        pid = spawnProcess(sleepPath, argv);
+    }
+    ASSERT_GT(pid, 0) << "Failed to spawn sleep process";
+    m_processes.push_back(pid);
 
     std::unordered_map<std::string, int64_t> processes;
     processes.emplace("test_plugin", static_cast<int64_t>(pid));
