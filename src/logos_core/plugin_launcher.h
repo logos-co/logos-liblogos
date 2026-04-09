@@ -10,7 +10,9 @@ namespace PluginLauncher {
     using OnTerminatedFn = std::function<void(const QString& name)>;
 
     bool launch(const QString& name, const QString& pluginPath,
-                const QStringList& pluginsDirs, OnTerminatedFn onTerminated);
+                const QStringList& pluginsDirs,
+                const QString& instancePersistencePath,
+                OnTerminatedFn onTerminated);
     bool sendToken(const QString& name, const QString& token);
     void terminate(const QString& name);
     void terminateAll();

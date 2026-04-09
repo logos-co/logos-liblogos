@@ -93,6 +93,11 @@ char* logos_core_get_module_stats() {
     return ProcessStats::getModuleStats(pluginPidsForProcessStats());
 }
 
+void logos_core_set_persistence_base_path(const char* path) {
+    if (!path) { fprintf(stderr, "logos_core_set_persistence_base_path: path must not be null\n"); std::abort(); }
+    PluginManager::setPersistenceBasePath(path);
+}
+
 void logos_core_refresh_plugins()
 {
     PluginManager::discoverInstalledModules();

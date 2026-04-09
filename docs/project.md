@@ -107,6 +107,7 @@ logos-liblogos/
 | `registry() → PluginRegistry&` | Access the shared plugin registry |
 | `setPluginsDir(path)` | Set the primary plugin directory (clears existing) |
 | `addPluginsDir(path)` | Add an additional plugin directory |
+| `setPersistenceBasePath(path)` | Set base directory for module instance persistence |
 | `discoverInstalledModules()` | Scan all plugin directories and register discovered modules |
 | `processPlugin(path) → QString` | Extract metadata from a module file, register as known |
 | `processPluginCStr(path) → char*` | C-string variant of processPlugin |
@@ -164,7 +165,7 @@ logos-liblogos/
 
 | Method | Description |
 |--------|-------------|
-| `launch(name, path, dirs, onTerminated) → bool` | Spawn `logos_host` process for a module |
+| `launch(name, path, dirs, instancePersistencePath, onTerminated) → bool` | Spawn `logos_host` process for a module |
 | `sendToken(name, token) → bool` | Send auth token to module process via stdin |
 | `terminate(name)` | Kill a specific module process |
 | `terminateAll()` | Kill all module processes |
@@ -233,6 +234,7 @@ The public C API (`logos_core.h`) is the only exported interface. All functions 
 |----------|-------------|
 | `logos_core_set_plugins_dir(dir)` | Set primary plugin directory |
 | `logos_core_add_plugins_dir(dir)` | Add additional plugin directory |
+| `logos_core_set_persistence_base_path(path)` | Set base directory for module instance persistence |
 | `logos_core_load_plugin(name) → int` | Load a module (1 = success, 0 = failure) |
 | `logos_core_load_plugin_with_dependencies(name) → int` | Load module and dependencies in order |
 | `logos_core_unload_plugin(name) → int` | Unload a module |

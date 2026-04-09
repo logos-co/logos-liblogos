@@ -14,7 +14,8 @@ int main(int argc, char *argv[])
     QtApp::init(argc, argv);
 
     LogosAPI* logos_api = setupPlugin(QString::fromStdString(args.name),
-                                      QString::fromStdString(args.path));
+                                      QString::fromStdString(args.path),
+                                      QString::fromStdString(args.instancePersistencePath));
     if (!logos_api) {
         return 1;
     }

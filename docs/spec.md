@@ -109,12 +109,14 @@ Every module ships a `metadata.json` referenced by Qt's `Q_PLUGIN_METADATA` macr
 
 1. Core locates the plugin file for the requested module name
 2. Core resolves dependencies and loads them first (topological sort with circular dependency detection)
-3. Core spawns a `logos_host` process with the plugin path
-4. Core generates a UUID authentication token
-5. Core sends the token to the host process via local socket
-6. Host process loads the plugin and calls `initLogos(LogosAPI*)`
-7. Host process registers the plugin with the remote object registry
-8. Core waits for registration and records the module as loaded
+3. If a persistence base path is configured, core resolves an instance ID and persistence directory for the module (reusing an existing instance or creating a new one)
+4. Core spawns a `logos_host` process with the plugin path and instance persistence path
+5. Core generates a UUID authentication token
+6. Core sends the token to the host process via local socket
+7. Host process loads the plugin and calls `initLogos(LogosAPI*)`
+8. The `LogosAPI` instance exposes `modulePath`, `instanceId`, and `instancePersistencePath` as properties
+9. Host process registers the plugin with the remote object registry
+10. Core waits for registration and records the module as loaded
 
 #### Unloading
 

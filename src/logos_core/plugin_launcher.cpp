@@ -43,7 +43,9 @@ namespace {
 namespace PluginLauncher {
 
     bool launch(const QString& name, const QString& pluginPath,
-                const QStringList& pluginsDirs, OnTerminatedFn onTerminated) {
+                const QStringList& pluginsDirs,
+                const QString& instancePersistencePath,
+                OnTerminatedFn onTerminated) {
         QString logosHostPath = resolveLogosHostPath(pluginsDirs);
         if (logosHostPath.isEmpty())
             return false;
@@ -52,6 +54,11 @@ namespace PluginLauncher {
             "--name", name.toStdString(),
             "--path", pluginPath.toStdString()
         };
+
+        if (!instancePersistencePath.isEmpty()) {
+            arguments.push_back("--instance-persistence-path");
+            arguments.push_back(instancePersistencePath.toStdString());
+        }
 
         QtProcessManager::ProcessCallbacks callbacks;
 

@@ -2,6 +2,7 @@
 #include "qt/qt_token_receiver.h"
 #include <QObject>
 #include <QDebug>
+#include <QDir>
 #include <QFileInfo>
 #include "interface.h"
 #include "logos_api.h"
@@ -35,12 +36,18 @@ LogosModule loadPlugin(const QString& pluginPath, const QString& expectedName)
     return module;
 }
 
-LogosAPI* initializeLogosAPI(const QString& pluginName, QObject* plugin, 
+LogosAPI* initializeLogosAPI(const QString& pluginName, QObject* plugin,
                               PluginInterface* basePlugin, const QString& authToken,
-                              const QString& pluginPath)
+                              const QString& pluginPath,
+                              const QString& instancePersistencePath)
 {
     LogosAPI* logos_api = new LogosAPI(pluginName, plugin);
     logos_api->setProperty("modulePath", QFileInfo(pluginPath).absolutePath());
+
+    if (!instancePersistencePath.isEmpty()) {
+        logos_api->setProperty("instancePersistencePath", instancePersistencePath);
+        logos_api->setProperty("instanceId", QDir(instancePersistencePath).dirName());
+    }
 
     bool success = logos_api->getProvider()->registerObject(basePlugin->name(), plugin);
     if (success) {
@@ -56,7 +63,8 @@ LogosAPI* initializeLogosAPI(const QString& pluginName, QObject* plugin,
     return logos_api;
 }
 
-LogosAPI* setupPlugin(const QString& pluginName, const QString& pluginPath)
+LogosAPI* setupPlugin(const QString& pluginName, const QString& pluginPath,
+                      const QString& instancePersistencePath)
 {
     // 1. Receive auth token securely
     QString authToken = QtTokenReceiver::receiveAuthToken(pluginName);
@@ -72,11 +80,12 @@ LogosAPI* setupPlugin(const QString& pluginName, const QString& pluginPath)
 
     // 3. Initialize LogosAPI and register plugin
     PluginInterface* basePlugin = module.as<PluginInterface>();
-    LogosAPI* logos_api = initializeLogosAPI(pluginName, module.instance(), 
-                                              basePlugin, authToken, pluginPath);
-    
+    LogosAPI* logos_api = initializeLogosAPI(pluginName, module.instance(),
+                                              basePlugin, authToken, pluginPath,
+                                              instancePersistencePath);
+
     // Release module ownership so the plugin stays loaded
     module.release();
-    
+
     return logos_api;
 }

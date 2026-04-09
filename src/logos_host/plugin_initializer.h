@@ -10,10 +10,12 @@ class QObject;
 
 ModuleLib::LogosModule loadPlugin(const QString& pluginPath, const QString& expectedName);
 
-LogosAPI* initializeLogosAPI(const QString& pluginName, QObject* plugin, 
+LogosAPI* initializeLogosAPI(const QString& pluginName, QObject* plugin,
                               PluginInterface* basePlugin, const QString& authToken,
-                              const QString& pluginPath);
+                              const QString& pluginPath,
+                              const QString& instancePersistencePath = QString());
 
-LogosAPI* setupPlugin(const QString& pluginName, const QString& pluginPath);
+LogosAPI* setupPlugin(const QString& pluginName, const QString& pluginPath,
+                      const QString& instancePersistencePath = QString());
 
 #endif // PLUGIN_INITIALIZER_H
