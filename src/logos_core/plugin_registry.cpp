@@ -73,12 +73,14 @@ QString PluginRegistry::processPluginInternal(const QString& pluginPath) {
 
     QString qName = QString::fromStdString(name);
 
-    PluginInfo info;
+    // Update plugin info in place so re-discovery preserves the loaded flag
+    // (and any other state that lives on PluginInfo).
+    PluginInfo& info = m_plugins[qName];
     info.path = pluginPath;
+    info.dependencies.clear();
     for (const auto& d : ModuleLib::LogosModule::getModuleDependencies(pluginPath.toStdString())) {
         info.dependencies.append(QString::fromStdString(d));
     }
-    m_plugins.insert(qName, info);
 
     return qName;
 }

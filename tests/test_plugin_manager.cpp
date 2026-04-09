@@ -4,8 +4,10 @@
 #include "logos_core.h"
 #include <QCoreApplication>
 #include <QDir>
+#include <QFile>
 #include <QTemporaryDir>
 #include <nlohmann/json.hpp>
+#include <cstdlib>
 #include <cstring>
 #include <fstream>
 #include <QStringList>
@@ -351,4 +353,111 @@ TEST_F(PluginManagerTest, DiscoverInstalledModules_InvalidManifestJson) {
     PluginManager::discoverInstalledModules();
 
     EXPECT_TRUE(PluginManager::registry().knownPluginNames().isEmpty());
+}
+
+// =============================================================================
+// Loaded-flag preservation across re-registration
+//
+// Regression tests for the bug where re-discovering an already-loaded plugin
+// (e.g. when CoreModulesView calls refreshCoreModules() after startup load)
+// wiped the `loaded` flag because processPluginInternal inserted a fresh
+// PluginInfo over the existing entry.
+// =============================================================================
+
+TEST_F(PluginManagerTest, RegisterPlugin_PreservesLoadedFlagOnReregister) {
+    auto& registry = PluginManager::registry();
+
+    registry.registerPlugin("test_plugin", "/path/v1");
+    registry.markLoaded("test_plugin");
+    ASSERT_TRUE(registry.isLoaded("test_plugin"));
+
+    // Re-registering the same plugin (e.g. simulating a re-discovery pass)
+    // must not wipe the loaded flag.
+    registry.registerPlugin("test_plugin", "/path/v2");
+
+    EXPECT_TRUE(registry.isLoaded("test_plugin"))
+        << "Re-registering a known plugin must preserve its loaded flag";
+    EXPECT_EQ(registry.pluginPath("test_plugin").toStdString(), "/path/v2");
+}
+
+TEST_F(PluginManagerTest, RegisterDependencies_PreservesLoadedFlag) {
+    auto& registry = PluginManager::registry();
+
+    registry.registerPlugin("test_plugin", "/path/to/plugin");
+    registry.markLoaded("test_plugin");
+    ASSERT_TRUE(registry.isLoaded("test_plugin"));
+
+    registry.registerDependencies("test_plugin", {"dep_a", "dep_b"});
+
+    EXPECT_TRUE(registry.isLoaded("test_plugin"))
+        << "Updating dependencies must not wipe the loaded flag";
+    ASSERT_EQ(registry.pluginDependencies("test_plugin").size(), 2);
+}
+
+// =============================================================================
+// End-to-end regression tests using a real Qt plugin.
+//
+// These exercise the actual processPlugin() / discoverInstalledModules() code
+// paths (which call ModuleLib::LogosModule::getModuleName on the binary) and
+// would catch the original `m_plugins.insert(qName, fresh PluginInfo)` bug
+// that fake-binary tests can't trigger.
+//
+// The plugin path is taken from the TEST_PLUGIN env var (set by the nix
+// check). Tests skip if no plugin is available.
+// =============================================================================
+
+class RealPluginRegistryTest : public ::testing::Test {
+protected:
+    QString pluginPath;
+
+    void SetUp() override {
+        clearPluginState();
+
+        const char* envPlugin = std::getenv("TEST_PLUGIN");
+        if (envPlugin && std::strlen(envPlugin) > 0 && QFile::exists(QString::fromUtf8(envPlugin))) {
+            pluginPath = QString::fromUtf8(envPlugin);
+            return;
+        }
+
+        GTEST_SKIP() << "No real test plugin available. "
+                     << "Set TEST_PLUGIN env var to a built Qt plugin (.so/.dylib).";
+    }
+
+    void TearDown() override {
+        clearPluginState();
+    }
+};
+
+TEST_F(RealPluginRegistryTest, ProcessPlugin_RegistersRealPlugin) {
+    auto& registry = PluginManager::registry();
+
+    QString name = registry.processPlugin(pluginPath);
+    ASSERT_FALSE(name.isEmpty()) << "processPlugin failed for " << pluginPath.toStdString();
+    EXPECT_TRUE(registry.isKnown(name));
+    EXPECT_FALSE(registry.isLoaded(name));
+}
+
+TEST_F(RealPluginRegistryTest, ProcessPlugin_PreservesLoadedFlagOnReprocess) {
+    auto& registry = PluginManager::registry();
+
+    // First processing — registers the plugin in an unloaded state.
+    QString name = registry.processPlugin(pluginPath);
+    ASSERT_FALSE(name.isEmpty()) << "processPlugin failed for " << pluginPath.toStdString();
+    ASSERT_TRUE(registry.isKnown(name));
+
+    // Mark as loaded — simulates startup that loaded the plugin via
+    // logos_core_load_plugin (or its dependency-resolved variant).
+    registry.markLoaded(name);
+    ASSERT_TRUE(registry.isLoaded(name));
+
+    // Re-process the same plugin path. This is the code path that runs on
+    // every refreshCoreModules() / discoverInstalledModules() invocation.
+    // It must not wipe the loaded flag.
+    QString name2 = registry.processPlugin(pluginPath);
+    ASSERT_EQ(name, name2);
+
+    EXPECT_TRUE(registry.isLoaded(name))
+        << "Re-processing a loaded plugin must preserve its loaded flag";
+    EXPECT_TRUE(registry.loadedPluginNames().contains(name))
+        << "loadedPluginNames() must still report the plugin as loaded";
 }

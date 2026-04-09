@@ -88,6 +88,10 @@
       checks = forAllSystems ({ pkgs, system, ... }:
         let
           testsPkg = self.packages.${system}.logos-liblogos-tests;
+          # Real Qt plugin used by RealPluginRegistryTest (TEST_PLUGIN env var).
+          # capability_module is already a flake input and builds a real plugin.
+          capabilityModulePkg = logos-capability-module.packages.${system}.default;
+          pluginExt = if pkgs.stdenv.isDarwin then "dylib" else "so";
         in {
           tests = pkgs.runCommand "logos-liblogos-tests" {
             nativeBuildInputs = [ testsPkg ] ++ pkgs.lib.optionals pkgs.stdenv.isLinux [ pkgs.qt6.qtbase ];
@@ -96,8 +100,10 @@
             ${pkgs.lib.optionalString pkgs.stdenv.isLinux ''
               export QT_PLUGIN_PATH="${pkgs.qt6.qtbase}/${pkgs.qt6.qtbase.qtPluginPrefix}"
             ''}
+            export TEST_PLUGIN="${capabilityModulePkg}/lib/capability_module_plugin.${pluginExt}"
             mkdir -p $out
             echo "Running logos-liblogos tests..."
+            echo "TEST_PLUGIN=$TEST_PLUGIN"
             ${testsPkg}/bin/logos_core_tests --gtest_output=xml:$out/test-results.xml
           '';
         }
