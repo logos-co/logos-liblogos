@@ -147,16 +147,15 @@ TEST_F(ProcessStatsTest, GetModuleStats_ReturnsNonNullPointer) {
 }
 
 TEST_F(ProcessStatsTest, GetModuleStats_ReturnsValidJsonStructure) {
-    // Spawn a real "sleep 1" child process so we have a valid PID.
-    const char* sleepPath = "/bin/sleep";
+    // Spawn a real "sleep 2" child process so we have a valid PID.
+    // Use posix_spawnp to search PATH (nix sandbox has no /bin/sleep).
     char* argv[] = {(char*)"sleep", (char*)"2", nullptr};
-    pid_t pid = spawnProcess(sleepPath, argv);
-    if (pid == 0) {
-        // Try /usr/bin/sleep on some systems
-        sleepPath = "/usr/bin/sleep";
-        pid = spawnProcess(sleepPath, argv);
-    }
-    ASSERT_GT(pid, 0) << "Failed to spawn sleep process";
+    pid_t pid = 0;
+    posix_spawnattr_t attr;
+    posix_spawnattr_init(&attr);
+    int rc = posix_spawnp(&pid, "sleep", nullptr, &attr, argv, environ);
+    posix_spawnattr_destroy(&attr);
+    ASSERT_EQ(rc, 0) << "Failed to spawn sleep process: " << strerror(rc);
     m_processes.push_back(pid);
 
     std::unordered_map<std::string, int64_t> processes;
