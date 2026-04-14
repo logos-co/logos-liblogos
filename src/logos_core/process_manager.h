@@ -1,5 +1,5 @@
-#ifndef QT_PROCESS_MANAGER_H
-#define QT_PROCESS_MANAGER_H
+#ifndef PROCESS_MANAGER_H
+#define PROCESS_MANAGER_H
 
 #include <string>
 #include <vector>
@@ -27,4 +27,4 @@ namespace QtProcessManager {
     void registerProcess(const std::string& name);
 }
 
-#endif // QT_PROCESS_MANAGER_H
+#endif // PROCESS_MANAGER_H
