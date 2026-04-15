@@ -12,7 +12,7 @@
 
 #include "plugin_manager.h"
 #include "plugin_registry.h"
-#include "qt/qt_process_manager.h"
+#include "process_manager.h"
 #include "qt/qt_token_receiver.h"
 
 #include <QLocalServer>

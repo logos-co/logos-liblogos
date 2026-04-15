@@ -21,6 +21,7 @@
     pkgs.gtest
     pkgs.nlohmann_json
     pkgs.cli11
+    pkgs.boost
     logosModule
     processStats
     logosPackageManager

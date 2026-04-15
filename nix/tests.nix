@@ -69,7 +69,9 @@ pkgs.stdenv.mkDerivation {
 
     ${pkgs.lib.optionalString pkgs.stdenv.isLinux ''
       # Fix RPATH on Linux to avoid /build/ references and include all dependencies
-      patchelf --set-rpath "$out/lib:${common.env.LOGOS_PACKAGE_MANAGER_ROOT}/lib:${pkgs.gtest}/lib:${pkgs.qt6.qtbase}/lib:${pkgs.qt6.qtremoteobjects}/lib:${pkgs.stdenv.cc.cc.lib}/lib" $out/bin/logos_core_tests || true
+      patchelf --set-rpath "$out/lib:${pkgs.boost}/lib:${common.env.LOGOS_PACKAGE_MANAGER_ROOT}/lib:${pkgs.gtest}/lib:${pkgs.qt6.qtbase}/lib:${pkgs.qt6.qtremoteobjects}/lib:${pkgs.stdenv.cc.cc.lib}/lib" $out/bin/logos_core_tests || true
+      # Fix RPATH on liblogos_core.so so it can find its transitive deps (e.g. libboost_process)
+      patchelf --set-rpath "$out/lib:${pkgs.boost}/lib:${common.env.LOGOS_PACKAGE_MANAGER_ROOT}/lib:${pkgs.qt6.qtbase}/lib:${pkgs.qt6.qtremoteobjects}/lib:${pkgs.stdenv.cc.cc.lib}/lib" $out/lib/liblogos_core.so || true
     ''}
     
     runHook postInstall

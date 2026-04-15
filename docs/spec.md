@@ -228,4 +228,4 @@ The SDK abstracts away registry lookup, token management, and async invocation.
 
 - **Signature support** — Signing and verifying module packages
 - **Cross-language modules** — Modules in languages other than C++
-- **Move away from Qt** - Logos API will move away from QT. this should be abstracted from liblogos perspective.
+- **Move away from Qt** — Logos API will move away from Qt. Process management has already been migrated from Qt (`QProcess`) to Boost.Process v2. Remaining Qt dependencies (event loop, plugin loading, remote objects) should be similarly abstracted from liblogos's perspective.

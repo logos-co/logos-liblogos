@@ -102,8 +102,8 @@ set(LOGOS_CORE_SOURCES
     logos_core/plugin_launcher.h
     logos_core/qt/qt_app_context.cpp
     logos_core/qt/qt_app_context.h
-    logos_core/qt/qt_process_manager.cpp
-    logos_core/qt/qt_process_manager.h
+    logos_core/process_manager.cpp
+    logos_core/process_manager.h
 )
 
 # Define the logos host sources
@@ -130,6 +130,9 @@ option(LOGOS_PORTABLE_BUILD "Build for portable variant selection" OFF)
 if(LOGOS_PORTABLE_BUILD)
     target_compile_definitions(logos_core PRIVATE LOGOS_PORTABLE_BUILD=1)
 endif()
+
+# Find Boost (header-only usage + Boost.Process/Asio)
+find_package(Boost REQUIRED COMPONENTS process)
 
 # Find logos-package-manager library
 if(DEFINED LOGOS_PACKAGE_MANAGER_ROOT AND EXISTS "${LOGOS_PACKAGE_MANAGER_ROOT}/lib")
@@ -163,6 +166,7 @@ target_link_libraries(logos_core PUBLIC
     process_stats
     package_manager_lib
     nlohmann_json::nlohmann_json
+    Boost::process
 )
 
 # Include directories for the library

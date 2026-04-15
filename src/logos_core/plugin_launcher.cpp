@@ -1,5 +1,5 @@
 #include "plugin_launcher.h"
-#include "qt/qt_process_manager.h"
+#include "process_manager.h"
 #include <QDebug>
 #include <QDir>
 #include <QFile>
