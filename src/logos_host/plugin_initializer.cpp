@@ -2,13 +2,14 @@
 #include "qt/qt_token_receiver.h"
 #include <QObject>
 #include <spdlog/spdlog.h>
-#include <QDir>
-#include <QFileInfo>
+#include <filesystem>
 #include "interface.h"
 #include "logos_api.h"
 #include "logos_api_provider.h"
 #include "token_manager.h"
 #include "module_lib.h"
+
+namespace fs = std::filesystem;
 
 using namespace ModuleLib;
 
@@ -43,11 +44,15 @@ LogosAPI* initializeLogosAPI(const QString& pluginName, QObject* plugin,
                               const QString& instancePersistencePath)
 {
     LogosAPI* logos_api = new LogosAPI(pluginName, plugin);
-    logos_api->setProperty("modulePath", QFileInfo(pluginPath).absolutePath());
+    logos_api->setProperty("modulePath", QString::fromStdString(
+        fs::absolute(fs::path(pluginPath.toStdString())).parent_path().string()
+    ));
 
     if (!instancePersistencePath.isEmpty()) {
         logos_api->setProperty("instancePersistencePath", instancePersistencePath);
-        logos_api->setProperty("instanceId", QDir(instancePersistencePath).dirName());
+        logos_api->setProperty("instanceId", QString::fromStdString(
+            fs::path(instancePersistencePath.toStdString()).filename().string()
+        ));
     }
 
     bool success = logos_api->getProvider()->registerObject(basePlugin->name(), plugin);

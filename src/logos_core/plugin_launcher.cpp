@@ -1,35 +1,40 @@
 #include "plugin_launcher.h"
 #include "process_manager.h"
 #include <spdlog/spdlog.h>
-#include <QDir>
-#include <QFile>
-#include <QCoreApplication>
+#include <filesystem>
+#include <cstdlib>
+#include <boost/dll/runtime_symbol_info.hpp>
+
+namespace fs = std::filesystem;
 
 namespace {
 
     QString resolveLogosHostPath(const QStringList& pluginsDirs) {
         QString logosHostPath;
 
-        QByteArray envPathBytes = qgetenv("LOGOS_HOST_PATH");
-        if (!envPathBytes.isEmpty()) {
-            logosHostPath = QString::fromUtf8(envPathBytes);
+        const char* envPath = std::getenv("LOGOS_HOST_PATH");
+        if (envPath) {
+            logosHostPath = QString::fromUtf8(envPath);
         }
 
         if (logosHostPath.isEmpty()) {
-            logosHostPath = QDir::cleanPath(QCoreApplication::applicationDirPath() + "/logos_host");
+            auto appDir = boost::dll::program_location().parent_path();
+            auto normalized = (appDir / "logos_host").lexically_normal();
+            logosHostPath = QString::fromStdString(normalized.string());
         }
 
-        if (!QFile::exists(logosHostPath)) {
+        if (!fs::exists(logosHostPath.toStdString())) {
             if (!pluginsDirs.isEmpty()) {
-                QDir pluginsDirCandidate(pluginsDirs.first());
-                QString candidate = QDir::cleanPath(pluginsDirCandidate.absoluteFilePath("../bin/logos_host"));
-                if (QFile::exists(candidate)) {
-                    logosHostPath = candidate;
+                auto candidatePath = fs::absolute(
+                    fs::path(pluginsDirs.first().toStdString()) / ".." / "bin" / "logos_host"
+                ).lexically_normal();
+                if (fs::exists(candidatePath)) {
+                    logosHostPath = QString::fromStdString(candidatePath.string());
                 }
             }
         }
 
-        if (!QFile::exists(logosHostPath)) {
+        if (!fs::exists(logosHostPath.toStdString())) {
             spdlog::critical("logos_host not found at: {} - set LOGOS_HOST_PATH or place it next to the executable",
                              logosHostPath.toStdString());
             return QString();

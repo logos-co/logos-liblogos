@@ -1,6 +1,5 @@
 #include "plugin_registry.h"
 #include <spdlog/spdlog.h>
-#include <QDir>
 #include <cassert>
 #include <mutex>
 #include <shared_mutex>
