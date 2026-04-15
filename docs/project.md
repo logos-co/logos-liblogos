@@ -17,14 +17,11 @@ logos-liblogos/
 │   ├── logos_core/                      # Core library implementation
 │   │   ├── logos_core.h                 # C API header (public)
 │   │   ├── logos_core.cpp               # C API implementation
-│   │   ├── app_lifecycle.h/cpp          # Application lifecycle management
 │   │   ├── plugin_manager.h/cpp         # Facade: orchestrates registry, launcher, resolver
 │   │   ├── plugin_registry.h/cpp        # In-memory registry of discovered/loaded modules
 │   │   ├── plugin_launcher.h/cpp        # Spawns and manages logos_host subprocesses
 │   │   ├── dependency_resolver.h/cpp    # Topological sort with circular dependency detection
-│   │   ├── process_manager.h/cpp        # Boost.Process-based subprocess management
-│   │   └── qt/                          # Qt-specific implementations
-│   │       └── qt_app_context.h/cpp     # QCoreApplication management
+│   │   └── process_manager.h/cpp        # Boost.Process-based subprocess management
 │   └── logos_host/                      # Module subprocess host
 │       ├── logos_host.cpp               # Host entry point
 │       ├── command_line_parser.h/cpp    # CLI argument parsing (--name, --path)
@@ -34,7 +31,7 @@ logos-liblogos/
 │           └── qt_token_receiver.h/cpp  # Auth token reception via local socket
 ├── tests/                               # Google Test suite
 │   ├── CMakeLists.txt                   # Test build configuration
-│   ├── test_app_lifecycle.cpp           # AppLifecycle tests
+│   ├── test_app_lifecycle.cpp           # C API lifecycle tests (init, exec, cleanup, processEvents)
 │   ├── test_plugin_manager.cpp          # PluginManager + PluginRegistry tests
 │   ├── test_process_manager.cpp         # ProcessManager lifecycle and subprocess tests
 │   ├── test_dependency_resolver.cpp      # DependencyResolver tests
@@ -81,22 +78,6 @@ logos-liblogos/
 | **[logos-nix](https://github.com/logos-co/logos-nix)** | Common Nix tooling and nixpkgs pin |
 
 ## Core Modules
-
-### AppLifecycle
-
-**Files:** `src/logos_core/app_lifecycle.h`, `src/logos_core/app_lifecycle.cpp`
-
-**Purpose:** Application lifecycle management. Delegates Qt-specific work to `QtAppContext`.
-
-**API (namespace `AppLifecycle`):**
-
-| Method | Description |
-|--------|-------------|
-| `init(argc, argv)` | Initialize global state, create QCoreApplication if needed |
-| `start()` | Discover plugins, initialize capability module |
-| `exec() → int` | Run the Qt event loop |
-| `cleanup()` | Terminate all module processes, clean up state |
-| `processEvents()` | Process Qt events without blocking |
 
 ### PluginManager
 
@@ -192,14 +173,6 @@ logos-liblogos/
 | `resolve(requested, isKnown, getDependencies) → QStringList` | Returns modules in load order (dependencies first) |
 
 Takes callback functions (`IsKnownFn`, `GetDependenciesFn`) so it has no coupling to the registry implementation.
-
-### Qt Integration Layer
-
-**Files:** `src/logos_core/qt/qt_app_context.h/cpp`
-
-**Purpose:** Isolates Qt-specific application lifecycle code behind internal interfaces.
-
-- **QtAppContext** — Creates/manages `QCoreApplication`, runs event loop, processes events
 
 ### Process Manager
 

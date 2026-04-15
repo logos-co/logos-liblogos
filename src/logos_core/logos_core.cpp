@@ -1,6 +1,6 @@
 #include "logos_core.h"
-#include "app_lifecycle.h"
 #include "plugin_manager.h"
+#include <logos_instance.h>
 #include <process_stats/process_stats.h>
 #include "token_manager.h"
 #include <cstdio>
@@ -26,7 +26,8 @@ namespace {
 // === C API Implementation (Thin Wrappers) ===
 
 void logos_core_init(int argc, char *argv[]) {
-    AppLifecycle::init(argc, argv);
+    (void)argc;
+    (void)argv;
 }
 
 void logos_core_set_plugins_dir(const char* plugins_dir) {
@@ -38,15 +39,17 @@ void logos_core_add_plugins_dir(const char* plugins_dir) {
 }
 
 void logos_core_start() {
-    AppLifecycle::start();
+    LogosInstance::id();
+    PluginManager::discoverInstalledModules();
+    PluginManager::initializeCapabilityModule();
 }
 
 int logos_core_exec() {
-    return AppLifecycle::exec();
+    return 0;
 }
 
 void logos_core_cleanup() {
-    AppLifecycle::cleanup();
+    PluginManager::clear();
 }
 
 char** logos_core_get_loaded_plugins() {
@@ -106,5 +109,4 @@ void logos_core_refresh_plugins()
 
 void logos_core_process_events()
 {
-    AppLifecycle::processEvents();
 }
