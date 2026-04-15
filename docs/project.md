@@ -22,9 +22,9 @@ logos-liblogos/
 │   │   ├── plugin_registry.h/cpp        # In-memory registry of discovered/loaded modules
 │   │   ├── plugin_launcher.h/cpp        # Spawns and manages logos_host subprocesses
 │   │   ├── dependency_resolver.h/cpp    # Topological sort with circular dependency detection
+│   │   ├── process_manager.h/cpp        # Boost.Process-based subprocess management
 │   │   └── qt/                          # Qt-specific implementations
-│   │       ├── qt_app_context.h/cpp     # QCoreApplication management
-│   │       └── qt_process_manager.h/cpp # QProcess-based subprocess management
+│   │       └── qt_app_context.h/cpp     # QCoreApplication management
 │   └── logos_host/                      # Module subprocess host
 │       ├── logos_host.cpp               # Host entry point
 │       ├── command_line_parser.h/cpp    # CLI argument parsing (--name, --path)
@@ -36,7 +36,9 @@ logos-liblogos/
 │   ├── CMakeLists.txt                   # Test build configuration
 │   ├── test_app_lifecycle.cpp           # AppLifecycle tests
 │   ├── test_plugin_manager.cpp          # PluginManager + PluginRegistry tests
-│   └── test_process_stats.cpp           # ProcessStats tests (external process-stats lib)
+│   ├── test_process_manager.cpp         # ProcessManager lifecycle and subprocess tests
+│   ├── test_process_stats.cpp           # ProcessStats tests (external process-stats lib)
+│   └── test_token_exchange.cpp          # Token exchange via Unix domain socket tests
 ├── nix/                                 # Nix build modules
 │   ├── default.nix                      # Common configuration (deps, flags, metadata)
 │   ├── build.nix                        # Shared build derivation
@@ -57,6 +59,7 @@ logos-liblogos/
 | **C++17** | Implementation language |
 | **CMake 3.14+** | Build system |
 | **Qt 6** (Core, RemoteObjects) | Event loop, plugin system, IPC, meta-object system |
+| **Boost** (Process, Asio) | Subprocess management and async I/O |
 | **nlohmann_json** | JSON parsing/serialization (replaces Qt JSON internally) |
 | **CLI11** | Command-line argument parsing (logos_host) |
 | **zstd** | Compression (build dependency) |
@@ -159,7 +162,7 @@ logos-liblogos/
 
 **Files:** `src/logos_core/plugin_launcher.h`, `src/logos_core/plugin_launcher.cpp`
 
-**Purpose:** Spawn and manage module subprocesses. Delegates to `QtProcessManager` for QProcess operations.
+**Purpose:** Spawn and manage module subprocesses. Delegates to the process manager (Boost.Process v2 / Boost.Asio) for subprocess operations.
 
 **API (namespace `PluginLauncher`):**
 
@@ -188,12 +191,39 @@ Takes callback functions (`IsKnownFn`, `GetDependenciesFn`) so it has no couplin
 
 ### Qt Integration Layer
 
-**Files:** `src/logos_core/qt/qt_app_context.h/cpp`, `src/logos_core/qt/qt_process_manager.h/cpp`
+**Files:** `src/logos_core/qt/qt_app_context.h/cpp`
 
-**Purpose:** Isolates all Qt-specific code behind internal interfaces.
+**Purpose:** Isolates Qt-specific application lifecycle code behind internal interfaces.
 
 - **QtAppContext** — Creates/manages `QCoreApplication`, runs event loop, processes events
-- **QtProcessManager** — Manages `QProcess` instances for module subprocesses, handles exit/error signals, sends tokens via local socket. A `std::mutex` (`s_processesMutex`) protects the `s_processes` map against concurrent access from calling threads and async signal deliveries. All teardown paths use a shared `destroyProcess` helper that disconnects signals before waiting, preventing double-free from deferred `deleteLater` calls.
+
+### Process Manager
+
+**Files:** `src/logos_core/process_manager.h`, `src/logos_core/process_manager.cpp`
+
+**Purpose:** Manages module subprocesses using Boost.Process v2 and Boost.Asio. Replaces the former Qt-based `QProcess` implementation.
+
+- Uses `boost::process::v2::process` for subprocess spawning and `boost::asio::io_context` for async I/O
+- Background `io_context` thread with work guard for non-blocking async read and wait callbacks
+- Async read loop for stdout/stderr with line buffering
+- Synchronous kill with graceful SIGTERM → SIGKILL escalation (5s timeout)
+- Unix domain socket for token delivery (matches previous `QLocalSocket` behavior)
+- A `std::mutex` (`s_processesMutex`) protects the `s_processes` map against concurrent access
+- Shared pointer-based lifetime management for safe async callback handling
+
+**API (namespace `QtProcessManager`):**
+
+| Method | Description |
+|--------|-------------|
+| `startProcess(name, executable, arguments, callbacks) → bool` | Launch a subprocess with async output monitoring |
+| `sendToken(name, token) → bool` | Send auth token via Unix domain socket |
+| `terminateProcess(name)` | Gracefully terminate a specific process |
+| `terminateAll()` | Terminate all managed processes |
+| `hasProcess(name) → bool` | Check if a process entry exists |
+| `getProcessId(name) → int64_t` | Get PID for a named process |
+| `getAllProcessIds() → unordered_map` | Map all process names to PIDs |
+| `registerProcess(name)` | Register a placeholder process entry |
+| `clearAll()` | Clear all process entries |
 
 ### ProcessStats (external dependency)
 
@@ -321,6 +351,7 @@ nix build --override-input logos-cpp-sdk path:../logos-cpp-sdk
 - CMake 3.14+
 - C++17 compatible compiler
 - Qt 6 with Core and RemoteObjects modules
+- Boost (with Process component)
 - nlohmann_json
 - CLI11
 - Google Test (fetched via FetchContent if not system-installed)
