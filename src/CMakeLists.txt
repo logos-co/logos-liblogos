@@ -167,6 +167,7 @@ target_link_libraries(logos_core PUBLIC
     package_manager_lib
     nlohmann_json::nlohmann_json
     Boost::process
+    spdlog::spdlog
 )
 
 # Include directories for the library
@@ -231,6 +232,7 @@ target_link_libraries(logos_host PRIVATE
     logos_sdk
     logos_module
     CLI11::CLI11
+    spdlog::spdlog
 )
 
 # Include directories for the logos host application

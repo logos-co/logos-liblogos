@@ -1,5 +1,5 @@
 #include "dependency_resolver.h"
-#include <QDebug>
+#include <spdlog/spdlog.h>
 #include <QSet>
 #include <QHash>
 
@@ -19,7 +19,7 @@ namespace DependencyResolver {
                 continue;
 
             if (!isKnown(moduleName)) {
-                qWarning() << "Module not found in known plugins:" << moduleName;
+                spdlog::warn("Module not found in known plugins: {}", moduleName.toStdString());
                 missingDependencies.append(moduleName);
                 continue;
             }
@@ -34,7 +34,7 @@ namespace DependencyResolver {
         }
 
         if (!missingDependencies.isEmpty()) {
-            qWarning() << "Missing dependencies detected:" << missingDependencies;
+            spdlog::warn("Missing dependencies detected: {}", missingDependencies.join(", ").toStdString());
         }
 
         // Topological sort (Kahn's algorithm)
@@ -82,7 +82,7 @@ namespace DependencyResolver {
                     cycleModules.append(moduleName);
                 }
             }
-            qCritical() << "Circular dependency detected involving modules:" << cycleModules;
+            spdlog::critical("Circular dependency detected involving modules: {}", cycleModules.join(", ").toStdString());
         }
 
         return result;

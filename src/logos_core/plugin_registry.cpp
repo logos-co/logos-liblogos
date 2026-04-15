@@ -1,5 +1,5 @@
 #include "plugin_registry.h"
-#include <QDebug>
+#include <spdlog/spdlog.h>
 #include <QDir>
 #include <cassert>
 #include <mutex>
@@ -54,7 +54,7 @@ void PluginRegistry::discoverInstalledModules() {
 
         QString pluginName = processPluginInternal(mainFilePath);
         if (pluginName.isEmpty()) {
-            qWarning() << "Failed to process plugin:" << mainFilePath;
+            spdlog::warn("Failed to process plugin: {}", mainFilePath.toStdString());
         }
     }
 }
@@ -67,7 +67,7 @@ QString PluginRegistry::processPlugin(const QString& pluginPath) {
 QString PluginRegistry::processPluginInternal(const QString& pluginPath) {
     std::string name = ModuleLib::LogosModule::getModuleName(pluginPath.toStdString());
     if (name.empty()) {
-        qWarning() << "No valid metadata for plugin:" << pluginPath;
+        spdlog::warn("No valid metadata for plugin: {}", pluginPath.toStdString());
         return QString();
     }
 

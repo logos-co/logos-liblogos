@@ -68,10 +68,13 @@ pkgs.stdenv.mkDerivation {
     ''}
 
     ${pkgs.lib.optionalString pkgs.stdenv.isLinux ''
-      # Fix RPATH on Linux to avoid /build/ references and include all dependencies
-      patchelf --set-rpath "$out/lib:${pkgs.boost}/lib:${common.env.LOGOS_PACKAGE_MANAGER_ROOT}/lib:${pkgs.gtest}/lib:${pkgs.qt6.qtbase}/lib:${pkgs.qt6.qtremoteobjects}/lib:${pkgs.stdenv.cc.cc.lib}/lib" $out/bin/logos_core_tests || true
-      # Fix RPATH on liblogos_core.so so it can find its transitive deps (e.g. libboost_process)
-      patchelf --set-rpath "$out/lib:${pkgs.boost}/lib:${common.env.LOGOS_PACKAGE_MANAGER_ROOT}/lib:${pkgs.qt6.qtbase}/lib:${pkgs.qt6.qtremoteobjects}/lib:${pkgs.stdenv.cc.cc.lib}/lib" $out/lib/liblogos_core.so || true
+      # Fix RPATH on Linux to avoid /build/ references and include all dependencies.
+      # spdlog links libfmt; both must be on RPATH because patchelf replaces the default search paths.
+      _rpath="$out/lib:${pkgs.boost}/lib:${common.env.LOGOS_PACKAGE_MANAGER_ROOT}/lib:${pkgs.gtest}/lib:${pkgs.qt6.qtbase}/lib:${pkgs.qt6.qtremoteobjects}/lib:${pkgs.spdlog}/lib:${pkgs.fmt}/lib:${pkgs.stdenv.cc.cc.lib}/lib"
+      patchelf --set-rpath "$_rpath" $out/bin/logos_core_tests || true
+      # Fix RPATH on liblogos_core.so so it can find its transitive deps (e.g. libboost_process, spdlog, fmt)
+      _rpath_lib="$out/lib:${pkgs.boost}/lib:${common.env.LOGOS_PACKAGE_MANAGER_ROOT}/lib:${pkgs.qt6.qtbase}/lib:${pkgs.qt6.qtremoteobjects}/lib:${pkgs.spdlog}/lib:${pkgs.fmt}/lib:${pkgs.stdenv.cc.cc.lib}/lib"
+      patchelf --set-rpath "$_rpath_lib" $out/lib/liblogos_core.so || true
     ''}
     
     runHook postInstall

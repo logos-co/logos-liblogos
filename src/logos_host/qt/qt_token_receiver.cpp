@@ -1,7 +1,7 @@
 #include "qt_token_receiver.h"
 #include <QLocalServer>
 #include <QLocalSocket>
-#include <QDebug>
+#include <spdlog/spdlog.h>
 
 namespace QtTokenReceiver {
 
@@ -13,7 +13,7 @@ namespace QtTokenReceiver {
         QLocalServer::removeServer(socketName);
 
         if (!tokenServer->listen(socketName)) {
-            qCritical() << "Failed to start token server:" << tokenServer->errorString();
+            spdlog::critical("Failed to start token server: {}", tokenServer->errorString().toStdString());
             return QString();
         }
 
@@ -26,7 +26,7 @@ namespace QtTokenReceiver {
             }
             clientSocket->deleteLater();
         } else {
-            qCritical() << "Timeout waiting for auth token";
+            spdlog::critical("Timeout waiting for auth token");
             tokenServer->deleteLater();
             return QString();
         }
@@ -34,7 +34,7 @@ namespace QtTokenReceiver {
         tokenServer->deleteLater();
 
         if (authToken.isEmpty()) {
-            qCritical() << "No auth token received";
+            spdlog::critical("No auth token received");
             return QString();
         }
 
