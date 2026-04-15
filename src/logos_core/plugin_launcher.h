@@ -1,23 +1,24 @@
 #ifndef PLUGIN_LAUNCHER_H
 #define PLUGIN_LAUNCHER_H
 
-#include <QString>
-#include <QStringList>
-#include <QHash>
+#include <string>
+#include <vector>
+#include <unordered_map>
 #include <functional>
+#include <cstdint>
 
 namespace PluginLauncher {
-    using OnTerminatedFn = std::function<void(const QString& name)>;
+    using OnTerminatedFn = std::function<void(const std::string& name)>;
 
-    bool launch(const QString& name, const QString& pluginPath,
-                const QStringList& pluginsDirs,
-                const QString& instancePersistencePath,
+    bool launch(const std::string& name, const std::string& pluginPath,
+                const std::vector<std::string>& pluginsDirs,
+                const std::string& instancePersistencePath,
                 OnTerminatedFn onTerminated);
-    bool sendToken(const QString& name, const QString& token);
-    void terminate(const QString& name);
+    bool sendToken(const std::string& name, const std::string& token);
+    void terminate(const std::string& name);
     void terminateAll();
-    bool hasProcess(const QString& name);
-    QHash<QString, qint64> getAllProcessIds();
+    bool hasProcess(const std::string& name);
+    std::unordered_map<std::string, int64_t> getAllProcessIds();
 }
 
 #endif // PLUGIN_LAUNCHER_H

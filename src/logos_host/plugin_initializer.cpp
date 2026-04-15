@@ -1,6 +1,7 @@
 #include "plugin_initializer.h"
 #include "qt/qt_token_receiver.h"
 #include <QObject>
+#include <QString>
 #include <spdlog/spdlog.h>
 #include <filesystem>
 #include "interface.h"
@@ -13,11 +14,11 @@ namespace fs = std::filesystem;
 
 using namespace ModuleLib;
 
-LogosModule loadPlugin(const QString& pluginPath, const QString& expectedName)
+LogosModule loadPlugin(const std::string& pluginPath, const std::string& expectedName)
 {
     // Load the plugin using module_lib for abstraction
     QString errorString;
-    LogosModule module = LogosModule::loadFromPath(pluginPath, &errorString);
+    LogosModule module = LogosModule::loadFromPath(QString::fromStdString(pluginPath), &errorString);
 
     if (!module.isValid()) {
         spdlog::critical("Failed to load plugin: {}", errorString.toStdString());
@@ -30,35 +31,36 @@ LogosModule loadPlugin(const QString& pluginPath, const QString& expectedName)
         return LogosModule();
     }
 
-    if (expectedName != basePlugin->name()) {
+    if (expectedName != basePlugin->name().toStdString()) {
         spdlog::warn("Plugin name mismatch: expected {} got {}",
-                     expectedName.toStdString(), basePlugin->name().toStdString());
+                     expectedName, basePlugin->name().toStdString());
     }
 
     return module;
 }
 
-LogosAPI* initializeLogosAPI(const QString& pluginName, QObject* plugin,
-                              PluginInterface* basePlugin, const QString& authToken,
-                              const QString& pluginPath,
-                              const QString& instancePersistencePath)
+LogosAPI* initializeLogosAPI(const std::string& pluginName, QObject* plugin,
+                              PluginInterface* basePlugin, const std::string& authToken,
+                              const std::string& pluginPath,
+                              const std::string& instancePersistencePath)
 {
-    LogosAPI* logos_api = new LogosAPI(pluginName, plugin);
+    LogosAPI* logos_api = new LogosAPI(QString::fromStdString(pluginName), plugin);
     logos_api->setProperty("modulePath", QString::fromStdString(
-        fs::absolute(fs::path(pluginPath.toStdString())).parent_path().string()
+        fs::absolute(fs::path(pluginPath)).parent_path().string()
     ));
 
-    if (!instancePersistencePath.isEmpty()) {
-        logos_api->setProperty("instancePersistencePath", instancePersistencePath);
+    if (!instancePersistencePath.empty()) {
+        logos_api->setProperty("instancePersistencePath",
+                               QString::fromStdString(instancePersistencePath));
         logos_api->setProperty("instanceId", QString::fromStdString(
-            fs::path(instancePersistencePath.toStdString()).filename().string()
+            fs::path(instancePersistencePath).filename().string()
         ));
     }
 
     bool success = logos_api->getProvider()->registerObject(basePlugin->name(), plugin);
     if (success) {
-        logos_api->getTokenManager()->saveToken("core", authToken);
-        logos_api->getTokenManager()->saveToken("capability_module", authToken);
+        logos_api->getTokenManager()->saveToken("core", QString::fromStdString(authToken));
+        logos_api->getTokenManager()->saveToken("capability_module", QString::fromStdString(authToken));
     } else {
         spdlog::critical("Failed to register plugin for remote access: {}", basePlugin->name().toStdString());
         delete plugin;
@@ -69,12 +71,12 @@ LogosAPI* initializeLogosAPI(const QString& pluginName, QObject* plugin,
     return logos_api;
 }
 
-LogosAPI* setupPlugin(const QString& pluginName, const QString& pluginPath,
-                      const QString& instancePersistencePath)
+LogosAPI* setupPlugin(const std::string& pluginName, const std::string& pluginPath,
+                      const std::string& instancePersistencePath)
 {
     // 1. Receive auth token securely
-    QString authToken = QtTokenReceiver::receiveAuthToken(pluginName);
-    if (authToken.isEmpty()) {
+    std::string authToken = QtTokenReceiver::receiveAuthToken(pluginName);
+    if (authToken.empty()) {
         return nullptr;
     }
 

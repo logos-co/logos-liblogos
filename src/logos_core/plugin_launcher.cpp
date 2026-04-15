@@ -9,35 +9,35 @@ namespace fs = std::filesystem;
 
 namespace {
 
-    QString resolveLogosHostPath(const QStringList& pluginsDirs) {
-        QString logosHostPath;
+    std::string resolveLogosHostPath(const std::vector<std::string>& pluginsDirs) {
+        std::string logosHostPath;
 
         const char* envPath = std::getenv("LOGOS_HOST_PATH");
         if (envPath) {
-            logosHostPath = QString::fromUtf8(envPath);
+            logosHostPath = envPath;
         }
 
-        if (logosHostPath.isEmpty()) {
+        if (logosHostPath.empty()) {
             auto appDir = boost::dll::program_location().parent_path();
             auto normalized = (appDir / "logos_host").lexically_normal();
-            logosHostPath = QString::fromStdString(normalized.string());
+            logosHostPath = normalized.string();
         }
 
-        if (!fs::exists(logosHostPath.toStdString())) {
-            if (!pluginsDirs.isEmpty()) {
+        if (!fs::exists(logosHostPath)) {
+            if (!pluginsDirs.empty()) {
                 auto candidatePath = fs::absolute(
-                    fs::path(pluginsDirs.first().toStdString()) / ".." / "bin" / "logos_host"
+                    fs::path(pluginsDirs.front()) / ".." / "bin" / "logos_host"
                 ).lexically_normal();
                 if (fs::exists(candidatePath)) {
-                    logosHostPath = QString::fromStdString(candidatePath.string());
+                    logosHostPath = candidatePath.string();
                 }
             }
         }
 
-        if (!fs::exists(logosHostPath.toStdString())) {
+        if (!fs::exists(logosHostPath)) {
             spdlog::critical("logos_host not found at: {} - set LOGOS_HOST_PATH or place it next to the executable",
-                             logosHostPath.toStdString());
-            return QString();
+                             logosHostPath);
+            return {};
         }
 
         return logosHostPath;
@@ -47,35 +47,34 @@ namespace {
 
 namespace PluginLauncher {
 
-    bool launch(const QString& name, const QString& pluginPath,
-                const QStringList& pluginsDirs,
-                const QString& instancePersistencePath,
+    bool launch(const std::string& name, const std::string& pluginPath,
+                const std::vector<std::string>& pluginsDirs,
+                const std::string& instancePersistencePath,
                 OnTerminatedFn onTerminated) {
-        QString logosHostPath = resolveLogosHostPath(pluginsDirs);
-        if (logosHostPath.isEmpty())
+        std::string logosHostPath = resolveLogosHostPath(pluginsDirs);
+        if (logosHostPath.empty())
             return false;
 
         std::vector<std::string> arguments = {
-            "--name", name.toStdString(),
-            "--path", pluginPath.toStdString()
+            "--name", name,
+            "--path", pluginPath
         };
 
-        if (!instancePersistencePath.isEmpty()) {
+        if (!instancePersistencePath.empty()) {
             arguments.push_back("--instance-persistence-path");
-            arguments.push_back(instancePersistencePath.toStdString());
+            arguments.push_back(instancePersistencePath);
         }
 
         QtProcessManager::ProcessCallbacks callbacks;
 
         callbacks.onFinished = [onTerminated](const std::string& pName, int exitCode, bool crashed) {
-            Q_UNUSED(exitCode);
-            QString qName = QString::fromStdString(pName);
+            (void)exitCode;
             if (crashed) {
                 spdlog::critical("Plugin process crashed: {}", pName);
                 exit(1);
             }
             if (onTerminated)
-                onTerminated(qName);
+                onTerminated(pName);
         };
 
         callbacks.onError = [](const std::string& pName, bool crashed) {
@@ -86,42 +85,39 @@ namespace PluginLauncher {
         };
 
         callbacks.onOutput = [](const std::string& pName, const std::string& line, bool isStderr) {
-            QString qLine = QString::fromStdString(line);
             if (isStderr) {
                 spdlog::critical("[{}] {}", pName, line);
-            } else if (qLine.contains("Warning:") || qLine.contains("WARNING:")) {
+            } else if (line.find("Warning:") != std::string::npos ||
+                       line.find("WARNING:") != std::string::npos) {
                 spdlog::warn("[{}] {}", pName, line);
-            } else if (qLine.contains("Critical:") || qLine.contains("FAILED:") || qLine.contains("ERROR:")) {
+            } else if (line.find("Critical:") != std::string::npos ||
+                       line.find("FAILED:") != std::string::npos ||
+                       line.find("ERROR:") != std::string::npos) {
                 spdlog::critical("[{}] {}", pName, line);
             }
         };
 
-        return QtProcessManager::startProcess(name.toStdString(), logosHostPath.toStdString(), arguments, callbacks);
+        return QtProcessManager::startProcess(name, logosHostPath, arguments, callbacks);
     }
 
-    bool sendToken(const QString& name, const QString& token) {
-        return QtProcessManager::sendToken(name.toStdString(), token.toStdString());
+    bool sendToken(const std::string& name, const std::string& token) {
+        return QtProcessManager::sendToken(name, token);
     }
 
-    void terminate(const QString& name) {
-        QtProcessManager::terminateProcess(name.toStdString());
+    void terminate(const std::string& name) {
+        QtProcessManager::terminateProcess(name);
     }
 
     void terminateAll() {
         QtProcessManager::terminateAll();
     }
 
-    bool hasProcess(const QString& name) {
-        return QtProcessManager::hasProcess(name.toStdString());
+    bool hasProcess(const std::string& name) {
+        return QtProcessManager::hasProcess(name);
     }
 
-    QHash<QString, qint64> getAllProcessIds() {
-        auto stdMap = QtProcessManager::getAllProcessIds();
-        QHash<QString, qint64> result;
-        for (const auto& [name, pid] : stdMap) {
-            result.insert(QString::fromStdString(name), pid);
-        }
-        return result;
+    std::unordered_map<std::string, int64_t> getAllProcessIds() {
+        return QtProcessManager::getAllProcessIds();
     }
 
 }

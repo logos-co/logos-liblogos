@@ -1,4 +1,3 @@
-#include <QString>
 #include "command_line_parser.h"
 #include "plugin_initializer.h"
 #include "qt/qt_app.h"
@@ -13,9 +12,7 @@ int main(int argc, char *argv[])
 
     QtApp::init(argc, argv);
 
-    LogosAPI* logos_api = setupPlugin(QString::fromStdString(args.name),
-                                      QString::fromStdString(args.path),
-                                      QString::fromStdString(args.instancePersistencePath));
+    LogosAPI* logos_api = setupPlugin(args.name, args.path, args.instancePersistencePath);
     if (!logos_api) {
         return 1;
     }

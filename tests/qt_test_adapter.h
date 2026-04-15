@@ -2,7 +2,7 @@
 // Qt-isolating adapter for logos_core tests.
 //
 // Provides the same logos_core_* names as the removed C API extensions,
-// implemented as inline wrappers around the Qt-typed internal classes.
+// implemented as inline wrappers around the internal classes.
 //
 // Test .cpp files include this header and never import Qt headers directly.
 // When Qt is replaced in src/, update only this file to call the new internals.
@@ -17,7 +17,6 @@
 
 #include <QLocalServer>
 #include <QString>
-#include <QStringList>
 
 #include <cstdint>
 #include <cstring>
@@ -31,8 +30,7 @@
 inline void logos_core_register_plugin(const char* name, const char* path)
 {
     if (!name || !path) return;
-    PluginManager::registry().registerPlugin(QString::fromUtf8(name),
-                                             QString::fromUtf8(path));
+    PluginManager::registry().registerPlugin(std::string(name), std::string(path));
 }
 
 inline void logos_core_register_plugin_dependencies(const char* name,
@@ -40,38 +38,37 @@ inline void logos_core_register_plugin_dependencies(const char* name,
                                                      int count)
 {
     if (!name) return;
-    QStringList qDeps;
+    std::vector<std::string> stdDeps;
     for (int i = 0; i < count; ++i)
-        if (deps && deps[i]) qDeps.append(QString::fromUtf8(deps[i]));
-    PluginManager::registry().registerDependencies(QString::fromUtf8(name), qDeps);
+        if (deps && deps[i]) stdDeps.push_back(std::string(deps[i]));
+    PluginManager::registry().registerDependencies(std::string(name), stdDeps);
 }
 
 inline int logos_core_is_plugin_known(const char* name)
 {
     if (!name) return 0;
-    return PluginManager::registry().isKnown(QString::fromUtf8(name)) ? 1 : 0;
+    return PluginManager::registry().isKnown(std::string(name)) ? 1 : 0;
 }
 
 inline int logos_core_is_plugin_loaded(const char* name)
 {
     if (!name) return 0;
-    return PluginManager::registry().isLoaded(QString::fromUtf8(name)) ? 1 : 0;
+    return PluginManager::registry().isLoaded(std::string(name)) ? 1 : 0;
 }
 
 inline void logos_core_mark_plugin_loaded(const char* name)
 {
     if (!name) return;
-    PluginManager::registry().markLoaded(QString::fromUtf8(name));
+    PluginManager::registry().markLoaded(std::string(name));
 }
 
 inline char* logos_core_get_plugin_path(const char* name)
 {
     if (!name) return nullptr;
-    QString path = PluginManager::registry().pluginPath(QString::fromUtf8(name));
-    if (path.isEmpty()) return nullptr;
-    std::string s = path.toStdString();
-    char* result = new char[s.size() + 1];
-    memcpy(result, s.c_str(), s.size() + 1);
+    std::string path = PluginManager::registry().pluginPath(std::string(name));
+    if (path.empty()) return nullptr;
+    char* result = new char[path.size() + 1];
+    memcpy(result, path.c_str(), path.size() + 1);
     return result;
 }
 
@@ -79,7 +76,7 @@ inline int logos_core_get_plugin_dependencies_count(const char* name)
 {
     if (!name) return 0;
     return static_cast<int>(
-        PluginManager::registry().pluginDependencies(QString::fromUtf8(name)).size());
+        PluginManager::registry().pluginDependencies(std::string(name)).size());
 }
 
 // ---------------------------------------------------------------------------
@@ -93,9 +90,9 @@ inline int logos_core_get_plugins_dirs_count()
 
 inline char* logos_core_get_plugins_dir_at(int index)
 {
-    QStringList dirs = PluginManager::registry().pluginsDirs();
-    if (index < 0 || index >= dirs.size()) return nullptr;
-    std::string s = dirs[index].toStdString();
+    std::vector<std::string> dirs = PluginManager::registry().pluginsDirs();
+    if (index < 0 || index >= static_cast<int>(dirs.size())) return nullptr;
+    const std::string& s = dirs[static_cast<std::size_t>(index)];
     char* result = new char[s.size() + 1];
     memcpy(result, s.c_str(), s.size() + 1);
     return result;
@@ -107,18 +104,17 @@ inline char* logos_core_get_plugins_dir_at(int index)
 
 inline char** logos_core_resolve_dependencies(const char** names, int count)
 {
-    QStringList requested;
+    std::vector<std::string> requested;
     for (int i = 0; i < count; ++i)
-        if (names && names[i]) requested.append(QString::fromUtf8(names[i]));
+        if (names && names[i]) requested.push_back(std::string(names[i]));
 
-    QStringList resolved = PluginManager::resolveDependencies(requested);
+    std::vector<std::string> resolved = PluginManager::resolveDependencies(requested);
 
-    int n = resolved.size();
-    char** result = new char*[static_cast<size_t>(n) + 1];
-    for (int i = 0; i < n; ++i) {
-        QByteArray utf8 = resolved[i].toUtf8();
-        result[i] = new char[utf8.size() + 1];
-        memcpy(result[i], utf8.constData(), static_cast<size_t>(utf8.size()) + 1);
+    std::size_t n = resolved.size();
+    char** result = new char*[n + 1];
+    for (std::size_t i = 0; i < n; ++i) {
+        result[i] = new char[resolved[i].size() + 1];
+        memcpy(result[i], resolved[i].c_str(), resolved[i].size() + 1);
     }
     result[n] = nullptr;
     return result;
@@ -205,10 +201,9 @@ inline char* logos_core_receive_auth_token(const char* plugin_name)
         empty[0] = '\0';
         return empty;
     }
-    QString token = QtTokenReceiver::receiveAuthToken(QString::fromUtf8(plugin_name));
-    std::string s = token.toStdString();
-    char* result = new char[s.size() + 1];
-    memcpy(result, s.c_str(), s.size() + 1);
+    std::string token = QtTokenReceiver::receiveAuthToken(std::string(plugin_name));
+    char* result = new char[token.size() + 1];
+    memcpy(result, token.c_str(), token.size() + 1);
     return result;
 }
 
