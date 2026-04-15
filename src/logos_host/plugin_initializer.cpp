@@ -1,7 +1,7 @@
 #include "plugin_initializer.h"
 #include "qt/qt_token_receiver.h"
 #include <QObject>
-#include <QDebug>
+#include <spdlog/spdlog.h>
 #include <QDir>
 #include <QFileInfo>
 #include "interface.h"
@@ -19,18 +19,19 @@ LogosModule loadPlugin(const QString& pluginPath, const QString& expectedName)
     LogosModule module = LogosModule::loadFromPath(pluginPath, &errorString);
 
     if (!module.isValid()) {
-        qCritical() << "Failed to load plugin:" << errorString;
+        spdlog::critical("Failed to load plugin: {}", errorString.toStdString());
         return LogosModule();
     }
 
     PluginInterface *basePlugin = module.as<PluginInterface>();
     if (!basePlugin) {
-        qCritical() << "Plugin does not implement the PluginInterface";
+        spdlog::critical("Plugin does not implement the PluginInterface");
         return LogosModule();
     }
 
     if (expectedName != basePlugin->name()) {
-        qWarning() << "Plugin name mismatch: expected" << expectedName << "got" << basePlugin->name();
+        spdlog::warn("Plugin name mismatch: expected {} got {}",
+                     expectedName.toStdString(), basePlugin->name().toStdString());
     }
 
     return module;
@@ -54,7 +55,7 @@ LogosAPI* initializeLogosAPI(const QString& pluginName, QObject* plugin,
         logos_api->getTokenManager()->saveToken("core", authToken);
         logos_api->getTokenManager()->saveToken("capability_module", authToken);
     } else {
-        qCritical() << "Failed to register plugin for remote access:" << basePlugin->name();
+        spdlog::critical("Failed to register plugin for remote access: {}", basePlugin->name().toStdString());
         delete plugin;
         delete logos_api;
         return nullptr;

@@ -1,6 +1,6 @@
 #include "plugin_launcher.h"
 #include "process_manager.h"
-#include <QDebug>
+#include <spdlog/spdlog.h>
 #include <QDir>
 #include <QFile>
 #include <QCoreApplication>
@@ -30,8 +30,8 @@ namespace {
         }
 
         if (!QFile::exists(logosHostPath)) {
-            qCritical() << "logos_host not found at:" << logosHostPath
-                         << "- set LOGOS_HOST_PATH or place it next to the executable";
+            spdlog::critical("logos_host not found at: {} - set LOGOS_HOST_PATH or place it next to the executable",
+                             logosHostPath.toStdString());
             return QString();
         }
 
@@ -66,7 +66,7 @@ namespace PluginLauncher {
             Q_UNUSED(exitCode);
             QString qName = QString::fromStdString(pName);
             if (crashed) {
-                qCritical() << "Plugin process crashed:" << qName;
+                spdlog::critical("Plugin process crashed: {}", pName);
                 exit(1);
             }
             if (onTerminated)
@@ -75,20 +75,19 @@ namespace PluginLauncher {
 
         callbacks.onError = [](const std::string& pName, bool crashed) {
             if (crashed) {
-                qCritical() << "Plugin process crashed:" << QString::fromStdString(pName);
+                spdlog::critical("Plugin process crashed: {}", pName);
                 exit(1);
             }
         };
 
         callbacks.onOutput = [](const std::string& pName, const std::string& line, bool isStderr) {
-            QString qName = QString::fromStdString(pName);
             QString qLine = QString::fromStdString(line);
             if (isStderr) {
-                qCritical() << "[" << qName << "]" << qLine;
+                spdlog::critical("[{}] {}", pName, line);
             } else if (qLine.contains("Warning:") || qLine.contains("WARNING:")) {
-                qWarning() << "[" << qName << "]" << qLine;
+                spdlog::warn("[{}] {}", pName, line);
             } else if (qLine.contains("Critical:") || qLine.contains("FAILED:") || qLine.contains("ERROR:")) {
-                qCritical() << "[" << qName << "]" << qLine;
+                spdlog::critical("[{}] {}", pName, line);
             }
         };
 

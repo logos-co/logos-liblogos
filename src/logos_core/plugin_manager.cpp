@@ -2,7 +2,7 @@
 #include "plugin_registry.h"
 #include "dependency_resolver.h"
 #include "plugin_launcher.h"
-#include <QDebug>
+#include <spdlog/spdlog.h>
 #include <QUuid>
 #include <mutex>
 #include <cassert>
@@ -59,7 +59,7 @@ namespace {
 
         LogosAPIClient* client = s_coreApi->getClient("capability_module");
         if (!client->informModuleToken(capabilityModuleToken, name, token)) {
-            qWarning() << "Failed to register token with capability module for:" << name;
+            spdlog::warn("Failed to register token with capability module for: {}", name.toStdString());
         }
     }
 
@@ -67,12 +67,12 @@ namespace {
         QString name = QString::fromUtf8(pluginName);
 
         if (!registryInstance().isKnown(name)) {
-            qWarning() << "Cannot load unknown plugin:" << name;
+            spdlog::warn("Cannot load unknown plugin: {}", name.toStdString());
             return false;
         }
 
         if (registryInstance().isLoaded(name)) {
-            qWarning() << "Plugin already loaded:" << name;
+            spdlog::warn("Plugin already loaded: {}", name.toStdString());
             return false;
         }
 
@@ -104,7 +104,7 @@ namespace {
 
         notifyCapabilityModule(name, authToken);
 
-        qInfo() << "Plugin loaded:" << name;
+        spdlog::info("Plugin loaded: {}", name.toStdString());
 
         return true;
     }
@@ -144,7 +144,7 @@ namespace PluginManager {
 
         QString pluginName = registryInstance().processPlugin(path);
         if (pluginName.isEmpty()) {
-            qWarning() << "Failed to process plugin:" << path;
+            spdlog::warn("Failed to process plugin: {}", path.toStdString());
             return nullptr;
         }
 
@@ -174,7 +174,7 @@ namespace PluginManager {
         );
 
         if (resolved.isEmpty() || !resolved.contains(name)) {
-            qWarning() << "Cannot resolve dependencies for:" << name;
+            spdlog::warn("Cannot resolve dependencies for: {}", name.toStdString());
             return false;
         }
 
@@ -183,7 +183,7 @@ namespace PluginManager {
             if (registryInstance().isLoaded(moduleName))
                 continue;
             if (!loadPluginInternal(moduleName.toUtf8().constData())) {
-                qWarning() << "Failed to load plugin:" << moduleName;
+                spdlog::warn("Failed to load plugin: {}", moduleName.toStdString());
                 allSucceeded = false;
             }
         }
@@ -198,7 +198,7 @@ namespace PluginManager {
             return false;
 
         if (!loadPluginInternal("capability_module")) {
-            qWarning() << "Failed to load capability module";
+            spdlog::warn("Failed to load capability module");
             return false;
         }
 
@@ -211,19 +211,19 @@ namespace PluginManager {
         QString name = QString::fromUtf8(pluginName);
 
         if (!registryInstance().isLoaded(name)) {
-            qWarning() << "Cannot unload plugin (not loaded):" << name;
+            spdlog::warn("Cannot unload plugin (not loaded): {}", name.toStdString());
             return false;
         }
 
         if (!PluginLauncher::hasProcess(name)) {
-            qWarning() << "No process found for plugin:" << name;
+            spdlog::warn("No process found for plugin: {}", name.toStdString());
             return false;
         }
 
         PluginLauncher::terminate(name);
         registryInstance().markUnloaded(name);
 
-        qInfo() << "Plugin unloaded:" << name;
+        spdlog::info("Plugin unloaded: {}", name.toStdString());
         return true;
     }
 
@@ -246,7 +246,7 @@ namespace PluginManager {
     char** getKnownPluginsCStr() {
         QStringList known = registryInstance().knownPluginNames();
         if (known.isEmpty()) {
-            qWarning() << "No known plugins to return";
+            spdlog::warn("No known plugins to return");
         }
         return toNullTerminatedArray(known);
     }

@@ -37,8 +37,10 @@ logos-liblogos/
 │   ├── test_app_lifecycle.cpp           # AppLifecycle tests
 │   ├── test_plugin_manager.cpp          # PluginManager + PluginRegistry tests
 │   ├── test_process_manager.cpp         # ProcessManager lifecycle and subprocess tests
+│   ├── test_dependency_resolver.cpp      # DependencyResolver tests
 │   ├── test_process_stats.cpp           # ProcessStats tests (external process-stats lib)
-│   └── test_token_exchange.cpp          # Token exchange via Unix domain socket tests
+│   ├── test_token_exchange.cpp          # Token exchange via Unix domain socket tests
+│   └── qt_test_adapter.h               # Qt test utilities/adapter header
 ├── nix/                                 # Nix build modules
 │   ├── default.nix                      # Common configuration (deps, flags, metadata)
 │   ├── build.nix                        # Shared build derivation
@@ -63,6 +65,7 @@ logos-liblogos/
 | **nlohmann_json** | JSON parsing/serialization (replaces Qt JSON internally) |
 | **CLI11** | Command-line argument parsing (logos_host) |
 | **zstd** | Compression (build dependency) |
+| **spdlog** | Structured logging |
 | **Google Test** | Unit testing framework |
 | **Nix** | Package management and reproducible builds |
 
@@ -119,6 +122,7 @@ logos-liblogos/
 | `initializeCapabilityModule() → bool` | Load the built-in capability module if available |
 | `unloadPlugin(name) → bool` | Terminate module process and update registry |
 | `terminateAll()` | Terminate all running module processes |
+| `clear()` | Clear registry and reset all state |
 | `resolveDependencies(modules) → QStringList` | Topological sort with circular dependency detection |
 | `getLoadedPluginsCStr() → char**` | Return loaded module names as null-terminated C string array |
 | `getKnownPluginsCStr() → char**` | Return known module names as null-terminated C string array |
@@ -242,7 +246,7 @@ Takes callback functions (`IsKnownFn`, `GetDependenciesFn`) so it has no couplin
 
 **Files:** `src/logos_host/logos_host.cpp`, `src/logos_host/command_line_parser.h/cpp`, `src/logos_host/plugin_initializer.h/cpp`, `src/logos_host/qt/qt_app.h/cpp`, `src/logos_host/qt/qt_token_receiver.h/cpp`
 
-**Purpose:** Lightweight subprocess that loads a single module. Parses `--name` and `--path` arguments, loads the plugin, authenticates via token from the core, registers the module with the remote object registry, and runs the Qt event loop.
+**Purpose:** Lightweight subprocess that loads a single module. Parses `--name`, `--path`, and optional `--instance-persistence-path` arguments, loads the plugin, authenticates via token from the core, registers the module with the remote object registry, and runs the Qt event loop.
 
 ## C API
 
@@ -365,9 +369,8 @@ make -j$(nproc)
 
 The `logos_host` binary will be in `build/bin/` and `liblogos_core` in `build/lib/`.
 
-**Build with tests:**
+**Run tests:**
 ```bash
-cmake -DLGX_BUILD_TESTS=ON ..
 make -j$(nproc)
 ctest --output-on-failure
 ```

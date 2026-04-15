@@ -18,6 +18,9 @@ find_package(nlohmann_json REQUIRED)
 # Find CLI11
 find_package(CLI11 REQUIRED)
 
+# Find spdlog
+find_package(spdlog REQUIRED)
+
 # Set output directories
 set(CMAKE_ARCHIVE_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR}/lib)
 set(CMAKE_LIBRARY_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR}/lib)

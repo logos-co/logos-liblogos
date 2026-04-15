@@ -120,6 +120,7 @@
             pkgs.qt6.qtbase
             pkgs.qt6.qtremoteobjects
             pkgs.zstd
+            pkgs.spdlog
           ];
         };
       });

@@ -22,6 +22,7 @@
     pkgs.nlohmann_json
     pkgs.cli11
     pkgs.boost
+    pkgs.spdlog
     logosModule
     processStats
     logosPackageManager
