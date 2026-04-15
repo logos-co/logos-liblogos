@@ -90,8 +90,6 @@ endif()
 set(LOGOS_CORE_SOURCES
     logos_core/logos_core.cpp
     logos_core/logos_core.h
-    logos_core/app_lifecycle.cpp
-    logos_core/app_lifecycle.h
     logos_core/plugin_registry.cpp
     logos_core/plugin_registry.h
     logos_core/dependency_resolver.cpp
@@ -100,8 +98,6 @@ set(LOGOS_CORE_SOURCES
     logos_core/plugin_manager.h
     logos_core/plugin_launcher.cpp
     logos_core/plugin_launcher.h
-    logos_core/qt/qt_app_context.cpp
-    logos_core/qt/qt_app_context.h
     logos_core/process_manager.cpp
     logos_core/process_manager.h
 )

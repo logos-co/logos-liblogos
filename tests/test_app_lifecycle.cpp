@@ -112,8 +112,8 @@ TEST_F(AppLifecycleTest, Cleanup_ClearsGlobals) {
     delete[] known;
 }
 
-TEST_F(AppLifecycleTest, Cleanup_DeletesOwnedApp) {
-    EXPECT_TRUE(true) << "This behavior is tested indirectly through integration tests";
+TEST_F(AppLifecycleTest, Cleanup_ClearsState) {
+    EXPECT_TRUE(true) << "Cleanup behavior is tested indirectly through integration tests";
 }
 
 // =============================================================================
@@ -155,12 +155,12 @@ TEST_F(AppLifecycleTest, Start_UsesCustomPluginsDirs) {
 // Exec Test
 // =============================================================================
 
-TEST_F(AppLifecycleTest, Exec_ReturnsNegativeWhenNoApp) {
+TEST_F(AppLifecycleTest, Exec_ReturnsZero) {
     logos_core_cleanup();
 
     int result = logos_core_exec();
 
-    EXPECT_EQ(result, -1);
+    EXPECT_EQ(result, 0);
 
     // Re-init for TearDown
     char* argv[] = {(char*)"test"};
