@@ -346,7 +346,19 @@ namespace PluginManager {
     }
 
     std::vector<std::string> getDependencies(const std::string& name, bool recursive) {
-        return registryInstance().pluginDependencies(name, recursive);
+        // Filter to known modules to honour the documented contract.
+        // PluginInfo::dependencies holds whatever the manifest declares,
+        // including names that aren't installed. The reverse-edge accessor
+        // doesn't need this treatment because recomputeDependentsLocked only
+        // writes known names into PluginInfo::dependents by construction.
+        std::vector<std::string> deps = registryInstance().pluginDependencies(name, recursive);
+        std::vector<std::string> knownDeps;
+        knownDeps.reserve(deps.size());
+        for (const std::string& dep : deps) {
+            if (registryInstance().isKnown(dep))
+                knownDeps.push_back(dep);
+        }
+        return knownDeps;
     }
 
     std::vector<std::string> getDependents(const std::string& name, bool recursive) {

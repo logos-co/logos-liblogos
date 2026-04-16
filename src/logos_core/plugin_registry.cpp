@@ -246,14 +246,15 @@ void PluginRegistry::registerPlugin(const std::string& name, const std::string& 
     std::unique_lock lock(m_mutex);
     PluginInfo& info = m_plugins[name];
     info.path = path;
-    if (!dependencies.empty()) {
-        info.dependencies = dependencies;
-        // Forward edges changed — invert them so PluginInfo::dependents stays
-        // consistent. Callers (the test adapter, mainly) populate the graph
-        // through this entry point without going through discoverInstalledModules,
-        // so we can't rely on the scan-tail recompute here.
-        recomputeDependentsLocked();
-    }
+    // Always assign dependencies (even when empty) and recompute reverse
+    // edges. Two reasons we can't gate this on `dependencies.empty()`:
+    //   1. Registering "b" with `{}` after an earlier registerDependencies("a",
+    //      {"b"}) must give "b" a dependent entry for "a" — the earlier
+    //      recompute skipped the unknown edge, and this is the registration
+    //      that makes "a → b" visible.
+    //   2. Callers need a way to clear forward edges by passing `{}`.
+    info.dependencies = dependencies;
+    recomputeDependentsLocked();
 }
 
 void PluginRegistry::registerDependencies(const std::string& name, const std::vector<std::string>& dependencies) {
