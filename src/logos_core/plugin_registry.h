@@ -59,8 +59,8 @@ private:
     // Re-derives every PluginInfo::dependents list by inverting the
     // dependencies edges across m_plugins. Called at the tail of
     // discoverInstalledModules() and processPlugin(), and by any other
-    // mutation that can change the graph (registerPlugin when deps were
-    // passed, registerDependencies). Must be called with m_mutex held
+    // mutation that can change the graph (including registerPlugin and
+    // registerDependencies). Must be called with m_mutex held
     // exclusively. Cost is O(N * avg_deps) — negligible for the module
     // counts we see and simpler than keeping incremental diffs.
     void recomputeDependentsLocked();
