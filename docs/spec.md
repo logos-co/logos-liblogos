@@ -124,6 +124,10 @@ Every module ships a `metadata.json` referenced by Qt's `Q_PLUGIN_METADATA` macr
 2. The module is removed from the loaded modules list
 3. Associated tokens and state are cleaned up
 
+#### Cascade Unloading
+
+`logos_core_unload_plugin_with_dependents()` unloads the named module together with every currently loaded module that transitively depends on it. Teardown order is leaves-first (dependents before dependencies) so no process is left briefly pointing at a terminated parent. The call is serialised with ordinary load/unload operations under a single lock span — a late-arriving load cannot interleave between tearing down the dependents and the target.
+
 ### Dependency Resolution
 
 - Dependencies are declared in each module's `metadata.json`
@@ -131,6 +135,7 @@ Every module ships a `metadata.json` referenced by Qt's `Q_PLUGIN_METADATA` macr
 - Circular dependencies are detected and reported as errors
 - Missing dependencies produce warnings
 - Dependencies are loaded in correct order before the requesting module
+- The core maintains an in-process dependency graph with both forward and reverse edges. The reverse edges are re-derived from the forward edges at the tail of every discovery or metadata-processing pass, so cascade unload and dependent queries answer from memory without re-reading manifests from disk.
 
 ### Process Monitoring
 
@@ -143,7 +148,7 @@ Every module ships a `metadata.json` referenced by Qt's `Q_PLUGIN_METADATA` macr
 
 The C API is designed to be safe for use from multi-threaded host applications:
 
-- **Load/unload operations** (`load_plugin`, `load_plugin_with_dependencies`, `unload_plugin`) are serialised — only one runs at a time, so rapid concurrent load/unload cycles on the same or different modules do not produce data races.
+- **Load/unload operations** (`load_plugin`, `load_plugin_with_dependencies`, `unload_plugin`, `unload_plugin_with_dependents`) are serialised — only one runs at a time, so rapid concurrent load/unload cycles on the same or different modules do not produce data races. The cascade variant holds the lock for its full leaves-first teardown.
 - **Read-only queries** (`get_known_plugins`, `get_loaded_plugins`) use a shared reader-writer lock and may execute concurrently with each other and with load/unload operations.
 - **Plugin discovery** (`refresh_plugins`) is protected by the registry's own write lock.
 - **Lifecycle functions** (`init`, `start`, `cleanup`) are not thread-safe and must be called from a single thread.
@@ -178,6 +183,9 @@ The platform supports two build variants:
 | `logos_core_load_plugin(name) → int` | Load a module by name. Returns 1 on success, 0 on failure. |
 | `logos_core_load_plugin_with_dependencies(name) → int` | Load a module and all its dependencies in correct order. Returns 1 if all succeed. |
 | `logos_core_unload_plugin(name) → int` | Terminate the module's process and remove it. Returns 1 on success. |
+| `logos_core_unload_plugin_with_dependents(name) → int` | Cascade unload: terminate the module together with every currently loaded transitive dependent, leaves-first. Returns 1 only if every step succeeded. |
+| `logos_core_get_module_dependencies(name, recursive) → char**` | Return null-terminated array of modules that `name` depends on (forward edges). With `recursive=true`, walks the forward dependency graph transitively via BFS. Unknown names yield an empty array. Caller must free. |
+| `logos_core_get_module_dependents(name, recursive) → char**` | Return null-terminated array of modules that depend on `name` (reverse edges). With `recursive=true`, walks the reverse dependency graph transitively via BFS. Unknown names yield an empty array. Caller must free. |
 | `logos_core_process_plugin(path) → char*` | Read a module file's metadata and register it as known without loading. Returns the module name or NULL. Caller must free. |
 
 ### Token and Monitoring

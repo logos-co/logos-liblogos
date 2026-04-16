@@ -7,6 +7,7 @@
 #include <mutex>
 #include <cassert>
 #include <cstring>
+#include <unordered_set>
 #include <boost/uuid/uuid.hpp>
 #include <boost/uuid/uuid_generators.hpp>
 #include <boost/uuid/uuid_io.hpp>
@@ -112,6 +113,27 @@ namespace {
 
         return true;
     }
+
+    // Unload helper that assumes loadMutex() is already held by the caller.
+    // unloadPluginWithDependents() needs a single lock span so a late-arriving
+    // load can't interleave between tearing down the dependents and the target.
+    bool unloadPluginInternalLocked(const std::string& name) {
+        if (!registryInstance().isLoaded(name)) {
+            spdlog::warn("Cannot unload plugin (not loaded): {}", name);
+            return false;
+        }
+
+        if (!PluginLauncher::hasProcess(name)) {
+            spdlog::warn("No process found for plugin: {}", name);
+            return false;
+        }
+
+        PluginLauncher::terminate(name);
+        registryInstance().markUnloaded(name);
+
+        spdlog::info("Plugin unloaded: {}", name);
+        return true;
+    }
 }
 
 namespace PluginManager {
@@ -215,6 +237,11 @@ namespace PluginManager {
 
     bool unloadPlugin(const char* pluginName) {
         std::lock_guard lock(loadMutex());
+        return unloadPluginInternalLocked(std::string(pluginName));
+    }
+
+    bool unloadPluginWithDependents(const char* pluginName) {
+        std::lock_guard lock(loadMutex());
 
         std::string name(pluginName);
 
@@ -223,16 +250,56 @@ namespace PluginManager {
             return false;
         }
 
-        if (!PluginLauncher::hasProcess(name)) {
-            spdlog::warn("No process found for plugin: {}", name);
-            return false;
+        // Build the set of plugins that need to come down: the target plus
+        // every currently-loaded recursive dependent. Materialise the loaded
+        // set into a hash once so the membership check below is O(1).
+        std::vector<std::string> loadedNames = registryInstance().loadedPluginNames();
+        std::unordered_set<std::string> loaded(loadedNames.begin(), loadedNames.end());
+
+        // Reverse dependency walk against the in-process graph. PluginRegistry
+        // keeps PluginInfo::dependents in sync with PluginInfo::dependencies
+        // across every discovery pass, so we don't need a disk-backed query.
+        std::vector<std::string> dependents = registryInstance().pluginDependents(name, /*recursive=*/true);
+
+        std::vector<std::string> teardownSet;
+        std::unordered_set<std::string> teardownSetMembers;
+        teardownSet.push_back(name);
+        teardownSetMembers.insert(name);
+        for (const std::string& d : dependents) {
+            if (loaded.count(d) && teardownSetMembers.insert(d).second)
+                teardownSet.push_back(d);
         }
 
-        PluginLauncher::terminate(name);
-        registryInstance().markUnloaded(name);
+        // Order leaves-first: resolve load-order for the teardown set, then
+        // reverse. Dependents come down before the plugins they depend on.
+        std::vector<std::string> loadOrder = DependencyResolver::resolve(
+            teardownSet,
+            [](const std::string& n) { return registryInstance().isKnown(n); },
+            [](const std::string& n) { return registryInstance().pluginDependencies(n); }
+        );
+        std::vector<std::string> teardownOrder;
+        std::unordered_set<std::string> teardownOrderMembers;
+        for (auto it = loadOrder.rbegin(); it != loadOrder.rend(); ++it) {
+            if (teardownSetMembers.count(*it) && teardownOrderMembers.insert(*it).second)
+                teardownOrder.push_back(*it);
+        }
+        // Safety net: any members not seen by the resolver (shouldn't happen,
+        // but don't silently skip them) go to the end.
+        for (const std::string& n : teardownSet) {
+            if (teardownOrderMembers.insert(n).second)
+                teardownOrder.push_back(n);
+        }
 
-        spdlog::info("Plugin unloaded: {}", name);
-        return true;
+        bool allSucceeded = true;
+        for (const std::string& n : teardownOrder) {
+            if (!registryInstance().isLoaded(n)) continue;
+            if (!unloadPluginInternalLocked(n)) {
+                spdlog::warn("Failed to unload plugin during cascade: {}", n);
+                allSucceeded = false;
+            }
+        }
+
+        return allSucceeded;
     }
 
     void terminateAll() {
@@ -275,4 +342,33 @@ namespace PluginManager {
         );
     }
 
+    std::vector<std::string> getDependencies(const std::string& name, bool recursive) {
+        // Filter to known modules to honour the documented contract.
+        // PluginInfo::dependencies holds whatever the manifest declares,
+        // including names that aren't installed. The reverse-edge accessor
+        // doesn't need this treatment because recomputeDependentsLocked only
+        // writes known names into PluginInfo::dependents by construction.
+        std::vector<std::string> deps = registryInstance().pluginDependencies(name, recursive);
+        std::vector<std::string> knownDeps;
+        knownDeps.reserve(deps.size());
+        for (const std::string& dep : deps) {
+            if (registryInstance().isKnown(dep))
+                knownDeps.push_back(dep);
+        }
+        return knownDeps;
+    }
+
+    std::vector<std::string> getDependents(const std::string& name, bool recursive) {
+        return registryInstance().pluginDependents(name, recursive);
+    }
+
+    char** getDependenciesCStr(const char* name, bool recursive) {
+        return toNullTerminatedArray(
+            getDependencies(std::string(name), recursive));
+    }
+
+    char** getDependentsCStr(const char* name, bool recursive) {
+        return toNullTerminatedArray(
+            getDependents(std::string(name), recursive));
+    }
 }
