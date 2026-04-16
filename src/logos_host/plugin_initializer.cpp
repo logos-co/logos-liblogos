@@ -1,7 +1,6 @@
 #include "plugin_initializer.h"
 #include "qt/qt_token_receiver.h"
 #include <QObject>
-#include <QString>
 #include <spdlog/spdlog.h>
 #include <filesystem>
 #include "interface.h"
@@ -17,11 +16,11 @@ using namespace ModuleLib;
 LogosModule loadPlugin(const std::string& pluginPath, const std::string& expectedName)
 {
     // Load the plugin using module_lib for abstraction
-    QString errorString;
-    LogosModule module = LogosModule::loadFromPath(QString::fromStdString(pluginPath), &errorString);
+    std::string errorString;
+    LogosModule module = LogosModule::loadFromPath(pluginPath, &errorString);
 
     if (!module.isValid()) {
-        spdlog::critical("Failed to load plugin: {}", errorString.toStdString());
+        spdlog::critical("Failed to load plugin: {}", errorString);
         return LogosModule();
     }
 
