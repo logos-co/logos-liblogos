@@ -6,7 +6,6 @@
 #include <shared_mutex>
 #include <algorithm>
 #include <unordered_set>
-#include <nlohmann/json.hpp>
 #include <module_lib/module_lib.h>
 #include <package_manager_lib.h>
 
@@ -44,9 +43,7 @@ void PluginRegistry::discoverInstalledModules() {
         }
     }
 
-    std::string jsonStr = pm.getInstalledModules();
-    nlohmann::json modules = nlohmann::json::parse(jsonStr, nullptr, false);
-    if (!modules.is_array()) return;
+    std::vector<InstalledPackage> modules = pm.getInstalledModules();
 
     // Collect names seen in this scan. Used after the upsert loop to prune
     // entries for plugins whose files disappeared (typical path: the user
@@ -56,19 +53,16 @@ void PluginRegistry::discoverInstalledModules() {
     // it, so the UI would never see the uninstall land.
     std::unordered_set<std::string> scannedNames;
 
-    for (const auto& mod : modules) {
-        std::string name = mod.value("name", "");
-        std::string mainFilePath = mod.value("mainFilePath", "");
-
-        if (name.empty() || mainFilePath.empty())
+    for (const InstalledPackage& mod : modules) {
+        if (mod.name.empty() || mod.mainFilePath.empty())
             continue;
 
-        std::string pluginName = processPluginInternal(mainFilePath);
+        std::string pluginName = processPluginInternal(mod.mainFilePath);
         if (pluginName.empty()) {
             // Skip entries with no extractable metadata — a bare
             // `scannedNames.insert` would record an empty string and the
             // prune loop would mis-identify still-present plugins as gone.
-            spdlog::warn("Failed to process plugin: {}", mainFilePath);
+            spdlog::warn("Failed to process plugin: {}", mod.mainFilePath);
             continue;
         }
         scannedNames.insert(pluginName);
