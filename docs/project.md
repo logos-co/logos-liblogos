@@ -102,9 +102,14 @@ logos-liblogos/
 | `loadPluginWithDependencies(name) → bool` | Resolve dependency tree, load in topological order |
 | `initializeCapabilityModule() → bool` | Load the built-in capability module if available |
 | `unloadPlugin(name) → bool` | Terminate module process and update registry |
+| `unloadPluginWithDependents(name) → bool` | Cascade unload: terminate the named module together with every currently loaded module that transitively depends on it, leaves-first |
 | `terminateAll()` | Terminate all running module processes |
 | `clear()` | Clear registry and reset all state |
 | `resolveDependencies(modules) → std::vector<std::string>` | Topological sort with circular dependency detection |
+| `getDependencies(name, recursive) → std::vector<std::string>` | Declared dependencies of `name` among known modules; walks the forward graph transitively when `recursive=true`. Cycle- and diamond-safe BFS |
+| `getDependents(name, recursive) → std::vector<std::string>` | Declared dependents of `name` among known modules; walks the reverse graph transitively when `recursive=true`. Reads from the in-process registry, no disk query |
+| `getDependenciesCStr(name, recursive) → char**` | C-string variant backing `logos_core_get_module_dependencies` |
+| `getDependentsCStr(name, recursive) → char**` | C-string variant backing `logos_core_get_module_dependents` |
 | `getLoadedPluginsCStr() → char**` | Return loaded module names as null-terminated C string array |
 | `getKnownPluginsCStr() → char**` | Return known module names as null-terminated C string array |
 | `isPluginLoaded(name) → bool` | Check if a module is currently loaded |
@@ -114,13 +119,15 @@ logos-liblogos/
 
 **Files:** `src/logos_core/plugin_registry.h`, `src/logos_core/plugin_registry.cpp`
 
-**Purpose:** In-memory registry of discovered and loaded modules. Stores plugin paths, dependencies, and load state. All public methods are thread-safe: mutating methods acquire a `std::unique_lock` on an internal `std::shared_mutex`; read-only methods acquire a `std::shared_lock`, allowing concurrent reads.
+**Purpose:** In-memory registry of discovered and loaded modules. Single source of truth for the dependency graph: stores plugin paths, forward dependencies, and the derived reverse edges (dependents). All public methods are thread-safe: mutating methods acquire a `std::unique_lock` on an internal `std::shared_mutex`; read-only methods acquire a `std::shared_lock`, allowing concurrent reads.
 
 **Data:**
-- `PluginInfo` struct — holds `path`, `dependencies` (`std::vector<std::string>`), `loaded` flag
+- `PluginInfo` struct — holds `path`, `dependencies` (`std::vector<std::string>`), `dependents` (`std::vector<std::string>`, reverse-edge cache), `loaded` flag
 - `std::unordered_map<std::string, PluginInfo> m_plugins` — plugin database keyed by name
 - `std::vector<std::string> m_pluginsDirs` — configured plugin directories
 - `std::shared_mutex m_mutex` — reader-writer lock protecting all fields
+
+**Dependency graph invariant:** `PluginInfo::dependents` mirrors the inverse of `dependencies` across all known plugins. `PluginRegistry` owns this invariant and maintains it by calling the private `recomputeDependentsLocked()` at the tail of every forward-edge mutation (`discoverInstalledModules`, `processPlugin`, `registerPlugin` when deps are passed, `registerDependencies`). Callers never populate `dependents` directly. This replaces the previous pattern of querying `PackageManagerLib::resolveDependents()` on disk — the registry is now the single authority for reverse-dep lookups, and `PluginManager::getDependents` / `unloadPluginWithDependents` read straight from it.
 
 **API (class `PluginRegistry`):**
 
@@ -129,13 +136,14 @@ logos-liblogos/
 | `setPluginsDir(dir)` | Clear and set single plugin directory |
 | `addPluginsDir(dir)` | Add to plugin directory list |
 | `pluginsDirs() → std::vector<std::string>` | Return configured directories |
-| `discoverInstalledModules()` | Scan directories, parse manifest.json files |
-| `processPlugin(path) → std::string` | Extract metadata from module file, register as known |
-| `registerPlugin(name, path, deps)` | Manually register a plugin |
-| `registerDependencies(name, deps)` | Set dependencies for a known plugin |
+| `discoverInstalledModules()` | Scan directories, parse manifest.json files; recomputes dependents at end |
+| `processPlugin(path) → std::string` | Extract metadata from module file, register as known; recomputes dependents at end |
+| `registerPlugin(name, path, deps)` | Manually register a plugin; recomputes dependents when deps are passed |
+| `registerDependencies(name, deps)` | Set dependencies for a known plugin; recomputes dependents |
 | `isKnown(name) → bool` | Plugin exists in registry |
 | `pluginPath(name) → std::string` | Get file path for a known plugin |
-| `pluginDependencies(name) → std::vector<std::string>` | Get dependency list for a plugin |
+| `pluginDependencies(name, recursive) → std::vector<std::string>` | Forward-edge lookup. `recursive=false` returns direct dependencies from `PluginInfo`; `recursive=true` walks the forward graph breadth-first (cycle/diamond safe) |
+| `pluginDependents(name, recursive) → std::vector<std::string>` | Reverse-edge lookup. `recursive=false` returns direct dependents from `PluginInfo`; `recursive=true` walks the reverse graph breadth-first (cycle/diamond safe) |
 | `knownPluginNames() → std::vector<std::string>` | All discovered module names |
 | `isLoaded(name) → bool` | Plugin is currently running |
 | `markLoaded(name)` / `markUnloaded(name)` | Update load state |
@@ -245,6 +253,9 @@ The public C API (`logos_core.h`) is the only exported interface. All functions 
 | `logos_core_load_plugin(name) → int` | Load a module (1 = success, 0 = failure) |
 | `logos_core_load_plugin_with_dependencies(name) → int` | Load module and dependencies in order |
 | `logos_core_unload_plugin(name) → int` | Unload a module |
+| `logos_core_unload_plugin_with_dependents(name) → int` | Cascade unload: terminate the module together with every loaded transitive dependent, leaves-first. Returns 1 only if every step succeeded |
+| `logos_core_get_module_dependencies(name, recursive) → char**` | Modules that `name` depends on (forward edges). `recursive=true` walks the forward graph transitively. Unknown names yield an empty array. Caller frees |
+| `logos_core_get_module_dependents(name, recursive) → char**` | Modules that depend on `name` (reverse edges). `recursive=true` walks transitively. Unknown names yield an empty array. Caller frees |
 | `logos_core_process_plugin(path) → char*` | Process plugin file, return name (caller frees) |
 | `logos_core_refresh_plugins()` | Re-scan plugin directories |
 
@@ -261,7 +272,7 @@ The public C API (`logos_core.h`) is the only exported interface. All functions 
 
 | Category | Guarantee |
 |----------|-----------|
-| `logos_core_load_plugin`, `logos_core_load_plugin_with_dependencies`, `logos_core_unload_plugin` | Serialised by a single internal mutex — safe to call concurrently from multiple threads |
+| `logos_core_load_plugin`, `logos_core_load_plugin_with_dependencies`, `logos_core_unload_plugin`, `logos_core_unload_plugin_with_dependents` | Serialised by a single internal mutex — safe to call concurrently from multiple threads. The cascade variant holds the lock for the entire leaves-first teardown so a late-arriving load can't interleave between tearing down the dependents and the target |
 | `logos_core_get_known_plugins`, `logos_core_get_loaded_plugins` | Protected by a shared reader-writer lock — safe to call concurrently with each other and with the mutating functions above |
 | `logos_core_refresh_plugins` | Protected by `PluginRegistry`'s reader-writer lock (write side) — safe for concurrent registry access but not serialised against load/unload |
 | `logos_core_init`, `logos_core_start`, `logos_core_cleanup` | Not thread-safe — must be called from a single thread during startup/shutdown |

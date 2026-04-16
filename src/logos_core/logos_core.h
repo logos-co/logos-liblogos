@@ -10,6 +10,9 @@
 
 #ifdef __cplusplus
 extern "C" {
+#else
+// `bool` in C requires <stdbool.h>. C++ has it built-in as a keyword.
+#include <stdbool.h>
 #endif
 
 // Initialize the logos core library
@@ -50,6 +53,25 @@ LOGOS_CORE_EXPORT int logos_core_load_plugin_with_dependencies(const char* plugi
 // Unload a specific plugin by name
 // Returns 1 if successful, 0 if failed
 LOGOS_CORE_EXPORT int logos_core_unload_plugin(const char* plugin_name);
+
+// Unload a plugin together with every loaded plugin that (transitively)
+// depends on it. Dependents come down first (leaves-first) so no process is
+// briefly pointing at a terminated parent. Returns 1 only if every step
+// succeeded.
+LOGOS_CORE_EXPORT int logos_core_unload_plugin_with_dependents(const char* plugin_name);
+
+// Return the modules that `module_name` depends on (forward edges).
+// If `recursive` is true, returns the full transitive dependency closure
+// reached by a breadth-first walk; the target itself is not included.
+// Unknown names yield a zero-length array (just a trailing NULL).
+// Returns a null-terminated array of module names that must be freed by the caller.
+LOGOS_CORE_EXPORT char** logos_core_get_module_dependencies(const char* module_name, bool recursive);
+
+// Return the modules that depend on `module_name` (reverse edges).
+// If `recursive` is true, returns the full transitive dependent closure.
+// Unknown names yield a zero-length array (just a trailing NULL).
+// Returns a null-terminated array of module names that must be freed by the caller.
+LOGOS_CORE_EXPORT char** logos_core_get_module_dependents(const char* module_name, bool recursive);
 
 // Process a plugin file and add it to known plugins
 // Returns the plugin name if successful, NULL if failed

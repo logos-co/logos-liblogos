@@ -62,6 +62,21 @@ int logos_core_unload_plugin(const char* plugin_name) {
     return PluginManager::unloadPlugin(plugin_name) ? 1 : 0;
 }
 
+int logos_core_unload_plugin_with_dependents(const char* plugin_name) {
+    if (!plugin_name) { fprintf(stderr, "logos_core_unload_plugin_with_dependents: plugin_name must not be null\n"); std::abort(); }
+    return PluginManager::unloadPluginWithDependents(plugin_name) ? 1 : 0;
+}
+
+char** logos_core_get_module_dependencies(const char* module_name, bool recursive) {
+    if (!module_name) { fprintf(stderr, "logos_core_get_module_dependencies: module_name must not be null\n"); std::abort(); }
+    return PluginManager::getDependenciesCStr(module_name, recursive);
+}
+
+char** logos_core_get_module_dependents(const char* module_name, bool recursive) {
+    if (!module_name) { fprintf(stderr, "logos_core_get_module_dependents: module_name must not be null\n"); std::abort(); }
+    return PluginManager::getDependentsCStr(module_name, recursive);
+}
+
 char* logos_core_process_plugin(const char* plugin_path) {
     if (!plugin_path) { fprintf(stderr, "logos_core_process_plugin: plugin_path must not be null\n"); std::abort(); }
     return PluginManager::processPluginCStr(plugin_path);
