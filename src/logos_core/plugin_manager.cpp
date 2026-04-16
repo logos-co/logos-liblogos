@@ -53,16 +53,14 @@ namespace {
             return;
 
         TokenManager& tokenManager = TokenManager::instance();
-        QString capabilityModuleToken = tokenManager.getToken("capability_module");
+        std::string capabilityModuleToken = tokenManager.getToken(std::string("capability_module"));
 
         static LogosAPI* s_coreApi = nullptr;
         if (!s_coreApi)
-            s_coreApi = new LogosAPI("core");
+            s_coreApi = new LogosAPI(std::string("core"));
 
-        LogosAPIClient* client = s_coreApi->getClient("capability_module");
-        if (!client->informModuleToken(capabilityModuleToken,
-                                       QString::fromStdString(name),
-                                       QString::fromStdString(token))) {
+        LogosAPIClient* client = s_coreApi->getClient(std::string("capability_module"));
+        if (!client->informModuleToken(capabilityModuleToken, name, token)) {
             spdlog::warn("Failed to register token with capability module for: {}", name);
         }
     }
@@ -106,8 +104,7 @@ namespace {
 
         registryInstance().markLoaded(name);
 
-        TokenManager::instance().saveToken(QString::fromStdString(name),
-                                           QString::fromStdString(authToken));
+        TokenManager::instance().saveToken(name, authToken);
 
         notifyCapabilityModule(name, authToken);
 

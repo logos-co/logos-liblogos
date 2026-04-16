@@ -3,7 +3,6 @@
 #include <logos_instance.h>
 #include <process_stats/process_stats.h>
 #include "token_manager.h"
-#include <QString>
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
@@ -70,12 +69,11 @@ char* logos_core_process_plugin(const char* plugin_path) {
 char* logos_core_get_token(const char* key) {
     if (!key) { fprintf(stderr, "logos_core_get_token: key must not be null\n"); std::abort(); }
 
-    QString token = TokenManager::instance().getToken(QString::fromUtf8(key));
-    if (token.isEmpty()) return nullptr;
+    std::string token = TokenManager::instance().getToken(std::string(key));
+    if (token.empty()) return nullptr;
 
-    std::string utf8 = token.toStdString();
-    char* result = new char[utf8.size() + 1];
-    memcpy(result, utf8.c_str(), utf8.size() + 1);
+    char* result = new char[token.size() + 1];
+    memcpy(result, token.c_str(), token.size() + 1);
     return result;
 }
 

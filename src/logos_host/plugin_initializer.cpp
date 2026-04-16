@@ -44,23 +44,20 @@ LogosAPI* initializeLogosAPI(const std::string& pluginName, QObject* plugin,
                               const std::string& pluginPath,
                               const std::string& instancePersistencePath)
 {
-    LogosAPI* logos_api = new LogosAPI(QString::fromStdString(pluginName), plugin);
-    logos_api->setProperty("modulePath", QString::fromStdString(
-        fs::absolute(fs::path(pluginPath)).parent_path().string()
-    ));
+    LogosAPI* logos_api = new LogosAPI(pluginName, plugin);
+    logos_api->setProperty("modulePath",
+        fs::absolute(fs::path(pluginPath)).parent_path().string());
 
     if (!instancePersistencePath.empty()) {
-        logos_api->setProperty("instancePersistencePath",
-                               QString::fromStdString(instancePersistencePath));
-        logos_api->setProperty("instanceId", QString::fromStdString(
-            fs::path(instancePersistencePath).filename().string()
-        ));
+        logos_api->setProperty("instancePersistencePath", instancePersistencePath);
+        logos_api->setProperty("instanceId",
+            fs::path(instancePersistencePath).filename().string());
     }
 
     bool success = logos_api->getProvider()->registerObject(basePlugin->name(), plugin);
     if (success) {
-        logos_api->getTokenManager()->saveToken("core", QString::fromStdString(authToken));
-        logos_api->getTokenManager()->saveToken("capability_module", QString::fromStdString(authToken));
+        logos_api->getTokenManager()->saveToken(std::string("core"), authToken);
+        logos_api->getTokenManager()->saveToken(std::string("capability_module"), authToken);
     } else {
         spdlog::critical("Failed to register plugin for remote access: {}", basePlugin->name().toStdString());
         delete plugin;
