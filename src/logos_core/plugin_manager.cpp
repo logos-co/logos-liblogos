@@ -3,10 +3,13 @@
 #include "dependency_resolver.h"
 #include "plugin_launcher.h"
 #include <spdlog/spdlog.h>
-#include <QUuid>
+#include <QString>
 #include <mutex>
 #include <cassert>
 #include <cstring>
+#include <boost/uuid/uuid.hpp>
+#include <boost/uuid/uuid_generators.hpp>
+#include <boost/uuid/uuid_io.hpp>
 #include "logos_api.h"
 #include "logos_api_client.h"
 #include "token_manager.h"
@@ -23,13 +26,13 @@ namespace {
         return mutex;
     }
 
-    QString& persistenceBasePath() {
-        static QString path;
+    std::string& persistenceBasePath() {
+        static std::string path;
         return path;
     }
 
-    char** toNullTerminatedArray(const QStringList& list) {
-        int count = list.size();
+    char** toNullTerminatedArray(const std::vector<std::string>& list) {
+        int count = static_cast<int>(list.size());
         if (count == 0) {
             char** result = new char*[1];
             result[0] = nullptr;
@@ -38,15 +41,14 @@ namespace {
 
         char** result = new char*[count + 1];
         for (int i = 0; i < count; ++i) {
-            QByteArray utf8Data = list[i].toUtf8();
-            result[i] = new char[utf8Data.size() + 1];
-            strcpy(result[i], utf8Data.constData());
+            result[i] = new char[list[i].size() + 1];
+            strcpy(result[i], list[i].c_str());
         }
         result[count] = nullptr;
         return result;
     }
 
-    void notifyCapabilityModule(const QString& name, const QString& token) {
+    void notifyCapabilityModule(const std::string& name, const std::string& token) {
         if (!registryInstance().isLoaded("capability_module"))
             return;
 
@@ -58,34 +60,38 @@ namespace {
             s_coreApi = new LogosAPI("core");
 
         LogosAPIClient* client = s_coreApi->getClient("capability_module");
-        if (!client->informModuleToken(capabilityModuleToken, name, token)) {
-            spdlog::warn("Failed to register token with capability module for: {}", name.toStdString());
+        if (!client->informModuleToken(capabilityModuleToken,
+                                       QString::fromStdString(name),
+                                       QString::fromStdString(token))) {
+            spdlog::warn("Failed to register token with capability module for: {}", name);
         }
     }
 
     bool loadPluginInternal(const char* pluginName) {
-        QString name = QString::fromUtf8(pluginName);
+        std::string name(pluginName);
 
         if (!registryInstance().isKnown(name)) {
-            spdlog::warn("Cannot load unknown plugin: {}", name.toStdString());
+            spdlog::warn("Cannot load unknown plugin: {}", name);
             return false;
         }
 
         if (registryInstance().isLoaded(name)) {
-            spdlog::warn("Plugin already loaded: {}", name.toStdString());
+            spdlog::warn("Plugin already loaded: {}", name);
             return false;
         }
 
-        QString pluginPath = registryInstance().pluginPath(name);
+        std::string pluginPath = registryInstance().pluginPath(name);
 
         // Resolve instance persistence path if a base path has been configured
-        QString instancePersistencePath;
-        if (!persistenceBasePath().isEmpty()) {
-            auto info = ModuleLib::InstancePersistence::resolveInstance(persistenceBasePath(), name);
-            instancePersistencePath = info.persistencePath;
+        std::string instancePersistencePath;
+        if (!persistenceBasePath().empty()) {
+            auto info = ModuleLib::InstancePersistence::resolveInstance(
+                QString::fromStdString(persistenceBasePath()),
+                QString::fromStdString(name));
+            instancePersistencePath = info.persistencePath.toStdString();
         }
 
-        auto onTerminated = [](const QString& n) {
+        auto onTerminated = [](const std::string& n) {
             registryInstance().markUnloaded(n);
         };
 
@@ -93,18 +99,19 @@ namespace {
                                     instancePersistencePath, onTerminated))
             return false;
 
-        QString authToken = QUuid::createUuid().toString(QUuid::WithoutBraces);
+        std::string authToken = boost::uuids::to_string(boost::uuids::random_generator()());
 
         if (!PluginLauncher::sendToken(name, authToken))
             return false;
 
         registryInstance().markLoaded(name);
 
-        TokenManager::instance().saveToken(name, authToken);
+        TokenManager::instance().saveToken(QString::fromStdString(name),
+                                           QString::fromStdString(authToken));
 
         notifyCapabilityModule(name, authToken);
 
-        spdlog::info("Plugin loaded: {}", name.toStdString());
+        spdlog::info("Plugin loaded: {}", name);
 
         return true;
     }
@@ -118,39 +125,38 @@ namespace PluginManager {
 
     void setPluginsDir(const char* plugins_dir) {
         assert(plugins_dir != nullptr);
-        registryInstance().setPluginsDir(QString(plugins_dir));
+        registryInstance().setPluginsDir(std::string(plugins_dir));
     }
 
     void addPluginsDir(const char* plugins_dir) {
         assert(plugins_dir != nullptr);
-        registryInstance().addPluginsDir(QString(plugins_dir));
+        registryInstance().addPluginsDir(std::string(plugins_dir));
     }
 
     void setPersistenceBasePath(const char* path) {
         assert(path != nullptr);
-        persistenceBasePath() = QString::fromUtf8(path);
+        persistenceBasePath() = std::string(path);
     }
 
     void discoverInstalledModules() {
         registryInstance().discoverInstalledModules();
     }
 
-    QString processPlugin(const QString& pluginPath) {
+    std::string processPlugin(const std::string& pluginPath) {
         return registryInstance().processPlugin(pluginPath);
     }
 
     char* processPluginCStr(const char* pluginPath) {
-        QString path = QString::fromUtf8(pluginPath);
+        std::string path(pluginPath);
 
-        QString pluginName = registryInstance().processPlugin(path);
-        if (pluginName.isEmpty()) {
-            spdlog::warn("Failed to process plugin: {}", path.toStdString());
+        std::string pluginName = registryInstance().processPlugin(path);
+        if (pluginName.empty()) {
+            spdlog::warn("Failed to process plugin: {}", path);
             return nullptr;
         }
 
-        QByteArray utf8Data = pluginName.toUtf8();
-        char* result = new char[utf8Data.size() + 1];
-        strcpy(result, utf8Data.constData());
+        char* result = new char[pluginName.size() + 1];
+        strcpy(result, pluginName.c_str());
         return result;
     }
 
@@ -162,28 +168,33 @@ namespace PluginManager {
     bool loadPluginWithDependencies(const char* pluginName) {
         std::lock_guard lock(loadMutex());
 
-        QString name = QString::fromUtf8(pluginName);
+        std::string name(pluginName);
 
-        QStringList requested;
-        requested.append(name);
+        std::vector<std::string> requested;
+        requested.push_back(name);
 
-        QStringList resolved = DependencyResolver::resolve(
+        std::vector<std::string> resolved = DependencyResolver::resolve(
             requested,
-            [](const QString& n) { return registryInstance().isKnown(n); },
-            [](const QString& n) { return registryInstance().pluginDependencies(n); }
+            [](const std::string& n) { return registryInstance().isKnown(n); },
+            [](const std::string& n) { return registryInstance().pluginDependencies(n); }
         );
 
-        if (resolved.isEmpty() || !resolved.contains(name)) {
-            spdlog::warn("Cannot resolve dependencies for: {}", name.toStdString());
+        bool nameFound = false;
+        for (const auto& r : resolved) {
+            if (r == name) { nameFound = true; break; }
+        }
+
+        if (resolved.empty() || !nameFound) {
+            spdlog::warn("Cannot resolve dependencies for: {}", name);
             return false;
         }
 
         bool allSucceeded = true;
-        for (const QString& moduleName : resolved) {
+        for (const std::string& moduleName : resolved) {
             if (registryInstance().isLoaded(moduleName))
                 continue;
-            if (!loadPluginInternal(moduleName.toUtf8().constData())) {
-                spdlog::warn("Failed to load plugin: {}", moduleName.toStdString());
+            if (!loadPluginInternal(moduleName.c_str())) {
+                spdlog::warn("Failed to load plugin: {}", moduleName);
                 allSucceeded = false;
             }
         }
@@ -208,22 +219,22 @@ namespace PluginManager {
     bool unloadPlugin(const char* pluginName) {
         std::lock_guard lock(loadMutex());
 
-        QString name = QString::fromUtf8(pluginName);
+        std::string name(pluginName);
 
         if (!registryInstance().isLoaded(name)) {
-            spdlog::warn("Cannot unload plugin (not loaded): {}", name.toStdString());
+            spdlog::warn("Cannot unload plugin (not loaded): {}", name);
             return false;
         }
 
         if (!PluginLauncher::hasProcess(name)) {
-            spdlog::warn("No process found for plugin: {}", name.toStdString());
+            spdlog::warn("No process found for plugin: {}", name);
             return false;
         }
 
         PluginLauncher::terminate(name);
         registryInstance().markUnloaded(name);
 
-        spdlog::info("Plugin unloaded: {}", name.toStdString());
+        spdlog::info("Plugin unloaded: {}", name);
         return true;
     }
 
@@ -244,26 +255,26 @@ namespace PluginManager {
     }
 
     char** getKnownPluginsCStr() {
-        QStringList known = registryInstance().knownPluginNames();
-        if (known.isEmpty()) {
+        std::vector<std::string> known = registryInstance().knownPluginNames();
+        if (known.empty()) {
             spdlog::warn("No known plugins to return");
         }
         return toNullTerminatedArray(known);
     }
 
-    bool isPluginLoaded(const QString& name) {
+    bool isPluginLoaded(const std::string& name) {
         return registryInstance().isLoaded(name);
     }
 
-    QHash<QString, qint64> getPluginProcessIds() {
+    std::unordered_map<std::string, int64_t> getPluginProcessIds() {
         return PluginLauncher::getAllProcessIds();
     }
 
-    QStringList resolveDependencies(const QStringList& requestedModules) {
+    std::vector<std::string> resolveDependencies(const std::vector<std::string>& requestedModules) {
         return DependencyResolver::resolve(
             requestedModules,
-            [](const QString& name) { return registryInstance().isKnown(name); },
-            [](const QString& name) { return registryInstance().pluginDependencies(name); }
+            [](const std::string& name) { return registryInstance().isKnown(name); },
+            [](const std::string& name) { return registryInstance().pluginDependencies(name); }
         );
     }
 

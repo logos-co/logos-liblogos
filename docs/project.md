@@ -58,7 +58,7 @@ logos-liblogos/
 | **C++17** | Implementation language |
 | **CMake 3.14+** | Build system |
 | **Qt 6** (Core, RemoteObjects) | Event loop, plugin system, IPC, meta-object system |
-| **Boost** (Process, Asio) | Subprocess management and async I/O |
+| **Boost** (Process, Asio, Uuid) | Subprocess management, async I/O, and UUID generation |
 | **nlohmann_json** | JSON parsing/serialization (replaces Qt JSON internally) |
 | **CLI11** | Command-line argument parsing (logos_host) |
 | **zstd** | Compression (build dependency) |
@@ -96,7 +96,7 @@ logos-liblogos/
 | `addPluginsDir(path)` | Add an additional plugin directory |
 | `setPersistenceBasePath(path)` | Set base directory for module instance persistence |
 | `discoverInstalledModules()` | Scan all plugin directories and register discovered modules |
-| `processPlugin(path) → QString` | Extract metadata from a module file, register as known |
+| `processPlugin(path) → std::string` | Extract metadata from a module file, register as known |
 | `processPluginCStr(path) → char*` | C-string variant of processPlugin |
 | `loadPlugin(name) → bool` | Load a module (spawns `logos_host` process, sends auth token) |
 | `loadPluginWithDependencies(name) → bool` | Resolve dependency tree, load in topological order |
@@ -104,11 +104,11 @@ logos-liblogos/
 | `unloadPlugin(name) → bool` | Terminate module process and update registry |
 | `terminateAll()` | Terminate all running module processes |
 | `clear()` | Clear registry and reset all state |
-| `resolveDependencies(modules) → QStringList` | Topological sort with circular dependency detection |
+| `resolveDependencies(modules) → std::vector<std::string>` | Topological sort with circular dependency detection |
 | `getLoadedPluginsCStr() → char**` | Return loaded module names as null-terminated C string array |
 | `getKnownPluginsCStr() → char**` | Return known module names as null-terminated C string array |
 | `isPluginLoaded(name) → bool` | Check if a module is currently loaded |
-| `getPluginProcessIds() → QHash` | Return module name → process ID mappings |
+| `getPluginProcessIds() → std::unordered_map<std::string, int64_t>` | Return module name → process ID mappings |
 
 ### PluginRegistry
 
@@ -117,9 +117,9 @@ logos-liblogos/
 **Purpose:** In-memory registry of discovered and loaded modules. Stores plugin paths, dependencies, and load state. All public methods are thread-safe: mutating methods acquire a `std::unique_lock` on an internal `std::shared_mutex`; read-only methods acquire a `std::shared_lock`, allowing concurrent reads.
 
 **Data:**
-- `PluginInfo` struct — holds `path`, `dependencies` (QStringList), `loaded` flag
-- `QHash<QString, PluginInfo> m_plugins` — plugin database keyed by name
-- `QStringList m_pluginsDirs` — configured plugin directories
+- `PluginInfo` struct — holds `path`, `dependencies` (`std::vector<std::string>`), `loaded` flag
+- `std::unordered_map<std::string, PluginInfo> m_plugins` — plugin database keyed by name
+- `std::vector<std::string> m_pluginsDirs` — configured plugin directories
 - `std::shared_mutex m_mutex` — reader-writer lock protecting all fields
 
 **API (class `PluginRegistry`):**
@@ -128,18 +128,18 @@ logos-liblogos/
 |--------|-------------|
 | `setPluginsDir(dir)` | Clear and set single plugin directory |
 | `addPluginsDir(dir)` | Add to plugin directory list |
-| `pluginsDirs() → QStringList` | Return configured directories |
+| `pluginsDirs() → std::vector<std::string>` | Return configured directories |
 | `discoverInstalledModules()` | Scan directories, parse manifest.json files |
-| `processPlugin(path) → QString` | Extract metadata from module file, register as known |
+| `processPlugin(path) → std::string` | Extract metadata from module file, register as known |
 | `registerPlugin(name, path, deps)` | Manually register a plugin |
 | `registerDependencies(name, deps)` | Set dependencies for a known plugin |
 | `isKnown(name) → bool` | Plugin exists in registry |
-| `pluginPath(name) → QString` | Get file path for a known plugin |
-| `pluginDependencies(name) → QStringList` | Get dependency list for a plugin |
-| `knownPluginNames() → QStringList` | All discovered module names |
+| `pluginPath(name) → std::string` | Get file path for a known plugin |
+| `pluginDependencies(name) → std::vector<std::string>` | Get dependency list for a plugin |
+| `knownPluginNames() → std::vector<std::string>` | All discovered module names |
 | `isLoaded(name) → bool` | Plugin is currently running |
 | `markLoaded(name)` / `markUnloaded(name)` | Update load state |
-| `loadedPluginNames() → QStringList` | Currently running module names |
+| `loadedPluginNames() → std::vector<std::string>` | Currently running module names |
 | `clearLoaded()` | Clear all loaded state |
 | `clear()` | Reset entire registry |
 
@@ -158,7 +158,7 @@ logos-liblogos/
 | `terminate(name)` | Kill a specific module process |
 | `terminateAll()` | Kill all module processes |
 | `hasProcess(name) → bool` | Check if a process exists for this module |
-| `getAllProcessIds() → QHash` | Map module names to process IDs |
+| `getAllProcessIds() → std::unordered_map<std::string, int64_t>` | Map module names to process IDs |
 
 ### DependencyResolver
 
@@ -170,7 +170,7 @@ logos-liblogos/
 
 | Method | Description |
 |--------|-------------|
-| `resolve(requested, isKnown, getDependencies) → QStringList` | Returns modules in load order (dependencies first) |
+| `resolve(requested, isKnown, getDependencies) → std::vector<std::string>` | Returns modules in load order (dependencies first) |
 
 Takes callback functions (`IsKnownFn`, `GetDependenciesFn`) so it has no coupling to the registry implementation.
 

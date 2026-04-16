@@ -1,48 +1,48 @@
 #ifndef PLUGIN_REGISTRY_H
 #define PLUGIN_REGISTRY_H
 
-#include <QString>
-#include <QStringList>
-#include <QHash>
+#include <string>
+#include <vector>
+#include <unordered_map>
 #include <shared_mutex>
 
 struct PluginInfo {
-    QString path;
-    QStringList dependencies;
+    std::string path;
+    std::vector<std::string> dependencies;
     bool loaded = false;
 };
 
 class PluginRegistry {
 public:
-    void setPluginsDir(const QString& dir);
-    void addPluginsDir(const QString& dir);
-    QStringList pluginsDirs() const;
+    void setPluginsDir(const std::string& dir);
+    void addPluginsDir(const std::string& dir);
+    std::vector<std::string> pluginsDirs() const;
 
     void discoverInstalledModules();
-    QString processPlugin(const QString& pluginPath);
+    std::string processPlugin(const std::string& pluginPath);
 
-    bool isKnown(const QString& name) const;
-    QString pluginPath(const QString& name) const;
-    QStringList pluginDependencies(const QString& name) const;
-    QStringList knownPluginNames() const;
-    void registerPlugin(const QString& name, const QString& path,
-                        const QStringList& dependencies = {});
-    void registerDependencies(const QString& name, const QStringList& dependencies);
+    bool isKnown(const std::string& name) const;
+    std::string pluginPath(const std::string& name) const;
+    std::vector<std::string> pluginDependencies(const std::string& name) const;
+    std::vector<std::string> knownPluginNames() const;
+    void registerPlugin(const std::string& name, const std::string& path,
+                        const std::vector<std::string>& dependencies = {});
+    void registerDependencies(const std::string& name, const std::vector<std::string>& dependencies);
 
-    bool isLoaded(const QString& name) const;
-    void markLoaded(const QString& name);
-    void markUnloaded(const QString& name);
-    QStringList loadedPluginNames() const;
+    bool isLoaded(const std::string& name) const;
+    void markLoaded(const std::string& name);
+    void markUnloaded(const std::string& name);
+    std::vector<std::string> loadedPluginNames() const;
     void clearLoaded();
 
     void clear();
 
 private:
-    QString processPluginInternal(const QString& pluginPath);
+    std::string processPluginInternal(const std::string& pluginPath);
 
     mutable std::shared_mutex m_mutex;
-    QStringList m_pluginsDirs;
-    QHash<QString, PluginInfo> m_plugins;
+    std::vector<std::string> m_pluginsDirs;
+    std::unordered_map<std::string, PluginInfo> m_plugins;
 };
 
 #endif // PLUGIN_REGISTRY_H

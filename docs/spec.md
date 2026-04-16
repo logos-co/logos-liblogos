@@ -196,11 +196,11 @@ The Core Manager is a built-in module exposing core functionality to remote modu
 | `setPluginsDirectory(directory)` | Set the module search directory. |
 | `start()` | Start the core's registry and load built-in modules. |
 | `cleanup()` | Unload all modules and shut down. |
-| `getLoadedPlugins() → QStringList` | Return names of loaded modules. |
+| `getLoadedPlugins() → std::vector<std::string>` | Return names of loaded modules. |
 | `getKnownPlugins() → QJsonArray` | Return all known modules with `loaded` flag. |
 | `loadPlugin(name) → bool` | Load a plugin by name. |
 | `unloadPlugin(name) → bool` | Unload a plugin by name. |
-| `processPlugin(filePath) → QString` | Read a plugin file's metadata and register it. |
+| `processPlugin(filePath) → std::string` | Read a plugin file's metadata and register it. |
 | `getPluginMethods(name) → QJsonArray` | Introspect a module's methods via Qt meta-object system. |
 
 ## Module Implementation
@@ -228,4 +228,4 @@ The SDK abstracts away registry lookup, token management, and async invocation.
 
 - **Signature support** — Signing and verifying module packages
 - **Cross-language modules** — Modules in languages other than C++
-- **Move away from Qt** — Logos API will move away from Qt. Process management has already been migrated from Qt (`QProcess`) to Boost.Process v2. Remaining Qt dependencies (event loop, plugin loading, remote objects) should be similarly abstracted from liblogos's perspective.
+- **Move away from Qt** — Logos API will move away from Qt. Process management has been migrated from Qt (`QProcess`) to Boost.Process v2, and Qt container/utility types (`QString`, `QStringList`, `QHash`, `QDir`, `QFile`, `QUuid`) have been replaced with standard C++ and Boost equivalents (`std::string`, `std::vector`, `std::unordered_map`, `std::filesystem`, `boost::uuids`). Remaining Qt dependencies (event loop, plugin loading, remote objects) should be similarly abstracted from liblogos's perspective.

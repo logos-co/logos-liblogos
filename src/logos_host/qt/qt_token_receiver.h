@@ -1,10 +1,10 @@
 #ifndef QT_TOKEN_RECEIVER_H
 #define QT_TOKEN_RECEIVER_H
 
-#include <QString>
+#include <string>
 
 namespace QtTokenReceiver {
-    QString receiveAuthToken(const QString& pluginName);
+    std::string receiveAuthToken(const std::string& pluginName);
 }
 
 #endif // QT_TOKEN_RECEIVER_H
