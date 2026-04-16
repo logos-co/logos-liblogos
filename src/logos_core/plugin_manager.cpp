@@ -3,7 +3,6 @@
 #include "dependency_resolver.h"
 #include "plugin_launcher.h"
 #include <spdlog/spdlog.h>
-#include <QString>
 #include <mutex>
 #include <cassert>
 #include <cstring>
@@ -85,9 +84,9 @@ namespace {
         std::string instancePersistencePath;
         if (!persistenceBasePath().empty()) {
             auto info = ModuleLib::InstancePersistence::resolveInstance(
-                QString::fromStdString(persistenceBasePath()),
-                QString::fromStdString(name));
-            instancePersistencePath = info.persistencePath.toStdString();
+                persistenceBasePath(),
+                name);
+            instancePersistencePath = info.persistencePath;
         }
 
         auto onTerminated = [](const std::string& n) {
