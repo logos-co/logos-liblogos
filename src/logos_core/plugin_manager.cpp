@@ -3,11 +3,13 @@
 #include "dependency_resolver.h"
 #include "plugin_launcher.h"
 #include <spdlog/spdlog.h>
-#include <QUuid>
 #include <QString>
 #include <mutex>
 #include <cassert>
 #include <cstring>
+#include <boost/uuid/uuid.hpp>
+#include <boost/uuid/uuid_generators.hpp>
+#include <boost/uuid/uuid_io.hpp>
 #include "logos_api.h"
 #include "logos_api_client.h"
 #include "token_manager.h"
@@ -97,7 +99,7 @@ namespace {
                                     instancePersistencePath, onTerminated))
             return false;
 
-        std::string authToken = QUuid::createUuid().toString(QUuid::WithoutBraces).toStdString();
+        std::string authToken = boost::uuids::to_string(boost::uuids::random_generator()());
 
         if (!PluginLauncher::sendToken(name, authToken))
             return false;
