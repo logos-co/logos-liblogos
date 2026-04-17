@@ -96,23 +96,26 @@ set(LOGOS_CORE_SOURCES
     logos_core/dependency_resolver.h
     logos_core/plugin_manager.cpp
     logos_core/plugin_manager.h
-    logos_core/plugin_launcher.cpp
-    logos_core/plugin_launcher.h
-    logos_core/process_manager.cpp
-    logos_core/process_manager.h
+    logos_core/module_runtime.h
+    logos_core/runtime_registry.cpp
+    logos_core/runtime_registry.h
+    runtimes/qt_subprocess/qt_subprocess_runtime.cpp
+    runtimes/qt_subprocess/qt_subprocess_runtime.h
+    runtimes/qt_subprocess/subprocess_manager.cpp
+    runtimes/qt_subprocess/subprocess_manager.h
 )
 
 # Define the logos host sources
 set(LOGOS_HOST_SOURCES
-    logos_host/logos_host.cpp
-    logos_host/command_line_parser.cpp
-    logos_host/command_line_parser.h
-    logos_host/plugin_initializer.cpp
-    logos_host/plugin_initializer.h
-    logos_host/qt/qt_app.cpp
-    logos_host/qt/qt_app.h
-    logos_host/qt/qt_token_receiver.cpp
-    logos_host/qt/qt_token_receiver.h
+    runtimes/qt_subprocess/host/main.cpp
+    runtimes/qt_subprocess/host/command_line_parser.cpp
+    runtimes/qt_subprocess/host/command_line_parser.h
+    runtimes/qt_subprocess/host/plugin_initializer.cpp
+    runtimes/qt_subprocess/host/plugin_initializer.h
+    runtimes/qt_subprocess/host/qt/qt_app.cpp
+    runtimes/qt_subprocess/host/qt/qt_app.h
+    runtimes/qt_subprocess/host/qt/qt_token_receiver.cpp
+    runtimes/qt_subprocess/host/qt/qt_token_receiver.h
 )
 
 # Create the logos core library
@@ -170,6 +173,7 @@ target_link_libraries(logos_core PUBLIC
 target_include_directories(logos_core PRIVATE
     ${CMAKE_CURRENT_SOURCE_DIR}
     ${CMAKE_CURRENT_SOURCE_DIR}/logos_core
+    ${CMAKE_CURRENT_SOURCE_DIR}/runtimes
     ${Qt${QT_VERSION_MAJOR}_INCLUDE_DIRS}
 )
 
@@ -234,7 +238,7 @@ target_link_libraries(logos_host PRIVATE
 # Include directories for the logos host application
 target_include_directories(logos_host PRIVATE
     ${CMAKE_CURRENT_SOURCE_DIR}
-    ${CMAKE_CURRENT_SOURCE_DIR}/logos_host
+    ${CMAKE_CURRENT_SOURCE_DIR}/runtimes/qt_subprocess/host
     ${Qt${QT_VERSION_MAJOR}_INCLUDE_DIRS}
 )
 

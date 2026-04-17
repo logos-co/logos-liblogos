@@ -14,27 +14,33 @@ logos-liblogos/
 │   └── project.md                       # This document
 ├── src/
 │   ├── CMakeLists.txt                   # Source build configuration
-│   ├── logos_core/                      # Core library implementation
+│   ├── logos_core/                      # Core library implementation (Qt-free)
 │   │   ├── logos_core.h                 # C API header (public)
 │   │   ├── logos_core.cpp               # C API implementation
-│   │   ├── plugin_manager.h/cpp         # Facade: orchestrates registry, launcher, resolver
+│   │   ├── plugin_manager.h/cpp         # Facade: orchestrates registry, runtime, resolver
 │   │   ├── plugin_registry.h/cpp        # In-memory registry of discovered/loaded modules
-│   │   ├── plugin_launcher.h/cpp        # Spawns and manages logos_host subprocesses
-│   │   ├── dependency_resolver.h/cpp    # Topological sort with circular dependency detection
-│   │   └── process_manager.h/cpp        # Boost.Process-based subprocess management
-│   └── logos_host/                      # Module subprocess host
-│       ├── logos_host.cpp               # Host entry point
-│       ├── command_line_parser.h/cpp    # CLI argument parsing (--name, --path)
-│       ├── plugin_initializer.h/cpp     # Plugin loading and token setup
-│       └── qt/                          # Qt-specific host implementations
-│           ├── qt_app.h/cpp             # Qt application setup for host
-│           └── qt_token_receiver.h/cpp  # Auth token reception via local socket
+│   │   ├── module_runtime.h             # Abstract ModuleRuntime interface + ModuleDescriptor
+│   │   ├── runtime_registry.h/cpp       # Registry for ModuleRuntime implementations
+│   │   └── dependency_resolver.h/cpp    # Topological sort with circular dependency detection
+│   └── runtimes/                        # Runtime implementations (extensible)
+│       └── qt_subprocess/               # Qt-based subprocess runtime (current default)
+│           ├── qt_subprocess_runtime.h/cpp  # ModuleRuntime impl: spawns logos_host processes
+│           ├── subprocess_manager.h/cpp     # Boost.Process-based subprocess management
+│           └── host/                    # logos_host executable sources
+│               ├── main.cpp             # Host entry point
+│               ├── command_line_parser.h/cpp  # CLI argument parsing (--name, --path)
+│               ├── plugin_initializer.h/cpp   # Plugin loading and token setup
+│               └── qt/                  # Qt-specific host implementations
+│                   ├── qt_app.h/cpp             # Qt application setup for host
+│                   └── qt_token_receiver.h/cpp  # Auth token reception via local socket
 ├── tests/                               # Google Test suite
 │   ├── CMakeLists.txt                   # Test build configuration
-│   ├── test_app_lifecycle.cpp           # C API lifecycle tests (init, exec, cleanup, processEvents)
+│   ├── test_app_lifecycle.cpp           # C API lifecycle tests (init, exec, cleanup)
 │   ├── test_plugin_manager.cpp          # PluginManager + PluginRegistry tests
-│   ├── test_process_manager.cpp         # ProcessManager lifecycle and subprocess tests
-│   ├── test_dependency_resolver.cpp      # DependencyResolver tests
+│   ├── test_subprocess_manager.cpp      # SubprocessManager lifecycle and subprocess tests
+│   ├── test_runtime_registry.cpp        # RuntimeRegistry: registration, selection, fan-out
+│   ├── test_module_runtime_abstraction.cpp  # PluginManager ↔ ModuleRuntime routing tests
+│   ├── test_dependency_resolver.cpp     # DependencyResolver tests
 │   ├── test_process_stats.cpp           # ProcessStats tests (external process-stats lib)
 │   ├── test_token_exchange.cpp          # Token exchange via Unix domain socket tests
 │   └── qt_test_adapter.h               # Qt test utilities/adapter header
@@ -83,7 +89,7 @@ logos-liblogos/
 
 **Files:** `src/logos_core/plugin_manager.h`, `src/logos_core/plugin_manager.cpp`
 
-**Purpose:** Thin facade that orchestrates `PluginRegistry`, `PluginLauncher`, and `DependencyResolver`. Provides the C++-level API for module lifecycle management. Each module runs in a separate `logos_host` process for isolation.
+**Purpose:** Thin facade that orchestrates `PluginRegistry`, `RuntimeRegistry`, and `DependencyResolver`. Provides the C++-level API for module lifecycle management. How a module is loaded (subprocess, in-process, WASM, etc.) is determined by the registered `ModuleRuntime` implementation — `PluginManager` only decides *what* to load and *when*.
 
 **Thread safety:** `loadPlugin`, `loadPluginWithDependencies`, and `unloadPlugin` are serialised by a static `loadMutex()` (one load/unload at a time). `discoverInstalledModules` delegates to `PluginRegistry` which has its own reader-writer lock.
 
@@ -92,28 +98,29 @@ logos-liblogos/
 | Method | Description |
 |--------|-------------|
 | `registry() → PluginRegistry&` | Access the shared plugin registry |
+| `runtimes() → RuntimeRegistry&` | Access the shared runtime registry (for installing custom runtimes) |
 | `setPluginsDir(path)` | Set the primary plugin directory (clears existing) |
 | `addPluginsDir(path)` | Add an additional plugin directory |
 | `setPersistenceBasePath(path)` | Set base directory for module instance persistence |
 | `discoverInstalledModules()` | Scan all plugin directories and register discovered modules |
 | `processPlugin(path) → std::string` | Extract metadata from a module file, register as known |
 | `processPluginCStr(path) → char*` | C-string variant of processPlugin |
-| `loadPlugin(name) → bool` | Load a module (spawns `logos_host` process, sends auth token) |
+| `loadPlugin(name) → bool` | Load a module via the selected `ModuleRuntime`, sends auth token |
 | `loadPluginWithDependencies(name) → bool` | Resolve dependency tree, load in topological order |
 | `initializeCapabilityModule() → bool` | Load the built-in capability module if available |
-| `unloadPlugin(name) → bool` | Terminate module process and update registry |
+| `unloadPlugin(name) → bool` | Terminate module via its runtime and update registry |
 | `unloadPluginWithDependents(name) → bool` | Cascade unload: terminate the named module together with every currently loaded module that transitively depends on it, leaves-first |
-| `terminateAll()` | Terminate all running module processes |
+| `terminateAll()` | Terminate all running modules across all runtimes |
 | `clear()` | Clear registry and reset all state |
 | `resolveDependencies(modules) → std::vector<std::string>` | Topological sort with circular dependency detection |
-| `getDependencies(name, recursive) → std::vector<std::string>` | Declared dependencies of `name` among known modules; walks the forward graph transitively when `recursive=true`. Cycle- and diamond-safe BFS |
-| `getDependents(name, recursive) → std::vector<std::string>` | Declared dependents of `name` among known modules; walks the reverse graph transitively when `recursive=true`. Reads from the in-process registry, no disk query |
+| `getDependencies(name, recursive) → std::vector<std::string>` | Declared dependencies of `name` among known modules |
+| `getDependents(name, recursive) → std::vector<std::string>` | Declared dependents of `name` among known modules |
 | `getDependenciesCStr(name, recursive) → char**` | C-string variant backing `logos_core_get_module_dependencies` |
 | `getDependentsCStr(name, recursive) → char**` | C-string variant backing `logos_core_get_module_dependents` |
 | `getLoadedPluginsCStr() → char**` | Return loaded module names as null-terminated C string array |
 | `getKnownPluginsCStr() → char**` | Return known module names as null-terminated C string array |
 | `isPluginLoaded(name) → bool` | Check if a module is currently loaded |
-| `getPluginProcessIds() → std::unordered_map<std::string, int64_t>` | Return module name → process ID mappings |
+| `getPluginProcessIds() → std::unordered_map<std::string, int64_t>` | Return module name → process ID mappings (aggregated from all runtimes) |
 
 ### PluginRegistry
 
@@ -122,7 +129,7 @@ logos-liblogos/
 **Purpose:** In-memory registry of discovered and loaded modules. Single source of truth for the dependency graph: stores plugin paths, forward dependencies, and the derived reverse edges (dependents). All public methods are thread-safe: mutating methods acquire a `std::unique_lock` on an internal `std::shared_mutex`; read-only methods acquire a `std::shared_lock`, allowing concurrent reads.
 
 **Data:**
-- `PluginInfo` struct — holds `path`, `dependencies` (`std::vector<std::string>`), `dependents` (`std::vector<std::string>`, reverse-edge cache), `loaded` flag
+- `PluginInfo` struct — holds `path`, `dependencies`, `dependents` (reverse-edge cache), `loaded` flag, `std::shared_ptr<LogosCore::ModuleRuntime> runtime` (runtime that loaded this module, nullptr for externally-marked), `LogosCore::LoadedModuleHandle handle` (runtime-private state)
 - `std::unordered_map<std::string, PluginInfo> m_plugins` — plugin database keyed by name
 - `std::vector<std::string> m_pluginsDirs` — configured plugin directories
 - `std::shared_mutex m_mutex` — reader-writer lock protecting all fields
@@ -146,57 +153,82 @@ logos-liblogos/
 | `pluginDependents(name, recursive) → std::vector<std::string>` | Reverse-edge lookup. `recursive=false` returns direct dependents from `PluginInfo`; `recursive=true` walks the reverse graph breadth-first (cycle/diamond safe) |
 | `knownPluginNames() → std::vector<std::string>` | All discovered module names |
 | `isLoaded(name) → bool` | Plugin is currently running |
-| `markLoaded(name)` / `markUnloaded(name)` | Update load state |
+| `markLoaded(name)` / `markUnloaded(name)` | Update load state (markLoaded without runtime is for test/external use) |
+| `markLoaded(name, runtime, handle)` | Mark as loaded and record which runtime is responsible |
+| `runtimeFor(name) → shared_ptr<ModuleRuntime>` | Return the runtime that loaded this module (or nullptr) |
 | `loadedPluginNames() → std::vector<std::string>` | Currently running module names |
 | `clearLoaded()` | Clear all loaded state |
 | `clear()` | Reset entire registry |
 
-### PluginLauncher
+### ModuleRuntime (Abstract Interface)
 
-**Files:** `src/logos_core/plugin_launcher.h`, `src/logos_core/plugin_launcher.cpp`
+**File:** `src/logos_core/module_runtime.h`
 
-**Purpose:** Spawn and manage module subprocesses. Delegates to the process manager (Boost.Process v2 / Boost.Asio) for subprocess operations.
+**Purpose:** Qt-free abstract interface for module loading strategies. Decouples `PluginManager` from any specific module format, isolation mechanism, or transport layer. Each implementation decides *how* a module is loaded, isolated, and communicated with.
 
-**API (namespace `PluginLauncher`):**
+**Data structures:**
 
-| Method | Description |
-|--------|-------------|
-| `launch(name, path, dirs, instancePersistencePath, onTerminated) → bool` | Spawn `logos_host` process for a module |
-| `sendToken(name, token) → bool` | Send auth token to module process via stdin |
-| `terminate(name)` | Kill a specific module process |
-| `terminateAll()` | Kill all module processes |
-| `hasProcess(name) → bool` | Check if a process exists for this module |
-| `getAllProcessIds() → std::unordered_map<std::string, int64_t>` | Map module names to process IDs |
+- `ModuleDescriptor` — describes a module to load: `name`, `path`, `format` (`"qt-plugin"`, `"wasm"`, etc.), `dependencies`, `instancePersistencePath`, `pluginsDirs`, `rawMetadata` (JSON), `runtimeConfig` (JSON, optional, e.g. `{"id":"docker","image":"..."}`)
+- `LoadedModuleHandle` — returned by `load()`: `name`, `pid` (-1 for non-process runtimes), `endpoint` (transport-specific URI), `opaque` (`std::any` for runtime-private state)
 
-### DependencyResolver
-
-**Files:** `src/logos_core/dependency_resolver.h`, `src/logos_core/dependency_resolver.cpp`
-
-**Purpose:** Compute topological sort of module dependencies using Kahn's algorithm. Detects circular dependencies and missing modules.
-
-**API (namespace `DependencyResolver`):**
+**Interface (`LogosCore::ModuleRuntime`):**
 
 | Method | Description |
 |--------|-------------|
-| `resolve(requested, isKnown, getDependencies) → std::vector<std::string>` | Returns modules in load order (dependencies first) |
+| `id() → std::string` | Unique runtime identifier (e.g. `"qt-subprocess"`, `"inproc"`, `"extism"`) |
+| `canHandle(desc) → bool` | Return true if this runtime can load the described module |
+| `load(desc, onTerminated, out) → bool` | Load the module; populate `out`, call `onTerminated` when it exits |
+| `sendToken(name, token) → bool` | Deliver the auth token to the loaded module |
+| `terminate(name)` | Terminate a single module by name |
+| `terminateAll()` | Terminate all modules managed by this runtime |
+| `hasModule(name) → bool` | True if this runtime has an active entry for the module |
+| `pid(name) → optional<int64_t>` | PID of the module (default: nullopt for non-process runtimes) |
+| `getAllPids() → unordered_map` | All (name → pid) entries (default: empty) |
 
-Takes callback functions (`IsKnownFn`, `GetDependenciesFn`) so it has no coupling to the registry implementation.
+### RuntimeRegistry
 
-### Process Manager
+**Files:** `src/logos_core/runtime_registry.h`, `src/logos_core/runtime_registry.cpp`
 
-**Files:** `src/logos_core/process_manager.h`, `src/logos_core/process_manager.cpp`
+**Purpose:** Holds all registered `ModuleRuntime` instances and selects the right one for a given `ModuleDescriptor`. Thread-safe (protected by an internal mutex).
 
-**Purpose:** Manages module subprocesses using Boost.Process v2 and Boost.Asio. Replaces the former Qt-based `QProcess` implementation.
+**Selection order:**
+1. If `desc.runtimeConfig["id"]` is set, return the matching runtime by id (no fallback).
+2. Otherwise, return the first registered runtime whose `canHandle(desc)` returns true.
+3. Returns `nullptr` if no runtime matches.
 
-- Uses `boost::process::v2::process` for subprocess spawning and `boost::asio::io_context` for async I/O
-- Background `io_context` thread with work guard for non-blocking async read and wait callbacks
+**API (class `LogosCore::RuntimeRegistry`):**
+
+| Method | Description |
+|--------|-------------|
+| `registerRuntime(runtime)` | Add a runtime; consulted in registration order for `canHandle` |
+| `select(desc) → shared_ptr<ModuleRuntime>` | Pick the right runtime for a descriptor |
+| `terminateAll()` | Fan-out `terminateAll()` to every registered runtime |
+| `getAllPids() → unordered_map` | Aggregate `getAllPids()` across all runtimes |
+| `clearForTests()` | Remove all runtimes (testing hook for installing fakes) |
+
+### QtSubprocessRuntime
+
+**Files:** `src/runtimes/qt_subprocess/qt_subprocess_runtime.h`, `src/runtimes/qt_subprocess/qt_subprocess_runtime.cpp`
+
+**Purpose:** Concrete `ModuleRuntime` implementation for the existing Qt-subprocess strategy. Spawns one `logos_host` process per module, delivers the auth token via a Unix-domain socket, and communicates via Qt Remote Objects. Registered as the default runtime.
+
+**id:** `"qt-subprocess"`
+
+**canHandle:** Accepts `format == "qt-plugin"` or empty format.
+
+### SubprocessManager
+
+**Files:** `src/runtimes/qt_subprocess/subprocess_manager.h`, `src/runtimes/qt_subprocess/subprocess_manager.cpp`
+
+**Purpose:** Manages module subprocesses using Boost.Process v2 and Boost.Asio. Used internally by `QtSubprocessRuntime`.
+
+- Background `io_context` thread with work guard for non-blocking async I/O
 - Async read loop for stdout/stderr with line buffering
 - Synchronous kill with graceful SIGTERM → SIGKILL escalation (5s timeout)
-- Unix domain socket for token delivery (matches previous `QLocalSocket` behavior)
-- A `std::mutex` (`s_processesMutex`) protects the `s_processes` map against concurrent access
-- Shared pointer-based lifetime management for safe async callback handling
+- Unix domain socket for token delivery
+- Thread-safe `s_processesMutex` protects the process map
 
-**API (namespace `QtProcessManager`):**
+**API (namespace `SubprocessManager`):**
 
 | Method | Description |
 |--------|-------------|
@@ -209,6 +241,24 @@ Takes callback functions (`IsKnownFn`, `GetDependenciesFn`) so it has no couplin
 | `getAllProcessIds() → unordered_map` | Map all process names to PIDs |
 | `registerProcess(name)` | Register a placeholder process entry |
 | `clearAll()` | Clear all process entries |
+
+### LogosHost
+
+**Files:** `src/runtimes/qt_subprocess/host/main.cpp`, `src/runtimes/qt_subprocess/host/command_line_parser.h/cpp`, `src/runtimes/qt_subprocess/host/plugin_initializer.h/cpp`, `src/runtimes/qt_subprocess/host/qt/qt_app.h/cpp`, `src/runtimes/qt_subprocess/host/qt/qt_token_receiver.h/cpp`
+
+**Purpose:** Lightweight subprocess that loads a single module. Part of the `qt_subprocess` runtime implementation. Parses `--name`, `--path`, and optional `--instance-persistence-path` arguments, loads the plugin, authenticates via token from the core, registers the module with the remote object registry, and runs the Qt event loop.
+
+**Files:** `src/logos_core/dependency_resolver.h`, `src/logos_core/dependency_resolver.cpp`
+
+**Purpose:** Compute topological sort of module dependencies using Kahn's algorithm. Detects circular dependencies and missing modules.
+
+**API (namespace `DependencyResolver`):**
+
+| Method | Description |
+|--------|-------------|
+| `resolve(requested, isKnown, getDependencies) → std::vector<std::string>` | Returns modules in load order (dependencies first) |
+
+Takes callback functions (`IsKnownFn`, `GetDependenciesFn`) so it has no coupling to the registry implementation.
 
 ### ProcessStats (external dependency)
 
@@ -225,9 +275,9 @@ Takes callback functions (`IsKnownFn`, `GetDependenciesFn`) so it has no couplin
 
 ### LogosHost
 
-**Files:** `src/logos_host/logos_host.cpp`, `src/logos_host/command_line_parser.h/cpp`, `src/logos_host/plugin_initializer.h/cpp`, `src/logos_host/qt/qt_app.h/cpp`, `src/logos_host/qt/qt_token_receiver.h/cpp`
+**Files:** `src/runtimes/qt_subprocess/host/main.cpp` (and sibling files under `src/runtimes/qt_subprocess/host/`)
 
-**Purpose:** Lightweight subprocess that loads a single module. Parses `--name`, `--path`, and optional `--instance-persistence-path` arguments, loads the plugin, authenticates via token from the core, registers the module with the remote object registry, and runs the Qt event loop.
+**Purpose:** Lightweight subprocess that loads a single module. Part of the `qt_subprocess` runtime. Parses `--name`, `--path`, and optional `--instance-persistence-path` arguments, loads the plugin, authenticates via token from the core, registers the module with the remote object registry, and runs the Qt event loop. Lives under `src/runtimes/qt_subprocess/host/` so it is co-located with its runtime implementation.
 
 ## C API
 

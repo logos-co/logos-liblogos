@@ -1,4 +1,4 @@
-#include "process_manager.h"
+#include "subprocess_manager.h"
 
 #include <boost/asio/connect_pipe.hpp>
 #include <boost/asio/executor_work_guard.hpp>
@@ -63,19 +63,19 @@ IoRuntime& ioRuntime() {
 // ---------------------------------------------------------------------------
 
 struct ProcessEntry {
-    bp2::process                           process;
-    asio::readable_pipe                    pipe;
-    QtProcessManager::ProcessCallbacks     callbacks;
-    std::string                            name;
-    std::array<char, 4096>                 read_buf{};
-    std::string                            line_buf;
+    bp2::process                            process;
+    asio::readable_pipe                     pipe;
+    SubprocessManager::ProcessCallbacks     callbacks;
+    std::string                             name;
+    std::array<char, 4096>                  read_buf{};
+    std::string                             line_buf;
     // Set by async_wait callback; used by syncKill to avoid double-waitpid.
-    std::atomic<bool>                exited{false};
+    std::atomic<bool>                 exited{false};
     // Set by terminateProcess/terminateAll to suppress onFinished callback.
-    std::atomic<bool>                cancelled{false};
+    std::atomic<bool>                 cancelled{false};
 
     ProcessEntry(bp2::process proc, asio::readable_pipe rp,
-                 const std::string& n, const QtProcessManager::ProcessCallbacks& cb)
+                 const std::string& n, const SubprocessManager::ProcessCallbacks& cb)
         : process(std::move(proc))
         , pipe(std::move(rp))
         , name(n)
@@ -210,11 +210,11 @@ void syncKill(std::shared_ptr<ProcessEntry> entry) {
     };
 
     if (!wait(std::chrono::seconds(5))) {
-        fprintf(stderr, "[QtProcessManager] Process did not terminate gracefully, killing: %s\n",
+        fprintf(stderr, "[SubprocessManager] Process did not terminate gracefully, killing: %s\n",
                 entry->name.c_str());
         entry->process.terminate(ec); // SIGKILL
         if (!wait(std::chrono::seconds(2))) {
-            fprintf(stderr, "[QtProcessManager] Process did not respond to SIGKILL: %s\n",
+            fprintf(stderr, "[SubprocessManager] Process did not respond to SIGKILL: %s\n",
                     entry->name.c_str());
         }
     }
@@ -223,10 +223,10 @@ void syncKill(std::shared_ptr<ProcessEntry> entry) {
 } // anonymous namespace
 
 // ===========================================================================
-// QtProcessManager public API
+// SubprocessManager public API
 // ===========================================================================
 
-namespace QtProcessManager {
+namespace SubprocessManager {
 
 bool startProcess(const std::string& name, const std::string& executable,
                   const std::vector<std::string>& arguments,
@@ -241,7 +241,7 @@ bool startProcess(const std::string& name, const std::string& executable,
     asio::writable_pipe wpipe(rt.ctx);
     asio::connect_pipe(rpipe, wpipe, ec);
     if (ec) {
-        fprintf(stderr, "[QtProcessManager] Failed to create pipe for %s: %s\n",
+        fprintf(stderr, "[SubprocessManager] Failed to create pipe for %s: %s\n",
                 name.c_str(), ec.message().c_str());
         return false;
     }
@@ -251,14 +251,13 @@ bool startProcess(const std::string& name, const std::string& executable,
     pstdio.out = wpipe;
     pstdio.err = wpipe;
 
-    // Use the launcher directly with ec as second arg (non-throwing variant)
     bp2::process proc = bp2::default_process_launcher()(rt.ctx, ec, executable, arguments, pstdio);
 
     // Close write end in parent once child has inherited it
     wpipe.close();
 
     if (ec) {
-        fprintf(stderr, "[QtProcessManager] Failed to start process for %s: %s\n",
+        fprintf(stderr, "[SubprocessManager] Failed to start process for %s: %s\n",
                 name.c_str(), ec.message().c_str());
         return false;
     }
@@ -289,7 +288,7 @@ bool sendToken(const std::string& name, const std::string& token)
     for (int attempt = 0; attempt < 10; ++attempt) {
         sock = ::socket(AF_UNIX, SOCK_STREAM, 0);
         if (sock < 0) {
-            fprintf(stderr, "[QtProcessManager] socket() failed: %s\n", strerror(errno));
+            fprintf(stderr, "[SubprocessManager] socket() failed: %s\n", strerror(errno));
             break;
         }
 
@@ -306,10 +305,10 @@ bool sendToken(const std::string& name, const std::string& token)
     }
 
     if (sock < 0) {
-        fprintf(stderr, "[QtProcessManager] Failed to connect to token socket for: %s\n",
+        fprintf(stderr, "[SubprocessManager] Failed to connect to token socket for: %s\n",
                 name.c_str());
 
-        // Remove and kill associated process (matching Qt behaviour)
+        // Remove and kill associated process
         std::shared_ptr<ProcessEntry> entry;
         {
             std::lock_guard<std::mutex> lock(s_processesMutex);
@@ -404,4 +403,4 @@ void registerProcess(const std::string& name)
         s_processes[name] = nullptr;
 }
 
-} // namespace QtProcessManager
+} // namespace SubprocessManager

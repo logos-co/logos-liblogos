@@ -5,11 +5,15 @@
 #include <vector>
 #include <unordered_map>
 #include <cstdint>
+#include "runtime_registry.h"
 
 class PluginRegistry;
 
 namespace PluginManager {
     PluginRegistry& registry();
+
+    // Access the runtime registry (e.g. for tests that need to install a FakeRuntime).
+    LogosCore::RuntimeRegistry& runtimes();
 
     void setPluginsDir(const char* plugins_dir);
     void addPluginsDir(const char* plugins_dir);

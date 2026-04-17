@@ -2,12 +2,87 @@
 #include <spdlog/spdlog.h>
 #include <cassert>
 #include <deque>
+#include <functional>
 #include <mutex>
 #include <shared_mutex>
 #include <algorithm>
 #include <unordered_set>
 #include <module_lib/module_lib.h>
 #include <package_manager_lib.h>
+#if __has_include(<nlohmann/json.hpp>)
+#include <nlohmann/json.hpp>
+#endif
+
+// ---------------------------------------------------------------------------
+// Compatibility shim for two API generations of PackageManagerLib:
+//
+//   Old (logos-package-manager ≤ some version):
+//       std::string getInstalledModules()  — returns a JSON array string
+//
+//   New (logos-package-manager with InstalledPackage struct):
+//       std::vector<InstalledPackage> getInstalledModules()
+//
+// We use a template + overload strategy so neither branch needs to name the
+// type that the *other* API version doesn't define. The compiler instantiates
+// only the overload that matches the actual return type; the other overload is
+// parsed but never instantiated, so undefined types in its body don't matter.
+// ---------------------------------------------------------------------------
+
+// Overload for the old JSON-string API.
+static std::unordered_set<std::string>
+extractScannedNames(const std::string& jsonModules,
+                    std::function<std::string(const std::string&)> processPlugin)
+{
+    std::unordered_set<std::string> scannedNames;
+    // Avoid pulling in nlohmann/json here — do a minimal manual parse that
+    // is robust enough for the well-structured JSON produced by the library.
+    // Each module object has at least {"name":..., "mainFilePath":...}.
+    try {
+        // Use nlohmann/json if available (it is — logos_core links it).
+#if __has_include(<nlohmann/json.hpp>)
+        auto arr = nlohmann::json::parse(jsonModules, nullptr, /*exceptions=*/false);
+        if (arr.is_array()) {
+            for (const auto& obj : arr) {
+                std::string mainPath;
+                if (obj.contains("mainFilePath") && obj["mainFilePath"].is_string())
+                    mainPath = obj["mainFilePath"].get<std::string>();
+                if (mainPath.empty()) continue;
+                std::string pluginName = processPlugin(mainPath);
+                if (pluginName.empty()) {
+                    spdlog::warn("Failed to process plugin: {}", mainPath);
+                    continue;
+                }
+                scannedNames.insert(pluginName);
+            }
+        }
+#endif
+    } catch (...) {
+        spdlog::warn("Failed to parse installed modules JSON");
+    }
+    return scannedNames;
+}
+
+// Overload for the new InstalledPackage vector API.
+// `T` is deduced as `InstalledPackage`; if that type is not defined,
+// this template is simply never instantiated.
+template<typename T>
+static std::unordered_set<std::string>
+extractScannedNames(const std::vector<T>& modules,
+                    std::function<std::string(const std::string&)> processPlugin)
+{
+    std::unordered_set<std::string> scannedNames;
+    for (const auto& mod : modules) {
+        if (mod.name.empty() || mod.mainFilePath.empty())
+            continue;
+        std::string pluginName = processPlugin(mod.mainFilePath);
+        if (pluginName.empty()) {
+            spdlog::warn("Failed to process plugin: {}", mod.mainFilePath);
+            continue;
+        }
+        scannedNames.insert(pluginName);
+    }
+    return scannedNames;
+}
 
 static PackageManagerLib& packageManagerInstance() {
     static PackageManagerLib instance;
@@ -43,7 +118,10 @@ void PluginRegistry::discoverInstalledModules() {
         }
     }
 
-    std::vector<InstalledPackage> modules = pm.getInstalledModules();
+    auto modules = pm.getInstalledModules();
+
+    std::function<std::string(const std::string&)> processPlugin =
+        [this](const std::string& path) { return processPluginInternal(path); };
 
     // Collect names seen in this scan. Used after the upsert loop to prune
     // entries for plugins whose files disappeared (typical path: the user
@@ -51,22 +129,8 @@ void PluginRegistry::discoverInstalledModules() {
     // the stale PluginInfo would stay in m_plugins forever and
     // knownPluginNames()/`logos_core_get_known_plugins` would keep returning
     // it, so the UI would never see the uninstall land.
-    std::unordered_set<std::string> scannedNames;
-
-    for (const InstalledPackage& mod : modules) {
-        if (mod.name.empty() || mod.mainFilePath.empty())
-            continue;
-
-        std::string pluginName = processPluginInternal(mod.mainFilePath);
-        if (pluginName.empty()) {
-            // Skip entries with no extractable metadata — a bare
-            // `scannedNames.insert` would record an empty string and the
-            // prune loop would mis-identify still-present plugins as gone.
-            spdlog::warn("Failed to process plugin: {}", mod.mainFilePath);
-            continue;
-        }
-        scannedNames.insert(pluginName);
-    }
+    std::unordered_set<std::string> scannedNames =
+        extractScannedNames(modules, processPlugin);
 
     // Prune entries that aren't on disk anymore. Preserve currently-loaded
     // plugins even if their backing files are gone — the module is still
@@ -269,6 +333,24 @@ bool PluginRegistry::isLoaded(const std::string& name) const {
 void PluginRegistry::markLoaded(const std::string& name) {
     std::unique_lock lock(m_mutex);
     m_plugins[name].loaded = true;
+}
+
+void PluginRegistry::markLoaded(const std::string& name,
+                                 std::shared_ptr<LogosCore::ModuleRuntime> runtime,
+                                 LogosCore::LoadedModuleHandle handle) {
+    std::unique_lock lock(m_mutex);
+    auto& info = m_plugins[name];
+    info.loaded  = true;
+    info.runtime = std::move(runtime);
+    info.handle  = std::move(handle);
+}
+
+std::shared_ptr<LogosCore::ModuleRuntime>
+PluginRegistry::runtimeFor(const std::string& name) const {
+    std::shared_lock lock(m_mutex);
+    auto it = m_plugins.find(name);
+    if (it == m_plugins.end()) return nullptr;
+    return it->second.runtime;
 }
 
 void PluginRegistry::markUnloaded(const std::string& name) {

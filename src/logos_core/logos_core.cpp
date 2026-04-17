@@ -84,7 +84,7 @@ char* logos_core_process_plugin(const char* plugin_path) {
 char* logos_core_get_token(const char* key) {
     if (!key) { fprintf(stderr, "logos_core_get_token: key must not be null\n"); std::abort(); }
 
-    std::string token = TokenManager::instance().getToken(std::string(key));
+    std::string token = TokenManager::instance().getToken(key).toStdString();
     if (token.empty()) return nullptr;
 
     char* result = new char[token.size() + 1];

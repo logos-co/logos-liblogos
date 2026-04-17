@@ -43,7 +43,7 @@ At a high level, the Logos Core consists of:
 
 ### Process Architecture
 
-Each module runs in its own process for isolation:
+Each module runs in its own process for isolation (using the default `qt-subprocess` runtime):
 
 ```
 ┌─────────────────────────────────────────────────┐
@@ -64,10 +64,10 @@ Each module runs in its own process for isolation:
 └─────────────────────────────────────────────────┘
 ```
 
-- The core spawns a `logos_host` process per module
+- The core spawns a `logos_host` process per module via the `QtSubprocessRuntime`
 - Communication happens via the Logos API (currently uses Qt Remote Objects over local sockets)
 - Faulty or untrusted modules cannot crash the core or other modules
-- Modules can be written in different languages as long as they implement the RPC protocol
+- The `ModuleRuntime` abstraction allows swapping the loading strategy per-module: in-process, WASM (Extism), Docker, gRPC, etc.
 
 ### Token-Based Authentication
 
@@ -109,14 +109,12 @@ Every module ships a `metadata.json` referenced by Qt's `Q_PLUGIN_METADATA` macr
 
 1. Core locates the plugin file for the requested module name
 2. Core resolves dependencies and loads them first (topological sort with circular dependency detection)
-3. If a persistence base path is configured, core resolves an instance ID and persistence directory for the module (reusing an existing instance or creating a new one)
-4. Core spawns a `logos_host` process with the plugin path and instance persistence path
-5. Core generates a UUID authentication token
-6. Core sends the token to the host process via local socket
-7. Host process loads the plugin and calls `initLogos(LogosAPI*)`
-8. The `LogosAPI` instance exposes `modulePath`, `instanceId`, and `instancePersistencePath` as properties
-9. Host process registers the plugin with the remote object registry
-10. Core waits for registration and records the module as loaded
+3. If a persistence base path is configured, core resolves an instance ID and persistence directory for the module
+4. Core builds a `ModuleDescriptor` and selects the appropriate `ModuleRuntime` via `RuntimeRegistry`
+5. The selected runtime's `load()` spawns (or otherwise starts) the module and returns a `LoadedModuleHandle`
+6. Core generates a UUID authentication token and calls `runtime->sendToken()`
+7. For the default `qt-subprocess` runtime: `logos_host` process loads the plugin, calls `initLogos(LogosAPI*)`, and registers with the remote object registry
+8. Core records the module as loaded, storing the runtime and handle in `PluginRegistry`
 
 #### Unloading
 
@@ -235,5 +233,6 @@ The SDK abstracts away registry lookup, token management, and async invocation.
 ## Future Work
 
 - **Signature support** — Signing and verifying module packages
-- **Cross-language modules** — Modules in languages other than C++
-- **Move away from Qt** — Logos API will move away from Qt. Process management has been migrated from Qt (`QProcess`) to Boost.Process v2, and Qt container/utility types (`QString`, `QStringList`, `QHash`, `QDir`, `QFile`, `QUuid`) have been replaced with standard C++ and Boost equivalents (`std::string`, `std::vector`, `std::unordered_map`, `std::filesystem`, `boost::uuids`). Remaining Qt dependencies (event loop, plugin loading, remote objects) should be similarly abstracted from liblogos's perspective.
+- **Cross-language modules** — Modules in languages other than C++ (enabled by `ModuleRuntime` abstraction)
+- **Alternative runtimes** — In-process loading, Extism/WASM modules, Docker container isolation, gRPC transport (all implementable as new `ModuleRuntime` subclasses)
+- **Move away from Qt** — Logos API will move away from Qt. `logos_core`'s internal code (`PluginManager`, `RuntimeRegistry`, `ModuleRuntime`) is already Qt-free. The `qt_subprocess` runtime and `logos_host` encapsulate the remaining Qt dependencies (event loop, plugin loading, Qt Remote Objects). New runtimes can avoid Qt entirely.

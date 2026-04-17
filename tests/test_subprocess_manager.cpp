@@ -1,7 +1,7 @@
 // =============================================================================
-// Tests for the process manager lifecycle, exposed via logos_core.h.
+// Tests for SubprocessManager lifecycle, exposed via qt_test_adapter.h.
 //
-// The process manager maintains a registry of named child processes and
+// The subprocess manager maintains a registry of named child processes and
 // provides token-IPC (sendToken / receive) between the core and plugin
 // host processes. These tests verify:
 //   - register / hasProcess / clearAll lifecycle
@@ -26,7 +26,7 @@ static void clearProcessState() {
     logos_core_clear_processes();
 }
 
-class ProcessManagerTest : public ::testing::Test {
+class SubprocessManagerTest : public ::testing::Test {
 protected:
     void SetUp() override { clearProcessState(); }
     void TearDown() override { clearProcessState(); }
@@ -36,16 +36,16 @@ protected:
 // register / hasProcess / clear lifecycle
 // ---------------------------------------------------------------------------
 
-TEST_F(ProcessManagerTest, RegisterProcess_HasProcessReturnsTrue) {
+TEST_F(SubprocessManagerTest, RegisterProcess_HasProcessReturnsTrue) {
     logos_core_register_process("my_plugin");
     EXPECT_EQ(logos_core_has_process("my_plugin"), 1);
 }
 
-TEST_F(ProcessManagerTest, HasProcess_ReturnsFalseForUnregistered) {
+TEST_F(SubprocessManagerTest, HasProcess_ReturnsFalseForUnregistered) {
     EXPECT_EQ(logos_core_has_process("nope"), 0);
 }
 
-TEST_F(ProcessManagerTest, ClearAll_RemovesAllEntries) {
+TEST_F(SubprocessManagerTest, ClearAll_RemovesAllEntries) {
     logos_core_register_process("p1");
     logos_core_register_process("p2");
     logos_core_register_process("p3");
@@ -57,7 +57,7 @@ TEST_F(ProcessManagerTest, ClearAll_RemovesAllEntries) {
     EXPECT_EQ(logos_core_has_process("p3"), 0);
 }
 
-TEST_F(ProcessManagerTest, RegisterProcess_IsIdempotent) {
+TEST_F(SubprocessManagerTest, RegisterProcess_IsIdempotent) {
     logos_core_register_process("dup");
     logos_core_register_process("dup");
     logos_core_register_process("dup");
@@ -68,7 +68,7 @@ TEST_F(ProcessManagerTest, RegisterProcess_IsIdempotent) {
     EXPECT_EQ(logos_core_has_process("dup"), 0);
 }
 
-TEST_F(ProcessManagerTest, NullName_DoesNotCrash) {
+TEST_F(SubprocessManagerTest, NullName_DoesNotCrash) {
     logos_core_register_process(nullptr);
     EXPECT_EQ(logos_core_has_process(nullptr), 0);
 }
@@ -77,14 +77,14 @@ TEST_F(ProcessManagerTest, NullName_DoesNotCrash) {
 // get_process_id: placeholder entry returns -1
 // ---------------------------------------------------------------------------
 
-TEST_F(ProcessManagerTest, GetProcessId_ReturnsNegativeOneForPlaceholder) {
+TEST_F(SubprocessManagerTest, GetProcessId_ReturnsNegativeOneForPlaceholder) {
     logos_core_register_process("placeholder");
     // Placeholder has no real process — should return -1.
     int64_t pid = logos_core_get_process_id("placeholder");
     EXPECT_EQ(pid, -1);
 }
 
-TEST_F(ProcessManagerTest, GetProcessId_ReturnsNegativeOneForUnknown) {
+TEST_F(SubprocessManagerTest, GetProcessId_ReturnsNegativeOneForUnknown) {
     int64_t pid = logos_core_get_process_id("unknown");
     EXPECT_EQ(pid, -1);
 }
@@ -100,7 +100,7 @@ static const char* sleepBinary() {
     return nullptr;
 }
 
-TEST_F(ProcessManagerTest, StartProcess_ReturnsOneOnSuccess) {
+TEST_F(SubprocessManagerTest, StartProcess_ReturnsOneOnSuccess) {
     const char* sleep = sleepBinary();
     if (!sleep) GTEST_SKIP() << "sleep binary not found";
 
@@ -109,7 +109,7 @@ TEST_F(ProcessManagerTest, StartProcess_ReturnsOneOnSuccess) {
     EXPECT_EQ(ok, 1);
 }
 
-TEST_F(ProcessManagerTest, StartProcess_HasProcessReturnsTrueAfterStart) {
+TEST_F(SubprocessManagerTest, StartProcess_HasProcessReturnsTrueAfterStart) {
     const char* sleep = sleepBinary();
     if (!sleep) GTEST_SKIP() << "sleep binary not found";
 
@@ -118,7 +118,7 @@ TEST_F(ProcessManagerTest, StartProcess_HasProcessReturnsTrueAfterStart) {
     EXPECT_EQ(logos_core_has_process("sleep_has"), 1);
 }
 
-TEST_F(ProcessManagerTest, StartProcess_GetProcessIdReturnsValidPid) {
+TEST_F(SubprocessManagerTest, StartProcess_GetProcessIdReturnsValidPid) {
     const char* sleep = sleepBinary();
     if (!sleep) GTEST_SKIP() << "sleep binary not found";
 
@@ -129,7 +129,7 @@ TEST_F(ProcessManagerTest, StartProcess_GetProcessIdReturnsValidPid) {
     EXPECT_GT(pid, 0) << "started process must have a positive PID";
 }
 
-TEST_F(ProcessManagerTest, StartProcess_ReturnsFalseForNonexistentExecutable) {
+TEST_F(SubprocessManagerTest, StartProcess_ReturnsFalseForNonexistentExecutable) {
     const char* args[] = {nullptr};
     int ok = logos_core_start_process("bad_exec",
                                        "/nonexistent/binary_that_does_not_exist",
@@ -137,7 +137,7 @@ TEST_F(ProcessManagerTest, StartProcess_ReturnsFalseForNonexistentExecutable) {
     EXPECT_EQ(ok, 0);
 }
 
-TEST_F(ProcessManagerTest, TerminateProcess_RemovesEntry) {
+TEST_F(SubprocessManagerTest, TerminateProcess_RemovesEntry) {
     const char* sleep = sleepBinary();
     if (!sleep) GTEST_SKIP() << "sleep binary not found";
 
@@ -150,13 +150,13 @@ TEST_F(ProcessManagerTest, TerminateProcess_RemovesEntry) {
     EXPECT_EQ(logos_core_has_process("sleep_term"), 0);
 }
 
-TEST_F(ProcessManagerTest, TerminateProcess_NoopForUnknownName) {
+TEST_F(SubprocessManagerTest, TerminateProcess_NoopForUnknownName) {
     // Should not crash when terminating a name that was never registered.
     logos_core_terminate_process("i_do_not_exist");
     SUCCEED();
 }
 
-TEST_F(ProcessManagerTest, TerminateProcess_NoopForNullName) {
+TEST_F(SubprocessManagerTest, TerminateProcess_NoopForNullName) {
     logos_core_terminate_process(nullptr);
     SUCCEED();
 }
@@ -165,7 +165,7 @@ TEST_F(ProcessManagerTest, TerminateProcess_NoopForNullName) {
 // Multiple distinct processes coexist without colliding
 // ---------------------------------------------------------------------------
 
-TEST_F(ProcessManagerTest, MultipleProcesses_DistinctPids) {
+TEST_F(SubprocessManagerTest, MultipleProcesses_DistinctPids) {
     const char* sleep = sleepBinary();
     if (!sleep) GTEST_SKIP() << "sleep binary not found";
 
@@ -181,7 +181,7 @@ TEST_F(ProcessManagerTest, MultipleProcesses_DistinctPids) {
     EXPECT_NE(pidA, pidB) << "two separate processes must have different PIDs";
 }
 
-TEST_F(ProcessManagerTest, MultipleProcesses_TerminateOneKeepsOther) {
+TEST_F(SubprocessManagerTest, MultipleProcesses_TerminateOneKeepsOther) {
     const char* sleep = sleepBinary();
     if (!sleep) GTEST_SKIP() << "sleep binary not found";
 
@@ -199,7 +199,7 @@ TEST_F(ProcessManagerTest, MultipleProcesses_TerminateOneKeepsOther) {
 // terminateAll removes all running processes
 // ---------------------------------------------------------------------------
 
-TEST_F(ProcessManagerTest, TerminateAll_RemovesAllRunningProcesses) {
+TEST_F(SubprocessManagerTest, TerminateAll_RemovesAllRunningProcesses) {
     const char* sleep = sleepBinary();
     if (!sleep) GTEST_SKIP() << "sleep binary not found";
 

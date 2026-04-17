@@ -1,5 +1,5 @@
-#ifndef PROCESS_MANAGER_H
-#define PROCESS_MANAGER_H
+#ifndef SUBPROCESS_MANAGER_H
+#define SUBPROCESS_MANAGER_H
 
 #include <string>
 #include <vector>
@@ -7,7 +7,9 @@
 #include <functional>
 #include <cstdint>
 
-namespace QtProcessManager {
+// Subprocess management for the qt_subprocess runtime.
+// Renamed from QtProcessManager — uses Boost.Process + Boost.Asio (no Qt).
+namespace SubprocessManager {
 
     struct ProcessCallbacks {
         std::function<void(const std::string& name, int exitCode, bool crashed)> onFinished;
@@ -27,4 +29,4 @@ namespace QtProcessManager {
     void registerProcess(const std::string& name);
 }
 
-#endif // PROCESS_MANAGER_H
+#endif // SUBPROCESS_MANAGER_H
