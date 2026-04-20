@@ -15,12 +15,18 @@
 // =============================================================================
 #include <gtest/gtest.h>
 #include "logos_core.h"
+#include "process_manager.h"
 #include "qt_test_adapter.h"
+#include <atomic>
+#include <chrono>
+#include <condition_variable>
 #include <cstdint>
+#include <mutex>
 #include <string>
 #include <thread>
-#include <chrono>
 #include <unistd.h>
+#include <utility>
+#include <vector>
 
 static void clearProcessState() {
     logos_core_clear_processes();
@@ -193,6 +199,46 @@ TEST_F(ProcessManagerTest, MultipleProcesses_TerminateOneKeepsOther) {
 
     EXPECT_EQ(logos_core_has_process("kill_me"), 0);
     EXPECT_EQ(logos_core_has_process("keep_me"), 1);
+}
+
+// ---------------------------------------------------------------------------
+// onOutput: stdout and stderr are delivered with the correct isStderr flag
+// ---------------------------------------------------------------------------
+
+TEST_F(ProcessManagerTest, StartProcess_OnOutput_SplitsStdoutAndStderr) {
+    // Child writes one line to stdout and one to stderr, then exits.
+    // Verify both reach onOutput with the right isStderr flag.
+    std::mutex mtx;
+    std::condition_variable cv;
+    std::vector<std::pair<std::string, bool>> lines; // (line, isStderr)
+    std::atomic<bool> finished{false};
+
+    QtProcessManager::ProcessCallbacks cb;
+    cb.onOutput = [&](const std::string& /*name*/, const std::string& line, bool isStderr) {
+        std::lock_guard<std::mutex> lock(mtx);
+        lines.emplace_back(line, isStderr);
+        cv.notify_all();
+    };
+    cb.onFinished = [&](const std::string& /*name*/, int /*code*/, bool /*crashed*/) {
+        finished.store(true);
+        cv.notify_all();
+    };
+
+    std::vector<std::string> args = {"-c", "echo out-line; echo err-line >&2"};
+    ASSERT_TRUE(QtProcessManager::startProcess("dualstream", "/bin/sh", args, cb));
+
+    std::unique_lock<std::mutex> lock(mtx);
+    cv.wait_for(lock, std::chrono::seconds(5),
+                [&]() { return finished.load() && lines.size() >= 2; });
+
+    ASSERT_GE(lines.size(), 2u);
+    bool saw_stdout = false, saw_stderr = false;
+    for (auto& [line, isStderr] : lines) {
+        if (!isStderr && line == "out-line") saw_stdout = true;
+        if ( isStderr && line == "err-line") saw_stderr = true;
+    }
+    EXPECT_TRUE(saw_stdout) << "stdout line missing or wrongly tagged";
+    EXPECT_TRUE(saw_stderr) << "stderr line missing or wrongly tagged";
 }
 
 // ---------------------------------------------------------------------------

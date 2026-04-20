@@ -1,6 +1,7 @@
 #include "plugin_launcher.h"
 #include "process_manager.h"
 #include <spdlog/spdlog.h>
+#include <spdlog/sinks/stdout_color_sinks.h>
 #include <filesystem>
 #include <cstdlib>
 #include <boost/dll/runtime_symbol_info.hpp>
@@ -8,6 +9,18 @@
 namespace fs = std::filesystem;
 
 namespace {
+
+    // Dedicated logger for child stdout — uses a pattern that prints a
+    // fictional "[out]" level, so stdout lines visually align with spdlog
+    // output but are clearly distinguished from stderr-classified lines.
+    std::shared_ptr<spdlog::logger>& moduleStdoutLogger() {
+        static std::shared_ptr<spdlog::logger> logger = []() {
+            auto l = spdlog::stdout_color_mt("logos_module_stdout");
+            l->set_pattern("[%Y-%m-%d %H:%M:%S.%e] [out] %v");
+            return l;
+        }();
+        return logger;
+    }
 
     std::string resolveLogosHostPath(const std::vector<std::string>& pluginsDirs) {
         std::string logosHostPath;
@@ -85,16 +98,30 @@ namespace PluginLauncher {
         };
 
         callbacks.onOutput = [](const std::string& pName, const std::string& line, bool isStderr) {
-            if (isStderr) {
-                spdlog::critical("[{}] {}", pName, line);
-            } else if (line.find("Warning:") != std::string::npos ||
-                       line.find("WARNING:") != std::string::npos) {
-                spdlog::warn("[{}] {}", pName, line);
-            } else if (line.find("Critical:") != std::string::npos ||
-                       line.find("FAILED:") != std::string::npos ||
-                       line.find("ERROR:") != std::string::npos) {
-                spdlog::critical("[{}] {}", pName, line);
+            if (!isStderr) {
+                moduleStdoutLogger()->info("[{}] {}", pName, line);
+                return;
             }
+            auto contains = [&](std::initializer_list<const char*> keywords) {
+                for (const char* k : keywords)
+                    if (line.find(k) != std::string::npos) return true;
+                return false;
+            };
+            // stderr: map common level prefixes (Qt's default message handler,
+            // test/assertion frameworks, spdlog-style output from children)
+            // onto spdlog levels. Default to info when no prefix is recognised.
+            if (contains({"Critical:", "CRITICAL:", "Fatal:", "FATAL:"}))
+                spdlog::critical("[{}] {}", pName, line);
+            else if (contains({"Error:", "ERROR:", "FAILED:"}))
+                spdlog::error("[{}] {}", pName, line);
+            else if (contains({"Warning:", "WARNING:"}))
+                spdlog::warn("[{}] {}", pName, line);
+            else if (contains({"Debug:", "DEBUG:"}))
+                spdlog::debug("[{}] {}", pName, line);
+            else if (contains({"Trace:", "TRACE:"}))
+                spdlog::trace("[{}] {}", pName, line);
+            else
+                spdlog::info("[{}] {}", pName, line);
         };
 
         return QtProcessManager::startProcess(name, logosHostPath, arguments, callbacks);
