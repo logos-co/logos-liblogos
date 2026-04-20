@@ -64,20 +64,25 @@ IoRuntime& ioRuntime() {
 
 struct ProcessEntry {
     bp2::process                           process;
-    asio::readable_pipe                    pipe;
+    asio::readable_pipe                    out_pipe;
+    asio::readable_pipe                    err_pipe;
     QtProcessManager::ProcessCallbacks     callbacks;
     std::string                            name;
-    std::array<char, 4096>                 read_buf{};
-    std::string                            line_buf;
+    std::array<char, 4096>                 out_read_buf{};
+    std::array<char, 4096>                 err_read_buf{};
+    std::string                            out_line_buf;
+    std::string                            err_line_buf;
     // Set by async_wait callback; used by syncKill to avoid double-waitpid.
     std::atomic<bool>                exited{false};
     // Set by terminateProcess/terminateAll to suppress onFinished callback.
     std::atomic<bool>                cancelled{false};
 
-    ProcessEntry(bp2::process proc, asio::readable_pipe rp,
+    ProcessEntry(bp2::process proc,
+                 asio::readable_pipe out_rp, asio::readable_pipe err_rp,
                  const std::string& n, const QtProcessManager::ProcessCallbacks& cb)
         : process(std::move(proc))
-        , pipe(std::move(rp))
+        , out_pipe(std::move(out_rp))
+        , err_pipe(std::move(err_rp))
         , name(n)
         , callbacks(cb)
     {}
@@ -108,44 +113,50 @@ std::string unixSocketPath(const std::string& name) {
 }
 
 // ---------------------------------------------------------------------------
-// Async read loop: reads merged stdout+stderr from child, fires onOutput per line.
+// Async read loop: reads stdout and stderr separately from child, fires
+// onOutput per line with the correct isStderr flag.
 // Called from the io_context thread.
 // ---------------------------------------------------------------------------
 
-void scheduleRead(std::shared_ptr<ProcessEntry> entry);
+void scheduleRead(std::shared_ptr<ProcessEntry> entry, bool isStderr);
 
-void handleRead(std::shared_ptr<ProcessEntry> entry,
+void handleRead(std::shared_ptr<ProcessEntry> entry, bool isStderr,
                 const boost::system::error_code& ec, std::size_t n)
 {
+    auto& buf      = isStderr ? entry->err_read_buf : entry->out_read_buf;
+    auto& line_buf = isStderr ? entry->err_line_buf : entry->out_line_buf;
+
     if (n > 0) {
-        entry->line_buf.append(entry->read_buf.data(), n);
+        line_buf.append(buf.data(), n);
         std::size_t pos = 0, nl;
-        while ((nl = entry->line_buf.find('\n', pos)) != std::string::npos) {
-            std::string line = entry->line_buf.substr(pos, nl - pos);
+        while ((nl = line_buf.find('\n', pos)) != std::string::npos) {
+            std::string line = line_buf.substr(pos, nl - pos);
             if (!line.empty() && line.back() == '\r') line.pop_back();
             if (!line.empty() && entry->callbacks.onOutput)
-                entry->callbacks.onOutput(entry->name, line, false);
+                entry->callbacks.onOutput(entry->name, line, isStderr);
             pos = nl + 1;
         }
-        entry->line_buf.erase(0, pos);
+        line_buf.erase(0, pos);
     }
 
     if (!ec) {
-        scheduleRead(std::move(entry));
+        scheduleRead(std::move(entry), isStderr);
     } else {
         // Pipe closed — flush any remaining partial line
-        if (!entry->line_buf.empty() && entry->callbacks.onOutput)
-            entry->callbacks.onOutput(entry->name, entry->line_buf, false);
-        entry->line_buf.clear();
+        if (!line_buf.empty() && entry->callbacks.onOutput)
+            entry->callbacks.onOutput(entry->name, line_buf, isStderr);
+        line_buf.clear();
     }
 }
 
-void scheduleRead(std::shared_ptr<ProcessEntry> entry) {
+void scheduleRead(std::shared_ptr<ProcessEntry> entry, bool isStderr) {
     auto* e = entry.get();
-    e->pipe.async_read_some(
-        asio::buffer(e->read_buf),
-        [entry = std::move(entry)](const boost::system::error_code& ec, std::size_t n) mutable {
-            handleRead(std::move(entry), ec, n);
+    auto& pipe = isStderr ? e->err_pipe : e->out_pipe;
+    auto& buf  = isStderr ? e->err_read_buf : e->out_read_buf;
+    pipe.async_read_some(
+        asio::buffer(buf),
+        [entry = std::move(entry), isStderr](const boost::system::error_code& ec, std::size_t n) mutable {
+            handleRead(std::move(entry), isStderr, ec, n);
         });
 }
 
@@ -196,7 +207,8 @@ void syncKill(std::shared_ptr<ProcessEntry> entry) {
     entry->cancelled.store(true);
 
     boost::system::error_code ec;
-    entry->pipe.close(ec); // cancel pending async_read
+    entry->out_pipe.close(ec); // cancel pending async_read on stdout
+    entry->err_pipe.close(ec); // cancel pending async_read on stderr
 
     entry->process.request_exit(ec); // SIGTERM
 
@@ -236,26 +248,34 @@ bool startProcess(const std::string& name, const std::string& executable,
 
     boost::system::error_code ec;
 
-    // Create a pipe: parent reads from rpipe; child writes to wpipe (stdout+stderr)
-    asio::readable_pipe rpipe(rt.ctx);
-    asio::writable_pipe wpipe(rt.ctx);
-    asio::connect_pipe(rpipe, wpipe, ec);
+    // Separate pipes for stdout and stderr so the reader can distinguish
+    // them (child's stdout → out_rpipe, child's stderr → err_rpipe).
+    asio::readable_pipe out_rpipe(rt.ctx), err_rpipe(rt.ctx);
+    asio::writable_pipe out_wpipe(rt.ctx), err_wpipe(rt.ctx);
+
+    asio::connect_pipe(out_rpipe, out_wpipe, ec);
     if (ec) {
-        fprintf(stderr, "[QtProcessManager] Failed to create pipe for %s: %s\n",
+        fprintf(stderr, "[QtProcessManager] Failed to create stdout pipe for %s: %s\n",
+                name.c_str(), ec.message().c_str());
+        return false;
+    }
+    asio::connect_pipe(err_rpipe, err_wpipe, ec);
+    if (ec) {
+        fprintf(stderr, "[QtProcessManager] Failed to create stderr pipe for %s: %s\n",
                 name.c_str(), ec.message().c_str());
         return false;
     }
 
-    // Redirect both stdout and stderr to wpipe (merged channels)
     bp2::process_stdio pstdio;
-    pstdio.out = wpipe;
-    pstdio.err = wpipe;
+    pstdio.out = out_wpipe;
+    pstdio.err = err_wpipe;
 
     // Use the launcher directly with ec as second arg (non-throwing variant)
     bp2::process proc = bp2::default_process_launcher()(rt.ctx, ec, executable, arguments, pstdio);
 
-    // Close write end in parent once child has inherited it
-    wpipe.close();
+    // Close write ends in parent once child has inherited them
+    out_wpipe.close();
+    err_wpipe.close();
 
     if (ec) {
         fprintf(stderr, "[QtProcessManager] Failed to start process for %s: %s\n",
@@ -264,7 +284,7 @@ bool startProcess(const std::string& name, const std::string& executable,
     }
 
     auto entry = std::make_shared<ProcessEntry>(
-        std::move(proc), std::move(rpipe), name, callbacks);
+        std::move(proc), std::move(out_rpipe), std::move(err_rpipe), name, callbacks);
 
     {
         std::lock_guard<std::mutex> lock(s_processesMutex);
@@ -272,7 +292,8 @@ bool startProcess(const std::string& name, const std::string& executable,
     }
 
     asio::post(rt.ctx, [entry]() {
-        scheduleRead(entry);
+        scheduleRead(entry, /*isStderr=*/false);
+        scheduleRead(entry, /*isStderr=*/true);
         scheduleWait(entry);
     });
 
