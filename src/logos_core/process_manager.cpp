@@ -142,9 +142,13 @@ void handleRead(std::shared_ptr<ProcessEntry> entry, bool isStderr,
     if (!ec) {
         scheduleRead(std::move(entry), isStderr);
     } else {
-        // Pipe closed — flush any remaining partial line
-        if (!line_buf.empty() && entry->callbacks.onOutput)
-            entry->callbacks.onOutput(entry->name, line_buf, isStderr);
+        // Pipe closed — flush any remaining partial line (stripping a
+        // trailing CR, same as the newline loop above).
+        if (!line_buf.empty() && entry->callbacks.onOutput) {
+            if (line_buf.back() == '\r') line_buf.pop_back();
+            if (!line_buf.empty())
+                entry->callbacks.onOutput(entry->name, line_buf, isStderr);
+        }
         line_buf.clear();
     }
 }
