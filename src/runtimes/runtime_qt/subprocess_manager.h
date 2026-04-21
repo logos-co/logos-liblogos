@@ -1,7 +1,7 @@
 #ifndef SUBPROCESS_MANAGER_H
 #define SUBPROCESS_MANAGER_H
 
-#include "../../logos_core/module_runtime.h"
+#include "module_runtime.h"
 #include <string>
 #include <vector>
 #include <unordered_map>
