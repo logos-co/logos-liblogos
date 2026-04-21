@@ -1,7 +1,8 @@
 #include "plugin_manager.h"
 #include "plugin_registry.h"
 #include "dependency_resolver.h"
-#include "plugin_launcher.h"
+#include "runtime_registry.h"
+#include "runtimes/runtime_qt/subprocess_manager.h"
 #include <spdlog/spdlog.h>
 #include <mutex>
 #include <cassert>
@@ -29,6 +30,17 @@ namespace {
     std::string& persistenceBasePath() {
         static std::string path;
         return path;
+    }
+
+    // Lazily initialised RuntimeRegistry. On first call, registers the default
+    // SubprocessManager. clearForTests() can replace it for unit tests.
+    LogosCore::RuntimeRegistry& runtimeRegistry() {
+        static LogosCore::RuntimeRegistry reg;
+        static std::once_flag initFlag;
+        std::call_once(initFlag, []() {
+            reg.registerRuntime(std::make_shared<SubprocessManager>());
+        });
+        return reg;
     }
 
     char** toNullTerminatedArray(const std::vector<std::string>& list) {
@@ -80,29 +92,42 @@ namespace {
 
         std::string pluginPath = registryInstance().pluginPath(name);
 
-        // Resolve instance persistence path if a base path has been configured
-        std::string instancePersistencePath;
+        // Build a descriptor for the runtime to inspect.
+        LogosCore::ModuleDescriptor desc;
+        desc.name        = name;
+        desc.path        = pluginPath;
+        desc.format      = "qt-plugin";
+        desc.dependencies = registryInstance().pluginDependencies(name);
+        desc.pluginsDirs  = registryInstance().pluginsDirs();
+
         if (!persistenceBasePath().empty()) {
             auto info = ModuleLib::InstancePersistence::resolveInstance(
-                persistenceBasePath(),
-                name);
-            instancePersistencePath = info.persistencePath;
+                persistenceBasePath(), name);
+            desc.instancePersistencePath = info.persistencePath;
+        }
+
+        auto rt = runtimeRegistry().select(desc);
+        if (!rt) {
+            spdlog::warn("No runtime available to load plugin: {}", name);
+            return false;
         }
 
         auto onTerminated = [](const std::string& n) {
             registryInstance().markUnloaded(n);
         };
 
-        if (!PluginLauncher::launch(name, pluginPath, registryInstance().pluginsDirs(),
-                                    instancePersistencePath, onTerminated))
+        LogosCore::LoadedModuleHandle handle;
+        if (!rt->load(desc, onTerminated, handle))
             return false;
 
         std::string authToken = boost::uuids::to_string(boost::uuids::random_generator()());
 
-        if (!PluginLauncher::sendToken(name, authToken))
+        if (!rt->sendToken(name, authToken)) {
+            rt->terminate(name);
             return false;
+        }
 
-        registryInstance().markLoaded(name);
+        registryInstance().markLoaded(name, rt, std::move(handle));
 
         TokenManager::instance().saveToken(name, authToken);
 
@@ -122,12 +147,23 @@ namespace {
             return false;
         }
 
-        if (!PluginLauncher::hasProcess(name)) {
-            spdlog::warn("No process found for plugin: {}", name);
-            return false;
+        auto rt = registryInstance().runtimeFor(name);
+        if (rt) {
+            if (!rt->hasModule(name)) {
+                spdlog::warn("No module entry found for plugin: {}", name);
+                return false;
+            }
+            rt->terminate(name);
+        } else {
+            // Fallback: module was loaded via markLoaded(name) directly
+            // (test scenarios or external setup). Use SubprocessManager directly.
+            if (!SubprocessManager::hasProcess(name)) {
+                spdlog::warn("No process found for plugin: {}", name);
+                return false;
+            }
+            SubprocessManager::terminateProcess(name);
         }
 
-        PluginLauncher::terminate(name);
         registryInstance().markUnloaded(name);
 
         spdlog::info("Plugin unloaded: {}", name);
@@ -139,6 +175,10 @@ namespace PluginManager {
 
     PluginRegistry& registry() {
         return registryInstance();
+    }
+
+    LogosCore::RuntimeRegistry& runtimes() {
+        return runtimeRegistry();
     }
 
     void setPluginsDir(const char* plugins_dir) {
@@ -282,6 +322,7 @@ namespace PluginManager {
             if (teardownSetMembers.count(*it) && teardownOrderMembers.insert(*it).second)
                 teardownOrder.push_back(*it);
         }
+
         // Safety net: any members not seen by the resolver (shouldn't happen,
         // but don't silently skip them) go to the end.
         for (const std::string& n : teardownSet) {
@@ -303,13 +344,13 @@ namespace PluginManager {
 
     void terminateAll() {
         std::lock_guard lock(loadMutex());
-        PluginLauncher::terminateAll();
+        runtimeRegistry().terminateAll();
         registryInstance().clearLoaded();
     }
 
     void clear() {
         std::lock_guard lock(loadMutex());
-        PluginLauncher::terminateAll();
+        runtimeRegistry().terminateAll();
         registryInstance().clear();
     }
 
@@ -330,7 +371,7 @@ namespace PluginManager {
     }
 
     std::unordered_map<std::string, int64_t> getPluginProcessIds() {
-        return PluginLauncher::getAllProcessIds();
+        return runtimeRegistry().getAllPids();
     }
 
     std::vector<std::string> resolveDependencies(const std::vector<std::string>& requestedModules) {
@@ -342,11 +383,6 @@ namespace PluginManager {
     }
 
     std::vector<std::string> getDependencies(const std::string& name, bool recursive) {
-        // Filter to known modules to honour the documented contract.
-        // PluginInfo::dependencies holds whatever the manifest declares,
-        // including names that aren't installed. The reverse-edge accessor
-        // doesn't need this treatment because recomputeDependentsLocked only
-        // writes known names into PluginInfo::dependents by construction.
         std::vector<std::string> deps = registryInstance().pluginDependencies(name, recursive);
         std::vector<std::string> knownDeps;
         knownDeps.reserve(deps.size());

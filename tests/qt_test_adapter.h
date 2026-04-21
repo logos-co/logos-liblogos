@@ -12,7 +12,7 @@
 
 #include "plugin_manager.h"
 #include "plugin_registry.h"
-#include "process_manager.h"
+#include "runtimes/runtime_qt/subprocess_manager.h"
 #include "qt/qt_token_receiver.h"
 
 #include <QLocalServer>
@@ -135,14 +135,14 @@ inline void logos_core_clear()
 }
 
 // ---------------------------------------------------------------------------
-// Process management — QtProcessManager already uses std::string in its API;
+// Process management — SubprocessManager uses std::string throughout;
 // these pass-throughs keep the test call sites Qt-free.
 // ---------------------------------------------------------------------------
 
 inline void logos_core_register_process(const char* name)
 {
     if (!name) return;
-    QtProcessManager::registerProcess(std::string(name));
+    SubprocessManager::registerProcess(std::string(name));
 }
 
 inline int logos_core_start_process(const char* name,
@@ -154,40 +154,40 @@ inline int logos_core_start_process(const char* name,
     if (args)
         for (int i = 0; args[i] != nullptr; ++i)
             arguments.push_back(args[i]);
-    QtProcessManager::ProcessCallbacks noopCallbacks;
-    return QtProcessManager::startProcess(std::string(name),
-                                          std::string(executable),
-                                          arguments,
-                                          noopCallbacks) ? 1 : 0;
+    SubprocessManager::ProcessCallbacks noopCallbacks;
+    return SubprocessManager::startProcess(std::string(name),
+                                           std::string(executable),
+                                           arguments,
+                                           noopCallbacks) ? 1 : 0;
 }
 
 inline int logos_core_send_token(const char* name, const char* token)
 {
     if (!name || !token) return 0;
-    return QtProcessManager::sendToken(std::string(name), std::string(token)) ? 1 : 0;
+    return SubprocessManager::sendTokenToProcess(std::string(name), std::string(token)) ? 1 : 0;
 }
 
 inline int logos_core_has_process(const char* name)
 {
     if (!name) return 0;
-    return QtProcessManager::hasProcess(std::string(name)) ? 1 : 0;
+    return SubprocessManager::hasProcess(std::string(name)) ? 1 : 0;
 }
 
 inline int64_t logos_core_get_process_id(const char* name)
 {
     if (!name) return -1;
-    return QtProcessManager::getProcessId(std::string(name));
+    return SubprocessManager::getProcessId(std::string(name));
 }
 
 inline void logos_core_terminate_process(const char* name)
 {
     if (!name) return;
-    QtProcessManager::terminateProcess(std::string(name));
+    SubprocessManager::terminateProcess(std::string(name));
 }
 
 inline void logos_core_clear_processes()
 {
-    QtProcessManager::clearAll();
+    SubprocessManager::clearAll();
 }
 
 // ---------------------------------------------------------------------------

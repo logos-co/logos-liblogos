@@ -1,4 +1,4 @@
-#include "process_manager.h"
+#include "subprocess_manager.h"
 
 #include <boost/asio/connect_pipe.hpp>
 #include <boost/asio/executor_work_guard.hpp>
@@ -8,6 +8,10 @@
 #include <boost/asio/writable_pipe.hpp>
 #include <boost/process/v2/process.hpp>
 #include <boost/process/v2/stdio.hpp>
+#include <boost/dll/runtime_symbol_info.hpp>
+
+#include <spdlog/spdlog.h>
+#include <spdlog/sinks/stdout_color_sinks.h>
 
 #include <sys/socket.h>
 #include <sys/un.h>
@@ -17,7 +21,9 @@
 #include <atomic>
 #include <chrono>
 #include <cstdio>
+#include <cstdlib>
 #include <cstring>
+#include <filesystem>
 #include <memory>
 #include <mutex>
 #include <string>
@@ -26,12 +32,70 @@
 
 namespace bp2  = boost::process::v2;
 namespace asio = boost::asio;
+namespace fs   = std::filesystem;
 
 namespace {
 
+// Dedicated logger for child stdout — uses a pattern that prints a
+// fictional "[out]" level, so stdout lines visually align with spdlog
+// output but are clearly distinguished from stderr-classified lines.
+std::shared_ptr<spdlog::logger>& moduleStdoutLogger() {
+    static std::shared_ptr<spdlog::logger> logger = []() {
+        auto l = spdlog::stdout_color_mt("logos_module_stdout");
+        l->set_pattern("[%Y-%m-%d %H:%M:%S.%e] [out] %v");
+        return l;
+    }();
+    return logger;
+}
+
+// ---------------------------------------------------------------------------
+// logos_host_qt resolution (moved from qt_subprocess_runtime.cpp)
+// ---------------------------------------------------------------------------
+
+fs::path findInDir(const fs::path& dir) {
+    for (const auto& name : {"logos_host_qt", "logos_host"}) {
+        auto candidate = (dir / name).lexically_normal();
+        if (fs::exists(candidate))
+            return candidate;
+    }
+    return {};
+}
+
+std::string resolveLogosHostPath(const std::vector<std::string>& pluginsDirs) {
+    std::string logosHostPath;
+
+    const char* envPath = std::getenv("LOGOS_HOST_PATH");
+    if (envPath)
+        logosHostPath = envPath;
+
+    if (logosHostPath.empty()) {
+        auto found = findInDir(fs::path(boost::dll::program_location().parent_path().string()));
+        if (!found.empty())
+            logosHostPath = found.string();
+    }
+
+    if (logosHostPath.empty() || !fs::exists(logosHostPath)) {
+        if (!pluginsDirs.empty()) {
+            auto binDir = fs::absolute(
+                fs::path(pluginsDirs.front()) / ".." / "bin"
+            ).lexically_normal();
+            auto found = findInDir(binDir);
+            if (!found.empty())
+                logosHostPath = found.string();
+        }
+    }
+
+    if (logosHostPath.empty() || !fs::exists(logosHostPath)) {
+        spdlog::critical("logos_host_qt (or logos_host) not found - set LOGOS_HOST_PATH or place it next to the executable (last tried: {})",
+                         logosHostPath);
+        return {};
+    }
+
+    return logosHostPath;
+}
+
 // ---------------------------------------------------------------------------
 // Background io_context: one thread, kept alive by a work guard.
-// Lazily initialised on first startProcess() call via ioRuntime().
 // ---------------------------------------------------------------------------
 
 struct IoRuntime {
@@ -57,16 +121,14 @@ IoRuntime& ioRuntime() {
 }
 
 // ---------------------------------------------------------------------------
-// ProcessEntry: owns one live child process and its read pipe.
-// Lifetime is managed via shared_ptr so async callbacks can safely reference
-// it even after the entry is removed from s_processes.
+// ProcessEntry: owns one live child process and its read pipes.
 // ---------------------------------------------------------------------------
 
 struct ProcessEntry {
     bp2::process                           process;
     asio::readable_pipe                    out_pipe;
     asio::readable_pipe                    err_pipe;
-    QtProcessManager::ProcessCallbacks     callbacks;
+    SubprocessManager::ProcessCallbacks    callbacks;
     std::string                            name;
     std::array<char, 4096>                 out_read_buf{};
     std::array<char, 4096>                 err_read_buf{};
@@ -74,12 +136,11 @@ struct ProcessEntry {
     std::string                            err_line_buf;
     // Set by async_wait callback; used by syncKill to avoid double-waitpid.
     std::atomic<bool>                exited{false};
-    // Set by terminateProcess/terminateAll to suppress onFinished callback.
     std::atomic<bool>                cancelled{false};
 
     ProcessEntry(bp2::process proc,
                  asio::readable_pipe out_rp, asio::readable_pipe err_rp,
-                 const std::string& n, const QtProcessManager::ProcessCallbacks& cb)
+                 const std::string& n, const SubprocessManager::ProcessCallbacks& cb)
         : process(std::move(proc))
         , out_pipe(std::move(out_rp))
         , err_pipe(std::move(err_rp))
@@ -89,15 +150,14 @@ struct ProcessEntry {
 };
 
 // ---------------------------------------------------------------------------
-// Global process registry: name -> ProcessEntry (nullptr = placeholder)
+// Global process registry
 // ---------------------------------------------------------------------------
 
 std::unordered_map<std::string, std::shared_ptr<ProcessEntry>> s_processes;
 std::mutex s_processesMutex;
 
 // ---------------------------------------------------------------------------
-// Unix domain socket path — matches Qt's QLocalSocket::connectToServer(),
-// which resolves to $TMPDIR/<name> on macOS and /tmp/<name> on Linux.
+// Unix domain socket path
 // ---------------------------------------------------------------------------
 
 std::string unixSocketPath(const std::string& name) {
@@ -165,8 +225,7 @@ void scheduleRead(std::shared_ptr<ProcessEntry> entry, bool isStderr) {
 }
 
 // ---------------------------------------------------------------------------
-// Async wait: fires when child process exits.
-// Called from the io_context thread.
+// Async wait
 // ---------------------------------------------------------------------------
 
 void scheduleWait(std::shared_ptr<ProcessEntry> entry) {
@@ -200,9 +259,7 @@ void scheduleWait(std::shared_ptr<ProcessEntry> entry) {
 }
 
 // ---------------------------------------------------------------------------
-// Synchronous kill: send SIGTERM, wait up to 5 s, then SIGKILL.
-// Waits for the exited flag set by the async_wait callback so we do not
-// call waitpid a second time (which would race with Boost.Asio's reaping).
+// Synchronous kill
 // ---------------------------------------------------------------------------
 
 void syncKill(std::shared_ptr<ProcessEntry> entry) {
@@ -214,7 +271,7 @@ void syncKill(std::shared_ptr<ProcessEntry> entry) {
     entry->out_pipe.close(ec); // cancel pending async_read on stdout
     entry->err_pipe.close(ec); // cancel pending async_read on stderr
 
-    entry->process.request_exit(ec); // SIGTERM
+    entry->process.request_exit(ec);
 
     auto wait = [&](std::chrono::milliseconds budget) -> bool {
         auto deadline = std::chrono::steady_clock::now() + budget;
@@ -226,11 +283,11 @@ void syncKill(std::shared_ptr<ProcessEntry> entry) {
     };
 
     if (!wait(std::chrono::seconds(5))) {
-        fprintf(stderr, "[QtProcessManager] Process did not terminate gracefully, killing: %s\n",
+        fprintf(stderr, "[SubprocessManager] Process did not terminate gracefully, killing: %s\n",
                 entry->name.c_str());
-        entry->process.terminate(ec); // SIGKILL
+        entry->process.terminate(ec);
         if (!wait(std::chrono::seconds(2))) {
-            fprintf(stderr, "[QtProcessManager] Process did not respond to SIGKILL: %s\n",
+            fprintf(stderr, "[SubprocessManager] Process did not respond to SIGKILL: %s\n",
                     entry->name.c_str());
         }
     }
@@ -239,14 +296,125 @@ void syncKill(std::shared_ptr<ProcessEntry> entry) {
 } // anonymous namespace
 
 // ===========================================================================
-// QtProcessManager public API
+// ModuleRuntime interface
 // ===========================================================================
 
-namespace QtProcessManager {
+bool SubprocessManager::canHandle(const LogosCore::ModuleDescriptor& desc) const
+{
+    return desc.format == "qt-plugin" || desc.format.empty();
+}
 
-bool startProcess(const std::string& name, const std::string& executable,
-                  const std::vector<std::string>& arguments,
-                  const ProcessCallbacks& callbacks)
+bool SubprocessManager::load(const LogosCore::ModuleDescriptor& desc,
+                              std::function<void(const std::string&)> onTerminated,
+                              LogosCore::LoadedModuleHandle& out)
+{
+    std::string logosHostPath = resolveLogosHostPath(desc.pluginsDirs);
+    if (logosHostPath.empty())
+        return false;
+
+    std::vector<std::string> arguments = {
+        "--name", desc.name,
+        "--path", desc.path
+    };
+
+    if (!desc.instancePersistencePath.empty()) {
+        arguments.push_back("--instance-persistence-path");
+        arguments.push_back(desc.instancePersistencePath);
+    }
+
+    ProcessCallbacks callbacks;
+
+    callbacks.onFinished = [onTerminated](const std::string& pName, int exitCode, bool crashed) {
+        (void)exitCode;
+        if (crashed) {
+            spdlog::critical("Plugin process crashed: {}", pName);
+            exit(1);
+        }
+        if (onTerminated)
+            onTerminated(pName);
+    };
+
+    callbacks.onError = [](const std::string& pName, bool crashed) {
+        if (crashed) {
+            spdlog::critical("Plugin process crashed: {}", pName);
+            exit(1);
+        }
+    };
+
+    callbacks.onOutput = [](const std::string& pName, const std::string& line, bool isStderr) {
+        if (!isStderr) {
+            moduleStdoutLogger()->info("[{}] {}", pName, line);
+            return;
+        }
+        auto contains = [&](std::initializer_list<const char*> keywords) {
+            for (const char* k : keywords)
+                if (line.find(k) != std::string::npos) return true;
+            return false;
+        };
+        // stderr: map common level prefixes (Qt's default message handler,
+        // test/assertion frameworks, spdlog-style output from children)
+        // onto spdlog levels. Default to info when no prefix is recognised.
+        if (contains({"Critical:", "CRITICAL:", "Fatal:", "FATAL:"}))
+            spdlog::critical("[{}] {}", pName, line);
+        else if (contains({"Error:", "ERROR:", "FAILED:"}))
+            spdlog::error("[{}] {}", pName, line);
+        else if (contains({"Warning:", "WARNING:"}))
+            spdlog::warn("[{}] {}", pName, line);
+        else if (contains({"Debug:", "DEBUG:"}))
+            spdlog::debug("[{}] {}", pName, line);
+        else if (contains({"Trace:", "TRACE:"}))
+            spdlog::trace("[{}] {}", pName, line);
+        else
+            spdlog::info("[{}] {}", pName, line);
+    };
+
+    if (!startProcess(desc.name, logosHostPath, arguments, callbacks))
+        return false;
+
+    out.name = desc.name;
+    out.pid  = getProcessId(desc.name);
+    return true;
+}
+
+bool SubprocessManager::sendToken(const std::string& name, const std::string& token)
+{
+    return sendTokenToProcess(name, token);
+}
+
+void SubprocessManager::terminate(const std::string& name)
+{
+    terminateProcess(name);
+}
+
+void SubprocessManager::terminateAll()
+{
+    terminateAllProcesses();
+}
+
+bool SubprocessManager::hasModule(const std::string& name) const
+{
+    return hasProcess(name);
+}
+
+std::optional<int64_t> SubprocessManager::pid(const std::string& name) const
+{
+    int64_t p = getProcessId(name);
+    if (p < 0) return std::nullopt;
+    return p;
+}
+
+std::unordered_map<std::string, int64_t> SubprocessManager::getAllPids() const
+{
+    return getAllProcessIds();
+}
+
+// ===========================================================================
+// Static process management API
+// ===========================================================================
+
+bool SubprocessManager::startProcess(const std::string& name, const std::string& executable,
+                                      const std::vector<std::string>& arguments,
+                                      const ProcessCallbacks& callbacks)
 {
     IoRuntime& rt = ioRuntime();
 
@@ -259,13 +427,13 @@ bool startProcess(const std::string& name, const std::string& executable,
 
     asio::connect_pipe(out_rpipe, out_wpipe, ec);
     if (ec) {
-        fprintf(stderr, "[QtProcessManager] Failed to create stdout pipe for %s: %s\n",
+        fprintf(stderr, "[SubprocessManager] Failed to create stdout pipe for %s: %s\n",
                 name.c_str(), ec.message().c_str());
         return false;
     }
     asio::connect_pipe(err_rpipe, err_wpipe, ec);
     if (ec) {
-        fprintf(stderr, "[QtProcessManager] Failed to create stderr pipe for %s: %s\n",
+        fprintf(stderr, "[SubprocessManager] Failed to create stderr pipe for %s: %s\n",
                 name.c_str(), ec.message().c_str());
         return false;
     }
@@ -274,7 +442,6 @@ bool startProcess(const std::string& name, const std::string& executable,
     pstdio.out = out_wpipe;
     pstdio.err = err_wpipe;
 
-    // Use the launcher directly with ec as second arg (non-throwing variant)
     bp2::process proc = bp2::default_process_launcher()(rt.ctx, ec, executable, arguments, pstdio);
 
     // Close write ends in parent once child has inherited them
@@ -282,7 +449,7 @@ bool startProcess(const std::string& name, const std::string& executable,
     err_wpipe.close();
 
     if (ec) {
-        fprintf(stderr, "[QtProcessManager] Failed to start process for %s: %s\n",
+        fprintf(stderr, "[SubprocessManager] Failed to start process for %s: %s\n",
                 name.c_str(), ec.message().c_str());
         return false;
     }
@@ -304,17 +471,16 @@ bool startProcess(const std::string& name, const std::string& executable,
     return true;
 }
 
-bool sendToken(const std::string& name, const std::string& token)
+bool SubprocessManager::sendTokenToProcess(const std::string& name, const std::string& token)
 {
     std::string socketName = "logos_token_" + name;
     std::string path = unixSocketPath(socketName);
 
-    // Retry up to 10 times with 100 ms sleep (matching Qt behaviour)
     int sock = -1;
     for (int attempt = 0; attempt < 10; ++attempt) {
         sock = ::socket(AF_UNIX, SOCK_STREAM, 0);
         if (sock < 0) {
-            fprintf(stderr, "[QtProcessManager] socket() failed: %s\n", strerror(errno));
+            fprintf(stderr, "[SubprocessManager] socket() failed: %s\n", strerror(errno));
             break;
         }
 
@@ -323,7 +489,7 @@ bool sendToken(const std::string& name, const std::string& token)
         strncpy(addr.sun_path, path.c_str(), sizeof(addr.sun_path) - 1);
 
         if (::connect(sock, reinterpret_cast<struct sockaddr*>(&addr), sizeof(addr)) == 0)
-            break; // connected
+            break;
 
         ::close(sock);
         sock = -1;
@@ -331,10 +497,9 @@ bool sendToken(const std::string& name, const std::string& token)
     }
 
     if (sock < 0) {
-        fprintf(stderr, "[QtProcessManager] Failed to connect to token socket for: %s\n",
+        fprintf(stderr, "[SubprocessManager] Failed to connect to token socket for: %s\n",
                 name.c_str());
 
-        // Remove and kill associated process (matching Qt behaviour)
         std::shared_ptr<ProcessEntry> entry;
         {
             std::lock_guard<std::mutex> lock(s_processesMutex);
@@ -361,7 +526,7 @@ bool sendToken(const std::string& name, const std::string& token)
     return written == total;
 }
 
-void terminateProcess(const std::string& name)
+void SubprocessManager::terminateProcess(const std::string& name)
 {
     std::shared_ptr<ProcessEntry> entry;
     {
@@ -371,10 +536,10 @@ void terminateProcess(const std::string& name)
         entry = it->second;
         s_processes.erase(it);
     }
-    syncKill(entry); // blocks until process exits
+    syncKill(entry);
 }
 
-void terminateAll()
+void SubprocessManager::terminateAllProcesses()
 {
     std::unordered_map<std::string, std::shared_ptr<ProcessEntry>> snapshot;
     {
@@ -386,22 +551,22 @@ void terminateAll()
         syncKill(entry);
 }
 
-bool hasProcess(const std::string& name)
+bool SubprocessManager::hasProcess(const std::string& name)
 {
     std::lock_guard<std::mutex> lock(s_processesMutex);
     return s_processes.count(name) > 0;
 }
 
-int64_t getProcessId(const std::string& name)
+int64_t SubprocessManager::getProcessId(const std::string& name)
 {
     std::lock_guard<std::mutex> lock(s_processesMutex);
     auto it = s_processes.find(name);
     if (it == s_processes.end()) return -1;
-    if (!it->second)              return -1; // placeholder
+    if (!it->second)              return -1;
     return static_cast<int64_t>(it->second->process.id());
 }
 
-std::unordered_map<std::string, int64_t> getAllProcessIds()
+std::unordered_map<std::string, int64_t> SubprocessManager::getAllProcessIds()
 {
     std::lock_guard<std::mutex> lock(s_processesMutex);
     std::unordered_map<std::string, int64_t> result;
@@ -411,7 +576,7 @@ std::unordered_map<std::string, int64_t> getAllProcessIds()
     return result;
 }
 
-void clearAll()
+void SubprocessManager::clearAll()
 {
     std::unordered_map<std::string, std::shared_ptr<ProcessEntry>> snapshot;
     {
@@ -422,11 +587,9 @@ void clearAll()
         syncKill(entry);
 }
 
-void registerProcess(const std::string& name)
+void SubprocessManager::registerProcess(const std::string& name)
 {
     std::lock_guard<std::mutex> lock(s_processesMutex);
     if (!s_processes.count(name))
         s_processes[name] = nullptr;
 }
-
-} // namespace QtProcessManager

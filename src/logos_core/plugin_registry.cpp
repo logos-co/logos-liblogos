@@ -59,9 +59,6 @@ void PluginRegistry::discoverInstalledModules() {
 
         std::string pluginName = processPluginInternal(mod.mainFilePath);
         if (pluginName.empty()) {
-            // Skip entries with no extractable metadata — a bare
-            // `scannedNames.insert` would record an empty string and the
-            // prune loop would mis-identify still-present plugins as gone.
             spdlog::warn("Failed to process plugin: {}", mod.mainFilePath);
             continue;
         }
@@ -269,6 +266,24 @@ bool PluginRegistry::isLoaded(const std::string& name) const {
 void PluginRegistry::markLoaded(const std::string& name) {
     std::unique_lock lock(m_mutex);
     m_plugins[name].loaded = true;
+}
+
+void PluginRegistry::markLoaded(const std::string& name,
+                                 std::shared_ptr<LogosCore::ModuleRuntime> runtime,
+                                 LogosCore::LoadedModuleHandle handle) {
+    std::unique_lock lock(m_mutex);
+    auto& info = m_plugins[name];
+    info.loaded  = true;
+    info.runtime = std::move(runtime);
+    info.handle  = std::move(handle);
+}
+
+std::shared_ptr<LogosCore::ModuleRuntime>
+PluginRegistry::runtimeFor(const std::string& name) const {
+    std::shared_lock lock(m_mutex);
+    auto it = m_plugins.find(name);
+    if (it == m_plugins.end()) return nullptr;
+    return it->second.runtime;
 }
 
 void PluginRegistry::markUnloaded(const std::string& name) {

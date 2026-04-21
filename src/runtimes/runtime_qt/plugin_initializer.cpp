@@ -15,7 +15,6 @@ using namespace ModuleLib;
 
 LogosModule loadPlugin(const std::string& pluginPath, const std::string& expectedName)
 {
-    // Load the plugin using module_lib for abstraction
     std::string errorString;
     LogosModule module = LogosModule::loadFromPath(pluginPath, &errorString);
 

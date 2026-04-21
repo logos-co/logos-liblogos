@@ -96,23 +96,24 @@ set(LOGOS_CORE_SOURCES
     logos_core/dependency_resolver.h
     logos_core/plugin_manager.cpp
     logos_core/plugin_manager.h
-    logos_core/plugin_launcher.cpp
-    logos_core/plugin_launcher.h
-    logos_core/process_manager.cpp
-    logos_core/process_manager.h
+    logos_core/module_runtime.h
+    logos_core/runtime_registry.cpp
+    logos_core/runtime_registry.h
+    runtimes/runtime_qt/subprocess_manager.cpp
+    runtimes/runtime_qt/subprocess_manager.h
 )
 
 # Define the logos host sources
 set(LOGOS_HOST_SOURCES
-    logos_host/logos_host.cpp
-    logos_host/command_line_parser.cpp
-    logos_host/command_line_parser.h
-    logos_host/plugin_initializer.cpp
-    logos_host/plugin_initializer.h
-    logos_host/qt/qt_app.cpp
-    logos_host/qt/qt_app.h
-    logos_host/qt/qt_token_receiver.cpp
-    logos_host/qt/qt_token_receiver.h
+    runtimes/runtime_qt/logos_host.cpp
+    runtimes/runtime_qt/command_line_parser.cpp
+    runtimes/runtime_qt/command_line_parser.h
+    runtimes/runtime_qt/plugin_initializer.cpp
+    runtimes/runtime_qt/plugin_initializer.h
+    runtimes/runtime_qt/qt/qt_app.cpp
+    runtimes/runtime_qt/qt/qt_app.h
+    runtimes/runtime_qt/qt/qt_token_receiver.cpp
+    runtimes/runtime_qt/qt/qt_token_receiver.h
 )
 
 # Create the logos core library
@@ -170,6 +171,7 @@ target_link_libraries(logos_core PUBLIC
 target_include_directories(logos_core PRIVATE
     ${CMAKE_CURRENT_SOURCE_DIR}
     ${CMAKE_CURRENT_SOURCE_DIR}/logos_core
+    ${CMAKE_CURRENT_SOURCE_DIR}/runtimes
     ${Qt${QT_VERSION_MAJOR}_INCLUDE_DIRS}
 )
 
@@ -219,10 +221,10 @@ else()
 endif()
 
 # Create the logos host application
-add_executable(logos_host ${LOGOS_HOST_SOURCES})
+add_executable(logos_host_qt ${LOGOS_HOST_SOURCES})
 
 # Link the logos host with Qt libraries and module library
-target_link_libraries(logos_host PRIVATE
+target_link_libraries(logos_host_qt PRIVATE
     Qt${QT_VERSION_MAJOR}::Core
     Qt${QT_VERSION_MAJOR}::RemoteObjects
     logos_sdk
@@ -232,15 +234,15 @@ target_link_libraries(logos_host PRIVATE
 )
 
 # Include directories for the logos host application
-target_include_directories(logos_host PRIVATE
+target_include_directories(logos_host_qt PRIVATE
     ${CMAKE_CURRENT_SOURCE_DIR}
-    ${CMAKE_CURRENT_SOURCE_DIR}/logos_host
+    ${CMAKE_CURRENT_SOURCE_DIR}/runtimes/runtime_qt
     ${Qt${QT_VERSION_MAJOR}_INCLUDE_DIRS}
 )
 
 # Add logos_module include directory if available
 if(DEFINED LOGOS_MODULE_ROOT AND EXISTS "${LOGOS_MODULE_ROOT}/include")
-    target_include_directories(logos_host PRIVATE
+    target_include_directories(logos_host_qt PRIVATE
         ${LOGOS_MODULE_ROOT}/include
         ${LOGOS_MODULE_ROOT}/include/module_lib
     )
@@ -248,13 +250,13 @@ endif()
 
 # Add SDK include directory if using built SDK
 if(EXISTS "${LOGOS_CPP_SDK_ROOT}/lib" AND EXISTS "${LOGOS_CPP_SDK_ROOT}/include")
-    target_include_directories(logos_host PRIVATE
+    target_include_directories(logos_host_qt PRIVATE
         ${LOGOS_CPP_SDK_ROOT}/include
         ${LOGOS_CPP_SDK_ROOT}/include/cpp
         ${LOGOS_CPP_SDK_ROOT}/include/core
     )
 else()
-    target_include_directories(logos_host PRIVATE ${LOGOS_CPP_SDK_ROOT}/cpp)
+    target_include_directories(logos_host_qt PRIVATE ${LOGOS_CPP_SDK_ROOT}/cpp)
 endif()
 
 # Set RPATH settings for the executable
@@ -266,11 +268,11 @@ if(APPLE)
     endif()
     list(REMOVE_DUPLICATES _qt_exec_runtime_paths)
 
-    set_target_properties(logos_host PROPERTIES
+    set_target_properties(logos_host_qt PROPERTIES
         INSTALL_RPATH "${_qt_exec_runtime_paths}"
         BUILD_WITH_INSTALL_RPATH TRUE)
 else()
-    set_target_properties(logos_host PROPERTIES
+    set_target_properties(logos_host_qt PROPERTIES
         INSTALL_RPATH "$ORIGIN/../lib"
         BUILD_WITH_INSTALL_RPATH TRUE)
 endif()
