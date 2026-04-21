@@ -1,5 +1,5 @@
-# Bundles modules from external flake inputs into the logos_host modules directory.
-# logos_host expects: modules/<name>/manifest.json + <name>_plugin.{so,dylib}
+# Bundles modules from external flake inputs into the logos_host_qt modules directory.
+# logos_host_qt expects: modules/<name>/manifest.json + <name>_plugin.{so,dylib}
 # When portableBuild is false (default/dev), manifest keys get a "-dev" suffix
 # to match the dev variant lookup in platformVariantsToTry().
 { pkgs, common, capabilityModule, portableBuild ? false }:

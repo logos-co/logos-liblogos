@@ -57,11 +57,18 @@ include(GoogleTest)
 add_subdirectory(tests)
 
 # Install rules
-install(TARGETS logos_core logos_host
+install(TARGETS logos_core logos_host_qt
     LIBRARY DESTINATION lib
     RUNTIME DESTINATION bin
     ARCHIVE DESTINATION lib
 )
+
+# Compatibility symlink: logos_host -> logos_host_qt so downstream consumers keep working
+install(CODE "
+  execute_process(COMMAND \${CMAKE_COMMAND} -E create_symlink
+    logos_host_qt
+    \${CMAKE_INSTALL_PREFIX}/bin/logos_host)
+")
 
 # Install headers
 install(FILES src/logos_core/logos_core.h

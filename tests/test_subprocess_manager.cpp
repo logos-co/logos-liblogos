@@ -15,7 +15,7 @@
 // =============================================================================
 #include <gtest/gtest.h>
 #include "logos_core.h"
-#include "process_manager.h"
+#include "subprocess_manager.h"
 #include "qt_test_adapter.h"
 #include <atomic>
 #include <chrono>
@@ -213,7 +213,7 @@ TEST_F(ProcessManagerTest, StartProcess_OnOutput_SplitsStdoutAndStderr) {
     std::vector<std::pair<std::string, bool>> lines; // (line, isStderr)
     std::atomic<bool> finished{false};
 
-    QtProcessManager::ProcessCallbacks cb;
+    SubprocessManager::ProcessCallbacks cb;
     cb.onOutput = [&](const std::string& /*name*/, const std::string& line, bool isStderr) {
         std::lock_guard<std::mutex> lock(mtx);
         lines.emplace_back(line, isStderr);
@@ -225,7 +225,7 @@ TEST_F(ProcessManagerTest, StartProcess_OnOutput_SplitsStdoutAndStderr) {
     };
 
     std::vector<std::string> args = {"-c", "echo out-line; echo err-line >&2"};
-    ASSERT_TRUE(QtProcessManager::startProcess("dualstream", "/bin/sh", args, cb));
+    ASSERT_TRUE(SubprocessManager::startProcess("dualstream", "/bin/sh", args, cb));
 
     std::unique_lock<std::mutex> lock(mtx);
     cv.wait_for(lock, std::chrono::seconds(5),
