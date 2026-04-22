@@ -123,7 +123,7 @@ TEST_F(ProcessStatsTest, GetProcessStats_CpuPercentUpdatesOnSecondCall) {
 // getModuleStats Tests
 // =============================================================================
 
-TEST_F(ProcessStatsTest, GetModuleStats_ReturnsEmptyArrayWhenNoPlugins) {
+TEST_F(ProcessStatsTest, GetModuleStats_ReturnsEmptyArrayWhenNoModules) {
     std::unordered_map<std::string, int64_t> processes;
     char* result = ProcessStats::getModuleStats(processes);
 
@@ -159,7 +159,7 @@ TEST_F(ProcessStatsTest, GetModuleStats_ReturnsValidJsonStructure) {
     m_processes.push_back(pid);
 
     std::unordered_map<std::string, int64_t> processes;
-    processes.emplace("test_plugin", static_cast<int64_t>(pid));
+    processes.emplace("test_module", static_cast<int64_t>(pid));
 
     char* result = ProcessStats::getModuleStats(processes);
 
@@ -176,7 +176,7 @@ TEST_F(ProcessStatsTest, GetModuleStats_ReturnsValidJsonStructure) {
     EXPECT_TRUE(moduleObj.contains("cpu_time_seconds"));
     EXPECT_TRUE(moduleObj.contains("memory_mb"));
 
-    EXPECT_EQ(moduleObj["name"].get<std::string>(), "test_plugin");
+    EXPECT_EQ(moduleObj["name"].get<std::string>(), "test_module");
     EXPECT_GE(moduleObj["cpu_percent"].get<double>(), 0.0);
     EXPECT_GE(moduleObj["cpu_time_seconds"].get<double>(), 0.0);
     EXPECT_GE(moduleObj["memory_mb"].get<double>(), 0.0);

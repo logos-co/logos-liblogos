@@ -1,20 +1,20 @@
 #include "command_line_parser.h"
 #include <CLI/CLI.hpp>
 
-PluginArgs parseCommandLineArgs(int argc, char *argv[])
+ModuleArgs parseCommandLineArgs(int argc, char *argv[])
 {
-    PluginArgs result;
+    ModuleArgs result;
     result.valid = false;
 
-    CLI::App app{"Logos host for loading plugins in separate processes"};
+    CLI::App app{"Logos host for loading modules in separate processes"};
     app.set_version_flag("-v,--version", "1.0");
 
-    app.add_option("-n,--name", result.name, "Name of the plugin to load")
+    app.add_option("-n,--name", result.name, "Name of the module to load")
         ->required();
-    app.add_option("-p,--path", result.path, "Path to the plugin file")
+    app.add_option("-p,--path", result.path, "Path to the module file")
         ->required();
     app.add_option("--instance-persistence-path", result.instancePersistencePath,
-        "Instance persistence directory for the plugin");
+        "Instance persistence directory for the module");
 
     try {
         app.parse(argc, argv);

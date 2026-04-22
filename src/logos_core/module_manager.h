@@ -1,5 +1,5 @@
-#ifndef PLUGIN_MANAGER_H
-#define PLUGIN_MANAGER_H
+#ifndef MODULE_MANAGER_H
+#define MODULE_MANAGER_H
 
 #include "runtime_registry.h"
 #include <string>
@@ -7,47 +7,47 @@
 #include <unordered_map>
 #include <cstdint>
 
-class PluginRegistry;
+class ModuleRegistry;
 
-namespace PluginManager {
-    PluginRegistry& registry();
+namespace ModuleManager {
+    ModuleRegistry& registry();
 
     // Access the runtime registry (e.g. for tests that need to install a FakeRuntime).
     LogosCore::RuntimeRegistry& runtimes();
 
-    void setPluginsDir(const char* plugins_dir);
-    void addPluginsDir(const char* plugins_dir);
+    void setModulesDir(const char* modules_dir);
+    void addModulesDir(const char* modules_dir);
     void setPersistenceBasePath(const char* path);
 
     void discoverInstalledModules();
 
-    std::string processPlugin(const std::string& pluginPath);
-    char* processPluginCStr(const char* pluginPath);
-    bool loadPlugin(const char* pluginName);
-    bool loadPluginWithDependencies(const char* pluginName);
+    std::string processModule(const std::string& modulePath);
+    char* processModuleCStr(const char* modulePath);
+    bool loadModule(const char* moduleName);
+    bool loadModuleWithDependencies(const char* moduleName);
     bool initializeCapabilityModule();
-    bool unloadPlugin(const char* pluginName);
+    bool unloadModule(const char* moduleName);
 
-    // Cascading unload: unload the named plugin together with every currently
-    // loaded plugin that (transitively) depends on it. The order is
+    // Cascading unload: unload the named module together with every currently
+    // loaded module that (transitively) depends on it. The order is
     // leaves-first (dependents before dependencies) so no process is left
     // briefly pointing at a dead parent.
     // Returns true only if every step succeeded.
-    bool unloadPluginWithDependents(const char* pluginName);
+    bool unloadModuleWithDependents(const char* moduleName);
 
     void terminateAll();
     void clear();
 
-    char** getLoadedPluginsCStr();
-    char** getKnownPluginsCStr();
+    char** getLoadedModulesCStr();
+    char** getKnownModulesCStr();
 
-    bool isPluginLoaded(const std::string& name);
-    std::unordered_map<std::string, int64_t> getPluginProcessIds();
+    bool isModuleLoaded(const std::string& name);
+    std::unordered_map<std::string, int64_t> getModuleProcessIds();
 
     std::vector<std::string> resolveDependencies(const std::vector<std::string>& requestedModules);
 
     // Returns the declared dependencies of `name` among known modules.
-    // Names that appear only in plugin metadata and are not known to the
+    // Names that appear only in module metadata and are not known to the
     // registry are not included in the returned list.
     // `recursive=true` walks the forward dependency graph transitively.
     std::vector<std::string> getDependencies(const std::string& name, bool recursive);
@@ -66,4 +66,4 @@ namespace PluginManager {
     char** getDependentsCStr(const char* name, bool recursive);
 }
 
-#endif // PLUGIN_MANAGER_H
+#endif // MODULE_MANAGER_H

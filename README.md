@@ -109,28 +109,28 @@ void logos_core_start();
 int  logos_core_exec();
 void logos_core_cleanup();
 
-// Plugin directory management
-void logos_core_set_plugins_dir(const char* dir);
-void logos_core_add_plugins_dir(const char* dir);
+// Module directory management
+void logos_core_set_modules_dir(const char* dir);
+void logos_core_add_modules_dir(const char* dir);
 
 // Instance persistence
 void logos_core_set_persistence_base_path(const char* path);
 
-// Plugin management
-int  logos_core_load_plugin(const char* name);
-int  logos_core_load_plugin_with_dependencies(const char* name);
-int  logos_core_unload_plugin(const char* name);
-int  logos_core_unload_plugin_with_dependents(const char* name);
-char* logos_core_process_plugin(const char* path);
-void logos_core_refresh_plugins();
+// Module management
+int  logos_core_load_module(const char* name);
+int  logos_core_load_module_with_dependencies(const char* name);
+int  logos_core_unload_module(const char* name);
+int  logos_core_unload_module_with_dependents(const char* name);
+char* logos_core_process_module(const char* path);
+void logos_core_refresh_modules();
 
 // Dependency graph queries (forward + reverse edges; recursive walks BFS)
 char** logos_core_get_module_dependencies(const char* name, bool recursive);
 char** logos_core_get_module_dependents(const char* name, bool recursive);
 
-// Plugin queries
-char** logos_core_get_loaded_plugins();
-char** logos_core_get_known_plugins();
+// Module queries
+char** logos_core_get_loaded_modules();
+char** logos_core_get_known_modules();
 
 // Module stats and tokens
 char* logos_core_get_module_stats();
@@ -144,17 +144,17 @@ See `src/logos_core/logos_core.h` for the full API.
 
 ### Thread safety
 
-Plugin load/unload operations (`logos_core_load_plugin`, `logos_core_load_plugin_with_dependencies`, `logos_core_unload_plugin`, `logos_core_unload_plugin_with_dependents`) are serialised internally by a single mutex. It is safe to call them concurrently from multiple threads, including rapid and repeated load/unload cycles on the same module — each call waits for its turn and the process management layer handles teardown cleanly before the next launch. `logos_core_unload_plugin_with_dependents` in particular holds the lock for its entire leaves-first teardown so a late-arriving load can't interleave between tearing down a dependent and its parent.
+Module load/unload operations (`logos_core_load_module`, `logos_core_load_module_with_dependencies`, `logos_core_unload_module`, `logos_core_unload_module_with_dependents`) are serialised internally by a single mutex. It is safe to call them concurrently from multiple threads, including rapid and repeated load/unload cycles on the same module — each call waits for its turn and the process management layer handles teardown cleanly before the next launch. `logos_core_unload_module_with_dependents` in particular holds the lock for its entire leaves-first teardown so a late-arriving load can't interleave between tearing down a dependent and its parent.
 
-`logos_core_refresh_plugins` is synchronised through the plugin registry's reader-writer lock — it is safe to call concurrently with other registry accesses, but it is **not** serialised against load/unload by the same mutex as above.
+`logos_core_refresh_modules` is synchronised through the module registry's reader-writer lock — it is safe to call concurrently with other registry accesses, but it is **not** serialised against load/unload by the same mutex as above.
 
-Read-only accessors (`logos_core_get_known_plugins`, `logos_core_get_loaded_plugins`) use that shared reader-writer lock and are safe to call concurrently with each other and with `logos_core_refresh_plugins`.
+Read-only accessors (`logos_core_get_known_modules`, `logos_core_get_loaded_modules`) use that shared reader-writer lock and are safe to call concurrently with each other and with `logos_core_refresh_modules`.
 
 ## Dev vs Portable Builds
 
 The library supports two build modes controlled by the `LOGOS_PORTABLE_BUILD` CMake flag:
 
-- **Dev build** (default): Plugin loading looks for LGX variants with `-dev` suffix (e.g., `linux-amd64-dev`). Used in Nix/development environments.
+- **Dev build** (default): Module loading looks for LGX variants with `-dev` suffix (e.g., `linux-amd64-dev`). Used in Nix/development environments.
 - **Portable build** (`-DLOGOS_PORTABLE_BUILD=ON`): Looks for portable variants without suffix (e.g., `linux-amd64`). Used in self-contained distributed applications.
 
 Build the portable variant with `nix build '.#portable'`.

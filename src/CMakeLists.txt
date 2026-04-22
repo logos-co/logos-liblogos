@@ -90,12 +90,12 @@ endif()
 set(LOGOS_CORE_SOURCES
     logos_core/logos_core.cpp
     logos_core/logos_core.h
-    logos_core/plugin_registry.cpp
-    logos_core/plugin_registry.h
+    logos_core/module_registry.cpp
+    logos_core/module_registry.h
     logos_core/dependency_resolver.cpp
     logos_core/dependency_resolver.h
-    logos_core/plugin_manager.cpp
-    logos_core/plugin_manager.h
+    logos_core/module_manager.cpp
+    logos_core/module_manager.h
     logos_core/module_runtime.h
     logos_core/runtime_registry.cpp
     logos_core/runtime_registry.h
@@ -108,8 +108,8 @@ set(LOGOS_HOST_SOURCES
     runtimes/runtime_qt/logos_host.cpp
     runtimes/runtime_qt/command_line_parser.cpp
     runtimes/runtime_qt/command_line_parser.h
-    runtimes/runtime_qt/plugin_initializer.cpp
-    runtimes/runtime_qt/plugin_initializer.h
+    runtimes/runtime_qt/module_initializer.cpp
+    runtimes/runtime_qt/module_initializer.h
     runtimes/runtime_qt/qt/qt_app.cpp
     runtimes/runtime_qt/qt/qt_app.h
     runtimes/runtime_qt/qt/qt_token_receiver.cpp

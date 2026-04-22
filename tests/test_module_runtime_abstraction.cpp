@@ -1,8 +1,8 @@
 // =============================================================================
 // Tests for the ModuleRuntime abstraction seam.
 //
-// Installs a FakeRuntime into PluginManager's RuntimeRegistry and drives the
-// full PluginManager load/unload/terminateAll path. Proves that:
+// Installs a FakeRuntime into ModuleManager's RuntimeRegistry and drives the
+// full ModuleManager load/unload/terminateAll path. Proves that:
 //   - load(), sendToken(), terminate(), terminateAll() are routed through the
 //     runtime abstraction (not directly to a subprocess or Qt mechanism).
 //   - Dependency-ordered loads call load() in the correct (topo) order.
@@ -12,8 +12,8 @@
 #include <gtest/gtest.h>
 #include "logos_core.h"
 #include "qt_test_adapter.h"
-#include "plugin_manager.h"
-#include "plugin_registry.h"
+#include "module_manager.h"
+#include "module_registry.h"
 #include "runtime_registry.h"
 #include "module_runtime.h"
 #include "subprocess_manager.h"
@@ -96,8 +96,8 @@ protected:
         SubprocessManager::clearAll();
 
         fake = std::make_shared<FakeRuntime>();
-        PluginManager::runtimes().clearForTests();
-        PluginManager::runtimes().registerRuntime(fake);
+        ModuleManager::runtimes().clearForTests();
+        ModuleManager::runtimes().registerRuntime(fake);
     }
 
     void TearDown() override {
@@ -105,18 +105,18 @@ protected:
         logos_core_clear();
         SubprocessManager::clearAll();
         // Restore default runtime so other test suites aren't affected.
-        PluginManager::runtimes().clearForTests();
-        PluginManager::runtimes().registerRuntime(
+        ModuleManager::runtimes().clearForTests();
+        ModuleManager::runtimes().registerRuntime(
             std::make_shared<SubprocessManager>());
     }
 
-    void registerPlugin(const std::string& name,
+    void registerModule(const std::string& name,
                         const std::vector<std::string>& deps = {}) {
         std::string path = "/fake/" + name + "_plugin.so";
-        logos_core_register_plugin(name.c_str(), path.c_str());
+        logos_core_register_module(name.c_str(), path.c_str());
         std::vector<const char*> depPtrs;
         for (const auto& d : deps) depPtrs.push_back(d.c_str());
-        logos_core_register_plugin_dependencies(
+        logos_core_register_module_dependencies(
             name.c_str(),
             depPtrs.empty() ? nullptr : depPtrs.data(),
             static_cast<int>(depPtrs.size()));
@@ -127,59 +127,59 @@ protected:
 // Basic load/unload routing
 // =============================================================================
 
-TEST_F(ModuleRuntimeAbstractionTest, LoadPlugin_CallsFakeRuntimeLoad) {
-    registerPlugin("foo");
+TEST_F(ModuleRuntimeAbstractionTest, LoadModule_CallsFakeRuntimeLoad) {
+    registerModule("foo");
 
-    int result = logos_core_load_plugin("foo");
+    int result = logos_core_load_module("foo");
     ASSERT_EQ(result, 1);
 
     ASSERT_EQ(fake->loadCalls.size(), 1u);
     EXPECT_EQ(fake->loadCalls[0], "foo");
 }
 
-TEST_F(ModuleRuntimeAbstractionTest, LoadPlugin_CallsSendTokenAfterLoad) {
-    registerPlugin("foo");
+TEST_F(ModuleRuntimeAbstractionTest, LoadModule_CallsSendTokenAfterLoad) {
+    registerModule("foo");
 
-    logos_core_load_plugin("foo");
+    logos_core_load_module("foo");
 
     ASSERT_EQ(fake->sendTokenCalls.size(), 1u);
     EXPECT_EQ(fake->sendTokenCalls[0].first, "foo");
     EXPECT_FALSE(fake->sendTokenCalls[0].second.empty());
 }
 
-TEST_F(ModuleRuntimeAbstractionTest, LoadPlugin_MarksModuleAsLoaded) {
-    registerPlugin("foo");
+TEST_F(ModuleRuntimeAbstractionTest, LoadModule_MarksModuleAsLoaded) {
+    registerModule("foo");
 
-    logos_core_load_plugin("foo");
+    logos_core_load_module("foo");
 
-    EXPECT_EQ(logos_core_is_plugin_loaded("foo"), 1);
+    EXPECT_EQ(logos_core_is_module_loaded("foo"), 1);
 }
 
-TEST_F(ModuleRuntimeAbstractionTest, LoadPlugin_StoresRuntimeInRegistry) {
-    registerPlugin("foo");
-    logos_core_load_plugin("foo");
+TEST_F(ModuleRuntimeAbstractionTest, LoadModule_StoresRuntimeInRegistry) {
+    registerModule("foo");
+    logos_core_load_module("foo");
 
-    auto rt = PluginManager::registry().runtimeFor("foo");
+    auto rt = ModuleManager::registry().runtimeFor("foo");
     EXPECT_EQ(rt.get(), fake.get());
 }
 
-TEST_F(ModuleRuntimeAbstractionTest, UnloadPlugin_CallsFakeRuntimeTerminate) {
-    registerPlugin("foo");
-    logos_core_load_plugin("foo");
+TEST_F(ModuleRuntimeAbstractionTest, UnloadModule_CallsFakeRuntimeTerminate) {
+    registerModule("foo");
+    logos_core_load_module("foo");
 
-    int result = logos_core_unload_plugin("foo");
+    int result = logos_core_unload_module("foo");
     ASSERT_EQ(result, 1);
 
     ASSERT_EQ(fake->terminateCalls.size(), 1u);
     EXPECT_EQ(fake->terminateCalls[0], "foo");
 }
 
-TEST_F(ModuleRuntimeAbstractionTest, UnloadPlugin_MarksModuleAsUnloaded) {
-    registerPlugin("foo");
-    logos_core_load_plugin("foo");
-    logos_core_unload_plugin("foo");
+TEST_F(ModuleRuntimeAbstractionTest, UnloadModule_MarksModuleAsUnloaded) {
+    registerModule("foo");
+    logos_core_load_module("foo");
+    logos_core_unload_module("foo");
 
-    EXPECT_EQ(logos_core_is_plugin_loaded("foo"), 0);
+    EXPECT_EQ(logos_core_is_module_loaded("foo"), 0);
 }
 
 // =============================================================================
@@ -189,11 +189,11 @@ TEST_F(ModuleRuntimeAbstractionTest, UnloadPlugin_MarksModuleAsUnloaded) {
 TEST_F(ModuleRuntimeAbstractionTest, LoadWithDeps_LoadsInTopologicalOrder) {
     // Chain: c depends on b, b depends on a.
     // Expected load order: a, b, c.
-    registerPlugin("a");
-    registerPlugin("b", {"a"});
-    registerPlugin("c", {"b"});
+    registerModule("a");
+    registerModule("b", {"a"});
+    registerModule("c", {"b"});
 
-    int result = logos_core_load_plugin_with_dependencies("c");
+    int result = logos_core_load_module_with_dependencies("c");
     ASSERT_EQ(result, 1);
 
     ASSERT_EQ(fake->loadCalls.size(), 3u);
@@ -203,13 +203,13 @@ TEST_F(ModuleRuntimeAbstractionTest, LoadWithDeps_LoadsInTopologicalOrder) {
 }
 
 TEST_F(ModuleRuntimeAbstractionTest, LoadWithDeps_SkipsAlreadyLoadedModules) {
-    registerPlugin("a");
-    registerPlugin("b", {"a"});
+    registerModule("a");
+    registerModule("b", {"a"});
 
-    logos_core_load_plugin("a");
+    logos_core_load_module("a");
     fake->loadCalls.clear();
 
-    logos_core_load_plugin_with_dependencies("b");
+    logos_core_load_module_with_dependencies("b");
 
     ASSERT_EQ(fake->loadCalls.size(), 1u);
     EXPECT_EQ(fake->loadCalls[0], "b");
@@ -220,47 +220,47 @@ TEST_F(ModuleRuntimeAbstractionTest, LoadWithDeps_SkipsAlreadyLoadedModules) {
 // =============================================================================
 
 TEST_F(ModuleRuntimeAbstractionTest, TerminateAll_CallsFakeTerminateAll) {
-    registerPlugin("foo");
-    logos_core_load_plugin("foo");
+    registerModule("foo");
+    logos_core_load_module("foo");
 
     logos_core_terminate_all();
 
     EXPECT_EQ(fake->terminateAllCount, 1);
-    EXPECT_EQ(logos_core_is_plugin_loaded("foo"), 0);
+    EXPECT_EQ(logos_core_is_module_loaded("foo"), 0);
 }
 
 // =============================================================================
 // Error paths
 // =============================================================================
 
-TEST_F(ModuleRuntimeAbstractionTest, LoadPlugin_ReturnsFalseWhenRuntimeLoadFails) {
-    registerPlugin("bad");
+TEST_F(ModuleRuntimeAbstractionTest, LoadModule_ReturnsFalseWhenRuntimeLoadFails) {
+    registerModule("bad");
     fake->failOn.insert("bad");
 
-    int result = logos_core_load_plugin("bad");
+    int result = logos_core_load_module("bad");
     EXPECT_EQ(result, 0);
 }
 
-TEST_F(ModuleRuntimeAbstractionTest, LoadPlugin_DoesNotCallSendTokenOnLoadFailure) {
-    registerPlugin("bad");
+TEST_F(ModuleRuntimeAbstractionTest, LoadModule_DoesNotCallSendTokenOnLoadFailure) {
+    registerModule("bad");
     fake->failOn.insert("bad");
 
-    logos_core_load_plugin("bad");
+    logos_core_load_module("bad");
 
     EXPECT_TRUE(fake->sendTokenCalls.empty());
 }
 
-TEST_F(ModuleRuntimeAbstractionTest, LoadPlugin_DoesNotMarkAsLoadedOnFailure) {
-    registerPlugin("bad");
+TEST_F(ModuleRuntimeAbstractionTest, LoadModule_DoesNotMarkAsLoadedOnFailure) {
+    registerModule("bad");
     fake->failOn.insert("bad");
 
-    logos_core_load_plugin("bad");
+    logos_core_load_module("bad");
 
-    EXPECT_EQ(logos_core_is_plugin_loaded("bad"), 0);
+    EXPECT_EQ(logos_core_is_module_loaded("bad"), 0);
 }
 
-TEST_F(ModuleRuntimeAbstractionTest, LoadPlugin_ReturnsFalseForUnknownPlugin) {
-    int result = logos_core_load_plugin("not_registered");
+TEST_F(ModuleRuntimeAbstractionTest, LoadModule_ReturnsFalseForUnknownModule) {
+    int result = logos_core_load_module("not_registered");
     EXPECT_EQ(result, 0);
     EXPECT_TRUE(fake->loadCalls.empty());
 }

@@ -1,4 +1,4 @@
-#include "plugin_initializer.h"
+#include "module_initializer.h"
 #include "qt/qt_token_receiver.h"
 #include <QObject>
 #include <spdlog/spdlog.h>
@@ -13,38 +13,38 @@ namespace fs = std::filesystem;
 
 using namespace ModuleLib;
 
-LogosModule loadPlugin(const std::string& pluginPath, const std::string& expectedName)
+LogosModule loadModule(const std::string& modulePath, const std::string& expectedName)
 {
     std::string errorString;
-    LogosModule module = LogosModule::loadFromPath(pluginPath, &errorString);
+    LogosModule module = LogosModule::loadFromPath(modulePath, &errorString);
 
     if (!module.isValid()) {
-        spdlog::critical("Failed to load plugin: {}", errorString);
+        spdlog::critical("Failed to load module: {}", errorString);
         return LogosModule();
     }
 
     PluginInterface *basePlugin = module.as<PluginInterface>();
     if (!basePlugin) {
-        spdlog::critical("Plugin does not implement the PluginInterface");
+        spdlog::critical("Module does not implement the PluginInterface");
         return LogosModule();
     }
 
     if (expectedName != basePlugin->name().toStdString()) {
-        spdlog::warn("Plugin name mismatch: expected {} got {}",
+        spdlog::warn("Module name mismatch: expected {} got {}",
                      expectedName, basePlugin->name().toStdString());
     }
 
     return module;
 }
 
-LogosAPI* initializeLogosAPI(const std::string& pluginName, QObject* plugin,
+LogosAPI* initializeLogosAPI(const std::string& moduleName, QObject* module,
                               PluginInterface* basePlugin, const std::string& authToken,
-                              const std::string& pluginPath,
+                              const std::string& modulePath,
                               const std::string& instancePersistencePath)
 {
-    LogosAPI* logos_api = new LogosAPI(pluginName, plugin);
+    LogosAPI* logos_api = new LogosAPI(moduleName, module);
     logos_api->setProperty("modulePath",
-        fs::absolute(fs::path(pluginPath)).parent_path().string());
+        fs::absolute(fs::path(modulePath)).parent_path().string());
 
     if (!instancePersistencePath.empty()) {
         logos_api->setProperty("instancePersistencePath", instancePersistencePath);
@@ -52,13 +52,13 @@ LogosAPI* initializeLogosAPI(const std::string& pluginName, QObject* plugin,
             fs::path(instancePersistencePath).filename().string());
     }
 
-    bool success = logos_api->getProvider()->registerObject(basePlugin->name(), plugin);
+    bool success = logos_api->getProvider()->registerObject(basePlugin->name(), module);
     if (success) {
         logos_api->getTokenManager()->saveToken(std::string("core"), authToken);
         logos_api->getTokenManager()->saveToken(std::string("capability_module"), authToken);
     } else {
-        spdlog::critical("Failed to register plugin for remote access: {}", basePlugin->name().toStdString());
-        delete plugin;
+        spdlog::critical("Failed to register module for remote access: {}", basePlugin->name().toStdString());
+        delete module;
         delete logos_api;
         return nullptr;
     }
@@ -66,28 +66,28 @@ LogosAPI* initializeLogosAPI(const std::string& pluginName, QObject* plugin,
     return logos_api;
 }
 
-LogosAPI* setupPlugin(const std::string& pluginName, const std::string& pluginPath,
+LogosAPI* setupModule(const std::string& moduleName, const std::string& modulePath,
                       const std::string& instancePersistencePath)
 {
     // 1. Receive auth token securely
-    std::string authToken = QtTokenReceiver::receiveAuthToken(pluginName);
+    std::string authToken = QtTokenReceiver::receiveAuthToken(moduleName);
     if (authToken.empty()) {
         return nullptr;
     }
 
-    // 2. Load and validate plugin
-    LogosModule module = loadPlugin(pluginPath, pluginName);
+    // 2. Load and validate module
+    LogosModule module = loadModule(modulePath, moduleName);
     if (!module.isValid()) {
         return nullptr;
     }
 
-    // 3. Initialize LogosAPI and register plugin
+    // 3. Initialize LogosAPI and register module
     PluginInterface* basePlugin = module.as<PluginInterface>();
-    LogosAPI* logos_api = initializeLogosAPI(pluginName, module.instance(),
-                                              basePlugin, authToken, pluginPath,
+    LogosAPI* logos_api = initializeLogosAPI(moduleName, module.instance(),
+                                              basePlugin, authToken, modulePath,
                                               instancePersistencePath);
 
-    // Release module ownership so the plugin stays loaded
+    // Release module ownership so the module stays loaded
     module.release();
 
     return logos_api;

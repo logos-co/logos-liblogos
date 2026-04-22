@@ -9,7 +9,7 @@ get_filename_component(LOGOS_CPP_SDK_ROOT "${LOGOS_CPP_SDK_ROOT}" ABSOLUTE)
 
 add_executable(logos_core_tests
     test_app_lifecycle.cpp
-    test_plugin_manager.cpp
+    test_module_manager.cpp
     test_process_stats.cpp
     test_dependency_resolver.cpp
     test_subprocess_manager.cpp

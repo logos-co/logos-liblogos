@@ -12,7 +12,7 @@
 
 // Qt-free abstract interface for module loading strategies.
 // An implementation decides *how* a module is loaded, isolated, and communicated with.
-// The core (PluginManager) decides *what* to load and *when*.
+// The core (ModuleManager) decides *what* to load and *when*.
 
 namespace LogosCore {
 
@@ -23,12 +23,12 @@ struct ModuleDescriptor {
     std::string format;                    // "qt-plugin", "wasm", "" (empty = default)
     std::vector<std::string> dependencies;
     std::string instancePersistencePath;   // empty if not configured
-    std::vector<std::string> pluginsDirs;  // directories siblings are looked up in
+    std::vector<std::string> modulesDirs;  // directories siblings are looked up in
     nlohmann::json rawMetadata;            // metadata parsed from manifest.json
     nlohmann::json runtimeConfig;          // optional: {"id":"docker","image":"..."}, etc.
 };
 
-// A handle to a successfully loaded module. Stored in PluginRegistry (PluginInfo).
+// A handle to a successfully loaded module. Stored in ModuleRegistry (ModuleInfo).
 struct LoadedModuleHandle {
     std::string name;
     int64_t pid = -1;      // -1 when not process-based (in-proc, wasm, remote, etc.)
