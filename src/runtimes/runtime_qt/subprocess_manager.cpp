@@ -473,7 +473,15 @@ bool SubprocessManager::startProcess(const std::string& name, const std::string&
 
 bool SubprocessManager::sendTokenToProcess(const std::string& name, const std::string& token)
 {
+    // Socket name is scoped by LOGOS_INSTANCE_ID so parallel Logos instances
+    // (multiple daemons or Basecamp profiles) don't clash when loading the same
+    // module. Matches the scheme in QtTokenReceiver on the receiver side.
+    const char* instanceId = std::getenv("LOGOS_INSTANCE_ID");
     std::string socketName = "logos_token_" + name;
+    if (instanceId && *instanceId) {
+        socketName += "_";
+        socketName += instanceId;
+    }
     std::string path = unixSocketPath(socketName);
 
     int sock = -1;

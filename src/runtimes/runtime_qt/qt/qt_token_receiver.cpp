@@ -1,4 +1,5 @@
 #include "qt_token_receiver.h"
+#include <QByteArray>
 #include <QLocalServer>
 #include <QLocalSocket>
 #include <QString>
@@ -8,7 +9,16 @@ namespace QtTokenReceiver {
 
     std::string receiveAuthToken(const std::string& pluginName)
     {
-        QString socketName = QString("logos_token_%1").arg(QString::fromStdString(pluginName));
+        // Scope the socket name by LOGOS_INSTANCE_ID so parallel Logos instances
+        // (multiple daemons or Basecamp profiles) loading the same module don't
+        // race on a shared socket. The sender in SubprocessManager uses the same
+        // scheme; both read the instance ID from the inherited env var.
+        const QByteArray instanceId = qgetenv("LOGOS_INSTANCE_ID");
+        QString socketName = instanceId.isEmpty()
+            ? QString("logos_token_%1").arg(QString::fromStdString(pluginName))
+            : QString("logos_token_%1_%2")
+                  .arg(QString::fromStdString(pluginName))
+                  .arg(QString::fromUtf8(instanceId));
         QLocalServer* tokenServer = new QLocalServer();
 
         QLocalServer::removeServer(socketName);
