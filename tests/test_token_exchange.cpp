@@ -319,14 +319,13 @@ TEST_F(TokenExchangeTest, InstanceIdScoping_SocketNameIncludesInstanceId) {
     receiver.start(pluginName);
 
     logos_core_register_process(pluginName.c_str());
-    std::this_thread::sleep_for(Ms(100));
 
     const std::string scopedPath =
         tmpDir() + "/logos_token_" + pluginName + "_" + instanceId;
     const std::string unscopedPath =
         tmpDir() + "/logos_token_" + pluginName;
 
-    EXPECT_TRUE(std::filesystem::exists(scopedPath))
+    ASSERT_TRUE(waitUntil([&]() { return std::filesystem::exists(scopedPath); }, 5000))
         << "receiver must bind on instance-scoped socket path: " << scopedPath;
     EXPECT_FALSE(std::filesystem::exists(unscopedPath))
         << "receiver must NOT bind on the un-scoped path when LOGOS_INSTANCE_ID is set";
@@ -346,10 +345,16 @@ TEST_F(TokenExchangeTest, InstanceIdScoping_StaleUnscopedSocketDoesNotBlockScope
     const std::string instanceId = "inst_test_stalecheck";
 
     // Drop a stale file at the un-scoped path. It must not interfere.
+    // RAII-removed at scope exit so a failing ASSERT here doesn't leak the
+    // stale file into subsequent test runs.
     const std::string unscopedPath =
         tmpDir() + "/logos_token_" + pluginName;
     { std::ofstream f(unscopedPath); f << "stale"; }
     ASSERT_TRUE(std::filesystem::exists(unscopedPath));
+    struct FileGuard {
+        std::string path;
+        ~FileGuard() { std::error_code ec; std::filesystem::remove(path, ec); }
+    } unscopedGuard{unscopedPath};
 
     ScopedEnv env("LOGOS_INSTANCE_ID", instanceId.c_str());
 
@@ -364,7 +369,4 @@ TEST_F(TokenExchangeTest, InstanceIdScoping_StaleUnscopedSocketDoesNotBlockScope
     receiver.join();
 
     EXPECT_EQ(receiver.token, token);
-
-    // Cleanup the stale file we dropped.
-    std::filesystem::remove(unscopedPath);
 }

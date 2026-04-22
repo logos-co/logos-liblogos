@@ -15,6 +15,7 @@
 #include "runtimes/runtime_qt/subprocess_manager.h"
 #include "qt/qt_token_receiver.h"
 
+#include <QByteArray>
 #include <QLocalServer>
 #include <QString>
 
