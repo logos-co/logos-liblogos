@@ -210,7 +210,14 @@ inline char* logos_core_receive_auth_token(const char* plugin_name)
 inline void logos_core_create_stale_token_socket(const char* plugin_name)
 {
     if (!plugin_name) return;
-    QString socketName = QString("logos_token_%1").arg(QString::fromUtf8(plugin_name));
+    // Must match the scheme in QtTokenReceiver / SubprocessManager: the socket
+    // name is scoped by LOGOS_INSTANCE_ID when it is set.
+    const QByteArray instanceId = qgetenv("LOGOS_INSTANCE_ID");
+    QString socketName = instanceId.isEmpty()
+        ? QString("logos_token_%1").arg(QString::fromUtf8(plugin_name))
+        : QString("logos_token_%1_%2")
+              .arg(QString::fromUtf8(plugin_name))
+              .arg(QString::fromUtf8(instanceId));
     QLocalServer::removeServer(socketName);
     QLocalServer server;
     server.listen(socketName);

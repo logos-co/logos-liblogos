@@ -18,7 +18,10 @@
 #include "qt_test_adapter.h"
 #include <atomic>
 #include <chrono>
+#include <cstdlib>
 #include <cstring>
+#include <filesystem>
+#include <fstream>
 #include <future>
 #include <string>
 #include <thread>
@@ -270,4 +273,98 @@ TEST_F(TokenExchangeTest, ConcurrentDistinctPlugins_EachRoundTripsCorrectly) {
     EXPECT_EQ(recvA.token, tokenA);
     EXPECT_EQ(recvB.token, tokenB)
         << "token for B must not leak into receiver A";
+}
+
+// =============================================================================
+// Instance-ID scoping — the token socket name is scoped by LOGOS_INSTANCE_ID
+// so parallel Logos instances (e.g. two logoscore daemons, or Basecamp + a
+// daemon) loading the same module name don't race on a shared socket.
+// =============================================================================
+
+namespace {
+
+std::string tmpDir() {
+    const char* tmp = std::getenv("TMPDIR");
+    std::string dir = (tmp && tmp[0]) ? tmp : "/tmp";
+    while (!dir.empty() && dir.back() == '/') dir.pop_back();
+    return dir;
+}
+
+struct ScopedEnv {
+    std::string name;
+    bool hadPrev;
+    std::string prev;
+    ScopedEnv(const char* n, const char* v) : name(n) {
+        const char* p = std::getenv(n);
+        hadPrev = (p != nullptr);
+        if (hadPrev) prev = p;
+        if (v) setenv(n, v, 1); else unsetenv(n);
+    }
+    ~ScopedEnv() {
+        if (hadPrev) setenv(name.c_str(), prev.c_str(), 1);
+        else unsetenv(name.c_str());
+    }
+};
+
+} // namespace
+
+TEST_F(TokenExchangeTest, InstanceIdScoping_SocketNameIncludesInstanceId) {
+    const std::string pluginName = "rt_inst_scoped";
+    const std::string token = "11111111-aaaa-bbbb-cccc-222222222222";
+    const std::string instanceId = "inst_test_abcdef";
+
+    ScopedEnv env("LOGOS_INSTANCE_ID", instanceId.c_str());
+
+    ReceiverHandle receiver;
+    receiver.start(pluginName);
+
+    logos_core_register_process(pluginName.c_str());
+    std::this_thread::sleep_for(Ms(100));
+
+    const std::string scopedPath =
+        tmpDir() + "/logos_token_" + pluginName + "_" + instanceId;
+    const std::string unscopedPath =
+        tmpDir() + "/logos_token_" + pluginName;
+
+    EXPECT_TRUE(std::filesystem::exists(scopedPath))
+        << "receiver must bind on instance-scoped socket path: " << scopedPath;
+    EXPECT_FALSE(std::filesystem::exists(unscopedPath))
+        << "receiver must NOT bind on the un-scoped path when LOGOS_INSTANCE_ID is set";
+
+    ASSERT_EQ(logos_core_send_token(pluginName.c_str(), token.c_str()), 1);
+    ASSERT_TRUE(waitUntil([&]() { return receiver.finished.load(); }, 5000));
+    receiver.join();
+
+    EXPECT_EQ(receiver.token, token);
+}
+
+// A stale un-scoped socket file (e.g. left by an older binary without
+// instance-ID scoping) must not block a new instance-scoped receiver.
+TEST_F(TokenExchangeTest, InstanceIdScoping_StaleUnscopedSocketDoesNotBlockScopedReceiver) {
+    const std::string pluginName = "rt_inst_stale";
+    const std::string token = "cafef00d-aaaa-bbbb-cccc-000000000002";
+    const std::string instanceId = "inst_test_stalecheck";
+
+    // Drop a stale file at the un-scoped path. It must not interfere.
+    const std::string unscopedPath =
+        tmpDir() + "/logos_token_" + pluginName;
+    { std::ofstream f(unscopedPath); f << "stale"; }
+    ASSERT_TRUE(std::filesystem::exists(unscopedPath));
+
+    ScopedEnv env("LOGOS_INSTANCE_ID", instanceId.c_str());
+
+    ReceiverHandle receiver;
+    receiver.start(pluginName);
+
+    logos_core_register_process(pluginName.c_str());
+    std::this_thread::sleep_for(Ms(100));
+
+    ASSERT_EQ(logos_core_send_token(pluginName.c_str(), token.c_str()), 1);
+    ASSERT_TRUE(waitUntil([&]() { return receiver.finished.load(); }, 5000));
+    receiver.join();
+
+    EXPECT_EQ(receiver.token, token);
+
+    // Cleanup the stale file we dropped.
+    std::filesystem::remove(unscopedPath);
 }
