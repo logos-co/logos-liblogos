@@ -7,7 +7,7 @@
 
 namespace QtTokenReceiver {
 
-    std::string receiveAuthToken(const std::string& pluginName)
+    std::string receiveAuthToken(const std::string& moduleName)
     {
         // Scope the socket name by LOGOS_INSTANCE_ID so parallel Logos instances
         // (multiple daemons or Basecamp profiles) loading the same module don't
@@ -15,9 +15,9 @@ namespace QtTokenReceiver {
         // scheme; both read the instance ID from the inherited env var.
         const QByteArray instanceId = qgetenv("LOGOS_INSTANCE_ID");
         QString socketName = instanceId.isEmpty()
-            ? QString("logos_token_%1").arg(QString::fromStdString(pluginName))
+            ? QString("logos_token_%1").arg(QString::fromStdString(moduleName))
             : QString("logos_token_%1_%2")
-                  .arg(QString::fromStdString(pluginName))
+                  .arg(QString::fromStdString(moduleName))
                   .arg(QString::fromUtf8(instanceId));
         QLocalServer* tokenServer = new QLocalServer();
 

@@ -3,13 +3,13 @@
 
 #include <string>
 
-struct PluginArgs {
+struct ModuleArgs {
     std::string name;
     std::string path;
     std::string instancePersistencePath;
     bool valid;
 };
 
-PluginArgs parseCommandLineArgs(int argc, char *argv[]);
+ModuleArgs parseCommandLineArgs(int argc, char *argv[]);
 
 #endif // COMMAND_LINE_PARSER_H

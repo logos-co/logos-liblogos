@@ -1,4 +1,4 @@
-#include "plugin_registry.h"
+#include "module_registry.h"
 #include <spdlog/spdlog.h>
 #include <cassert>
 #include <deque>
@@ -14,42 +14,42 @@ static PackageManagerLib& packageManagerInstance() {
     return instance;
 }
 
-void PluginRegistry::setPluginsDir(const std::string& dir) {
+void ModuleRegistry::setModulesDir(const std::string& dir) {
     std::unique_lock lock(m_mutex);
-    m_pluginsDirs.clear();
-    m_pluginsDirs.push_back(dir);
+    m_modulesDirs.clear();
+    m_modulesDirs.push_back(dir);
 }
 
-void PluginRegistry::addPluginsDir(const std::string& dir) {
+void ModuleRegistry::addModulesDir(const std::string& dir) {
     std::unique_lock lock(m_mutex);
-    if (std::find(m_pluginsDirs.begin(), m_pluginsDirs.end(), dir) != m_pluginsDirs.end())
+    if (std::find(m_modulesDirs.begin(), m_modulesDirs.end(), dir) != m_modulesDirs.end())
         return;
-    m_pluginsDirs.push_back(dir);
+    m_modulesDirs.push_back(dir);
 }
 
-std::vector<std::string> PluginRegistry::pluginsDirs() const {
+std::vector<std::string> ModuleRegistry::modulesDirs() const {
     std::shared_lock lock(m_mutex);
-    return m_pluginsDirs;
+    return m_modulesDirs;
 }
 
-void PluginRegistry::discoverInstalledModules() {
+void ModuleRegistry::discoverInstalledModules() {
     std::unique_lock lock(m_mutex);
 
     PackageManagerLib& pm = packageManagerInstance();
-    if (!m_pluginsDirs.empty()) {
-        pm.setEmbeddedModulesDirectory(m_pluginsDirs.front());
-        for (std::size_t i = 1; i < m_pluginsDirs.size(); ++i) {
-            pm.addEmbeddedModulesDirectory(m_pluginsDirs[i]);
+    if (!m_modulesDirs.empty()) {
+        pm.setEmbeddedModulesDirectory(m_modulesDirs.front());
+        for (std::size_t i = 1; i < m_modulesDirs.size(); ++i) {
+            pm.addEmbeddedModulesDirectory(m_modulesDirs[i]);
         }
     }
 
     std::vector<InstalledPackage> modules = pm.getInstalledModules();
 
     // Collect names seen in this scan. Used after the upsert loop to prune
-    // entries for plugins whose files disappeared (typical path: the user
+    // entries for modules whose files disappeared (typical path: the user
     // uninstalls a module — its directory is removed, but without pruning
-    // the stale PluginInfo would stay in m_plugins forever and
-    // knownPluginNames()/`logos_core_get_known_plugins` would keep returning
+    // the stale ModuleInfo would stay in m_modules forever and
+    // knownModuleNames()/`logos_core_get_known_modules` would keep returning
     // it, so the UI would never see the uninstall land.
     std::unordered_set<std::string> scannedNames;
 
@@ -57,84 +57,84 @@ void PluginRegistry::discoverInstalledModules() {
         if (mod.name.empty() || mod.mainFilePath.empty())
             continue;
 
-        std::string pluginName = processPluginInternal(mod.mainFilePath);
-        if (pluginName.empty()) {
-            spdlog::warn("Failed to process plugin: {}", mod.mainFilePath);
+        std::string moduleName = processModuleInternal(mod.mainFilePath);
+        if (moduleName.empty()) {
+            spdlog::warn("Failed to process module: {}", mod.mainFilePath);
             continue;
         }
-        scannedNames.insert(pluginName);
+        scannedNames.insert(moduleName);
     }
 
     // Prune entries that aren't on disk anymore. Preserve currently-loaded
-    // plugins even if their backing files are gone — the module is still
-    // running, and the metadata is still needed by unloadPlugin / cascade
+    // modules even if their backing files are gone — the module is still
+    // running, and the metadata is still needed by unloadModule / cascade
     // teardown until it exits. The next discovery after that unload will
     // evict the entry.
     std::vector<std::string> toRemove;
-    for (const auto& [name, info] : m_plugins) {
+    for (const auto& [name, info] : m_modules) {
         if (scannedNames.count(name) == 0 && !info.loaded)
             toRemove.push_back(name);
     }
     for (const std::string& name : toRemove) {
-        m_plugins.erase(name);
+        m_modules.erase(name);
     }
 
     // Graph has its final shape (upserts + prunes applied). Re-derive
-    // dependents so cascade / PluginManager::getDependents can read them
-    // directly from PluginInfo without re-querying PackageManagerLib.
+    // dependents so cascade / ModuleManager::getDependents can read them
+    // directly from ModuleInfo without re-querying PackageManagerLib.
     recomputeDependentsLocked();
 }
 
-std::string PluginRegistry::processPlugin(const std::string& pluginPath) {
+std::string ModuleRegistry::processModule(const std::string& modulePath) {
     std::unique_lock lock(m_mutex);
-    std::string name = processPluginInternal(pluginPath);
-    // A single plugin changed, but its new dependency list can invert edges
+    std::string name = processModuleInternal(modulePath);
+    // A single module changed, but its new dependency list can invert edges
     // elsewhere in the graph (e.g. an upgrade that drops a dep). Full
     // rebuild is simpler and still O(N * avg_deps) — cheap at module scale.
     recomputeDependentsLocked();
     return name;
 }
 
-std::string PluginRegistry::processPluginInternal(const std::string& pluginPath) {
-    std::string name = ModuleLib::LogosModule::getModuleName(pluginPath);
+std::string ModuleRegistry::processModuleInternal(const std::string& modulePath) {
+    std::string name = ModuleLib::LogosModule::getModuleName(modulePath);
     if (name.empty()) {
-        spdlog::warn("No valid metadata for plugin: {}", pluginPath);
+        spdlog::warn("No valid metadata for module: {}", modulePath);
         return {};
     }
 
-    // Update plugin info in place so re-discovery preserves the loaded flag
-    // (and any other state that lives on PluginInfo).
-    PluginInfo& info = m_plugins[name];
-    info.path = pluginPath;
+    // Update module info in place so re-discovery preserves the loaded flag
+    // (and any other state that lives on ModuleInfo).
+    ModuleInfo& info = m_modules[name];
+    info.path = modulePath;
     info.dependencies.clear();
-    for (const auto& d : ModuleLib::LogosModule::getModuleDependencies(pluginPath)) {
+    for (const auto& d : ModuleLib::LogosModule::getModuleDependencies(modulePath)) {
         info.dependencies.push_back(d);
     }
 
     return name;
 }
 
-bool PluginRegistry::isKnown(const std::string& name) const {
+bool ModuleRegistry::isKnown(const std::string& name) const {
     std::shared_lock lock(m_mutex);
-    return m_plugins.count(name) > 0;
+    return m_modules.count(name) > 0;
 }
 
-std::string PluginRegistry::pluginPath(const std::string& name) const {
+std::string ModuleRegistry::modulePath(const std::string& name) const {
     std::shared_lock lock(m_mutex);
-    auto it = m_plugins.find(name);
-    return it != m_plugins.end() ? it->second.path : std::string{};
+    auto it = m_modules.find(name);
+    return it != m_modules.end() ? it->second.path : std::string{};
 }
 
-std::vector<std::string> PluginRegistry::pluginDependencies(const std::string& name,
+std::vector<std::string> ModuleRegistry::moduleDependencies(const std::string& name,
                                                             bool recursive) const {
     std::shared_lock lock(m_mutex);
-    return pluginDependenciesLocked(name, recursive);
+    return moduleDependenciesLocked(name, recursive);
 }
 
-std::vector<std::string> PluginRegistry::pluginDependenciesLocked(const std::string& name,
+std::vector<std::string> ModuleRegistry::moduleDependenciesLocked(const std::string& name,
                                                                   bool recursive) const {
-    auto it = m_plugins.find(name);
-    if (it == m_plugins.end())
+    auto it = m_modules.find(name);
+    if (it == m_modules.end())
         return {};
 
     if (!recursive)
@@ -155,8 +155,8 @@ std::vector<std::string> PluginRegistry::pluginDependenciesLocked(const std::str
         queue.pop_front();
         if (!seen.insert(current).second) continue;
         out.push_back(current);
-        auto depIt = m_plugins.find(current);
-        if (depIt == m_plugins.end()) continue;
+        auto depIt = m_modules.find(current);
+        if (depIt == m_modules.end()) continue;
         for (const std::string& d : depIt->second.dependencies) {
             if (seen.count(d) == 0) queue.push_back(d);
         }
@@ -164,16 +164,16 @@ std::vector<std::string> PluginRegistry::pluginDependenciesLocked(const std::str
     return out;
 }
 
-std::vector<std::string> PluginRegistry::pluginDependents(const std::string& name,
+std::vector<std::string> ModuleRegistry::moduleDependents(const std::string& name,
                                                           bool recursive) const {
     std::shared_lock lock(m_mutex);
-    return pluginDependentsLocked(name, recursive);
+    return moduleDependentsLocked(name, recursive);
 }
 
-std::vector<std::string> PluginRegistry::pluginDependentsLocked(const std::string& name,
+std::vector<std::string> ModuleRegistry::moduleDependentsLocked(const std::string& name,
                                                                 bool recursive) const {
-    auto it = m_plugins.find(name);
-    if (it == m_plugins.end())
+    auto it = m_modules.find(name);
+    if (it == m_modules.end())
         return {};
 
     if (!recursive)
@@ -193,8 +193,8 @@ std::vector<std::string> PluginRegistry::pluginDependentsLocked(const std::strin
         queue.pop_front();
         if (!seen.insert(current).second) continue;
         out.push_back(current);
-        auto depIt = m_plugins.find(current);
-        if (depIt == m_plugins.end()) continue;
+        auto depIt = m_modules.find(current);
+        if (depIt == m_modules.end()) continue;
         for (const std::string& d : depIt->second.dependents) {
             if (seen.count(d) == 0) queue.push_back(d);
         }
@@ -202,20 +202,20 @@ std::vector<std::string> PluginRegistry::pluginDependentsLocked(const std::strin
     return out;
 }
 
-void PluginRegistry::recomputeDependentsLocked() {
+void ModuleRegistry::recomputeDependentsLocked() {
     // Wipe the reverse edges in place — we don't want to reallocate each
-    // PluginInfo, so clear() keeps any existing vector capacity.
-    for (auto& [k, v] : m_plugins)
+    // ModuleInfo, so clear() keeps any existing vector capacity.
+    for (auto& [k, v] : m_modules)
         v.dependents.clear();
 
     // Invert every forward edge. An entry whose dependency points at an
-    // unknown plugin is silently skipped — we can't register a reverse
+    // unknown module is silently skipped — we can't register a reverse
     // edge against something we don't track, and logging per-edge here
     // would flood the log during every discovery pass.
-    for (const auto& [depender, info] : m_plugins) {
+    for (const auto& [depender, info] : m_modules) {
         for (const std::string& dep : info.dependencies) {
-            auto depIt = m_plugins.find(dep);
-            if (depIt == m_plugins.end()) continue;
+            auto depIt = m_modules.find(dep);
+            if (depIt == m_modules.end()) continue;
             auto& deps = depIt->second.dependents;
             if (std::find(deps.begin(), deps.end(), depender) == deps.end())
                 deps.push_back(depender);
@@ -223,19 +223,19 @@ void PluginRegistry::recomputeDependentsLocked() {
     }
 }
 
-std::vector<std::string> PluginRegistry::knownPluginNames() const {
+std::vector<std::string> ModuleRegistry::knownModuleNames() const {
     std::shared_lock lock(m_mutex);
     std::vector<std::string> keys;
-    keys.reserve(m_plugins.size());
-    for (const auto& [k, v] : m_plugins)
+    keys.reserve(m_modules.size());
+    for (const auto& [k, v] : m_modules)
         keys.push_back(k);
     return keys;
 }
 
-void PluginRegistry::registerPlugin(const std::string& name, const std::string& path,
+void ModuleRegistry::registerModule(const std::string& name, const std::string& path,
                                     const std::vector<std::string>& dependencies) {
     std::unique_lock lock(m_mutex);
-    PluginInfo& info = m_plugins[name];
+    ModuleInfo& info = m_modules[name];
     info.path = path;
     // Always assign dependencies (even when empty) and recompute reverse
     // edges. Two reasons we can't gate this on `dependencies.empty()`:
@@ -248,69 +248,69 @@ void PluginRegistry::registerPlugin(const std::string& name, const std::string& 
     recomputeDependentsLocked();
 }
 
-void PluginRegistry::registerDependencies(const std::string& name, const std::vector<std::string>& dependencies) {
+void ModuleRegistry::registerDependencies(const std::string& name, const std::vector<std::string>& dependencies) {
     std::unique_lock lock(m_mutex);
-    m_plugins[name].dependencies = dependencies;
-    // Same reasoning as registerPlugin: this is a direct graph mutator used
+    m_modules[name].dependencies = dependencies;
+    // Same reasoning as registerModule: this is a direct graph mutator used
     // by tests. Keep the dependents-consistent-with-dependencies invariant
     // holding across every path that edits forward edges.
     recomputeDependentsLocked();
 }
 
-bool PluginRegistry::isLoaded(const std::string& name) const {
+bool ModuleRegistry::isLoaded(const std::string& name) const {
     std::shared_lock lock(m_mutex);
-    auto it = m_plugins.find(name);
-    return it != m_plugins.end() && it->second.loaded;
+    auto it = m_modules.find(name);
+    return it != m_modules.end() && it->second.loaded;
 }
 
-void PluginRegistry::markLoaded(const std::string& name) {
+void ModuleRegistry::markLoaded(const std::string& name) {
     std::unique_lock lock(m_mutex);
-    m_plugins[name].loaded = true;
+    m_modules[name].loaded = true;
 }
 
-void PluginRegistry::markLoaded(const std::string& name,
+void ModuleRegistry::markLoaded(const std::string& name,
                                  std::shared_ptr<LogosCore::ModuleRuntime> runtime,
                                  LogosCore::LoadedModuleHandle handle) {
     std::unique_lock lock(m_mutex);
-    auto& info = m_plugins[name];
+    auto& info = m_modules[name];
     info.loaded  = true;
     info.runtime = std::move(runtime);
     info.handle  = std::move(handle);
 }
 
 std::shared_ptr<LogosCore::ModuleRuntime>
-PluginRegistry::runtimeFor(const std::string& name) const {
+ModuleRegistry::runtimeFor(const std::string& name) const {
     std::shared_lock lock(m_mutex);
-    auto it = m_plugins.find(name);
-    if (it == m_plugins.end()) return nullptr;
+    auto it = m_modules.find(name);
+    if (it == m_modules.end()) return nullptr;
     return it->second.runtime;
 }
 
-void PluginRegistry::markUnloaded(const std::string& name) {
+void ModuleRegistry::markUnloaded(const std::string& name) {
     std::unique_lock lock(m_mutex);
-    auto it = m_plugins.find(name);
-    if (it != m_plugins.end())
+    auto it = m_modules.find(name);
+    if (it != m_modules.end())
         it->second.loaded = false;
 }
 
-std::vector<std::string> PluginRegistry::loadedPluginNames() const {
+std::vector<std::string> ModuleRegistry::loadedModuleNames() const {
     std::shared_lock lock(m_mutex);
     std::vector<std::string> result;
-    for (const auto& [k, v] : m_plugins) {
+    for (const auto& [k, v] : m_modules) {
         if (v.loaded)
             result.push_back(k);
     }
     return result;
 }
 
-void PluginRegistry::clearLoaded() {
+void ModuleRegistry::clearLoaded() {
     std::unique_lock lock(m_mutex);
-    for (auto& [k, v] : m_plugins)
+    for (auto& [k, v] : m_modules)
         v.loaded = false;
 }
 
-void PluginRegistry::clear() {
+void ModuleRegistry::clear() {
     std::unique_lock lock(m_mutex);
-    m_pluginsDirs.clear();
-    m_plugins.clear();
+    m_modulesDirs.clear();
+    m_modules.clear();
 }

@@ -61,7 +61,7 @@ fs::path findInDir(const fs::path& dir) {
     return {};
 }
 
-std::string resolveLogosHostPath(const std::vector<std::string>& pluginsDirs) {
+std::string resolveLogosHostPath(const std::vector<std::string>& modulesDirs) {
     std::string logosHostPath;
 
     const char* envPath = std::getenv("LOGOS_HOST_PATH");
@@ -75,9 +75,9 @@ std::string resolveLogosHostPath(const std::vector<std::string>& pluginsDirs) {
     }
 
     if (logosHostPath.empty() || !fs::exists(logosHostPath)) {
-        if (!pluginsDirs.empty()) {
+        if (!modulesDirs.empty()) {
             auto binDir = fs::absolute(
-                fs::path(pluginsDirs.front()) / ".." / "bin"
+                fs::path(modulesDirs.front()) / ".." / "bin"
             ).lexically_normal();
             auto found = findInDir(binDir);
             if (!found.empty())
@@ -308,7 +308,7 @@ bool SubprocessManager::load(const LogosCore::ModuleDescriptor& desc,
                               std::function<void(const std::string&)> onTerminated,
                               LogosCore::LoadedModuleHandle& out)
 {
-    std::string logosHostPath = resolveLogosHostPath(desc.pluginsDirs);
+    std::string logosHostPath = resolveLogosHostPath(desc.modulesDirs);
     if (logosHostPath.empty())
         return false;
 
@@ -327,7 +327,7 @@ bool SubprocessManager::load(const LogosCore::ModuleDescriptor& desc,
     callbacks.onFinished = [onTerminated](const std::string& pName, int exitCode, bool crashed) {
         (void)exitCode;
         if (crashed) {
-            spdlog::critical("Plugin process crashed: {}", pName);
+            spdlog::critical("Module process crashed: {}", pName);
             exit(1);
         }
         if (onTerminated)
@@ -336,7 +336,7 @@ bool SubprocessManager::load(const LogosCore::ModuleDescriptor& desc,
 
     callbacks.onError = [](const std::string& pName, bool crashed) {
         if (crashed) {
-            spdlog::critical("Plugin process crashed: {}", pName);
+            spdlog::critical("Module process crashed: {}", pName);
             exit(1);
         }
     };

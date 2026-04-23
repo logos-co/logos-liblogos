@@ -10,8 +10,8 @@
 // ---------------------------------------------------------------------------
 #pragma once
 
-#include "plugin_manager.h"
-#include "plugin_registry.h"
+#include "module_manager.h"
+#include "module_registry.h"
 #include "runtimes/runtime_qt/subprocess_manager.h"
 #include "qt/qt_token_receiver.h"
 
@@ -25,16 +25,16 @@
 #include <vector>
 
 // ---------------------------------------------------------------------------
-// Plugin registry
+// Module registry
 // ---------------------------------------------------------------------------
 
-inline void logos_core_register_plugin(const char* name, const char* path)
+inline void logos_core_register_module(const char* name, const char* path)
 {
     if (!name || !path) return;
-    PluginManager::registry().registerPlugin(std::string(name), std::string(path));
+    ModuleManager::registry().registerModule(std::string(name), std::string(path));
 }
 
-inline void logos_core_register_plugin_dependencies(const char* name,
+inline void logos_core_register_module_dependencies(const char* name,
                                                      const char** deps,
                                                      int count)
 {
@@ -42,56 +42,56 @@ inline void logos_core_register_plugin_dependencies(const char* name,
     std::vector<std::string> stdDeps;
     for (int i = 0; i < count; ++i)
         if (deps && deps[i]) stdDeps.push_back(std::string(deps[i]));
-    PluginManager::registry().registerDependencies(std::string(name), stdDeps);
+    ModuleManager::registry().registerDependencies(std::string(name), stdDeps);
 }
 
-inline int logos_core_is_plugin_known(const char* name)
+inline int logos_core_is_module_known(const char* name)
 {
     if (!name) return 0;
-    return PluginManager::registry().isKnown(std::string(name)) ? 1 : 0;
+    return ModuleManager::registry().isKnown(std::string(name)) ? 1 : 0;
 }
 
-inline int logos_core_is_plugin_loaded(const char* name)
+inline int logos_core_is_module_loaded(const char* name)
 {
     if (!name) return 0;
-    return PluginManager::registry().isLoaded(std::string(name)) ? 1 : 0;
+    return ModuleManager::registry().isLoaded(std::string(name)) ? 1 : 0;
 }
 
-inline void logos_core_mark_plugin_loaded(const char* name)
+inline void logos_core_mark_module_loaded(const char* name)
 {
     if (!name) return;
-    PluginManager::registry().markLoaded(std::string(name));
+    ModuleManager::registry().markLoaded(std::string(name));
 }
 
-inline char* logos_core_get_plugin_path(const char* name)
+inline char* logos_core_get_module_path(const char* name)
 {
     if (!name) return nullptr;
-    std::string path = PluginManager::registry().pluginPath(std::string(name));
+    std::string path = ModuleManager::registry().modulePath(std::string(name));
     if (path.empty()) return nullptr;
     char* result = new char[path.size() + 1];
     memcpy(result, path.c_str(), path.size() + 1);
     return result;
 }
 
-inline int logos_core_get_plugin_dependencies_count(const char* name)
+inline int logos_core_get_module_dependencies_count(const char* name)
 {
     if (!name) return 0;
     return static_cast<int>(
-        PluginManager::registry().pluginDependencies(std::string(name)).size());
+        ModuleManager::registry().moduleDependencies(std::string(name)).size());
 }
 
 // ---------------------------------------------------------------------------
-// Plugin directory queries
+// Module directory queries
 // ---------------------------------------------------------------------------
 
-inline int logos_core_get_plugins_dirs_count()
+inline int logos_core_get_modules_dirs_count()
 {
-    return static_cast<int>(PluginManager::registry().pluginsDirs().size());
+    return static_cast<int>(ModuleManager::registry().modulesDirs().size());
 }
 
-inline char* logos_core_get_plugins_dir_at(int index)
+inline char* logos_core_get_modules_dir_at(int index)
 {
-    std::vector<std::string> dirs = PluginManager::registry().pluginsDirs();
+    std::vector<std::string> dirs = ModuleManager::registry().modulesDirs();
     if (index < 0 || index >= static_cast<int>(dirs.size())) return nullptr;
     const std::string& s = dirs[static_cast<std::size_t>(index)];
     char* result = new char[s.size() + 1];
@@ -109,7 +109,7 @@ inline char** logos_core_resolve_dependencies(const char** names, int count)
     for (int i = 0; i < count; ++i)
         if (names && names[i]) requested.push_back(std::string(names[i]));
 
-    std::vector<std::string> resolved = PluginManager::resolveDependencies(requested);
+    std::vector<std::string> resolved = ModuleManager::resolveDependencies(requested);
 
     std::size_t n = resolved.size();
     char** result = new char*[n + 1];
@@ -127,12 +127,12 @@ inline char** logos_core_resolve_dependencies(const char** names, int count)
 
 inline void logos_core_terminate_all()
 {
-    PluginManager::terminateAll();
+    ModuleManager::terminateAll();
 }
 
 inline void logos_core_clear()
 {
-    PluginManager::clear();
+    ModuleManager::clear();
 }
 
 // ---------------------------------------------------------------------------
@@ -195,29 +195,29 @@ inline void logos_core_clear_processes()
 // Token receiver
 // ---------------------------------------------------------------------------
 
-inline char* logos_core_receive_auth_token(const char* plugin_name)
+inline char* logos_core_receive_auth_token(const char* module_name)
 {
-    if (!plugin_name) {
+    if (!module_name) {
         char* empty = new char[1];
         empty[0] = '\0';
         return empty;
     }
-    std::string token = QtTokenReceiver::receiveAuthToken(std::string(plugin_name));
+    std::string token = QtTokenReceiver::receiveAuthToken(std::string(module_name));
     char* result = new char[token.size() + 1];
     memcpy(result, token.c_str(), token.size() + 1);
     return result;
 }
 
-inline void logos_core_create_stale_token_socket(const char* plugin_name)
+inline void logos_core_create_stale_token_socket(const char* module_name)
 {
-    if (!plugin_name) return;
+    if (!module_name) return;
     // Must match the scheme in QtTokenReceiver / SubprocessManager: the socket
     // name is scoped by LOGOS_INSTANCE_ID when it is set.
     const QByteArray instanceId = qgetenv("LOGOS_INSTANCE_ID");
     QString socketName = instanceId.isEmpty()
-        ? QString("logos_token_%1").arg(QString::fromUtf8(plugin_name))
+        ? QString("logos_token_%1").arg(QString::fromUtf8(module_name))
         : QString("logos_token_%1_%2")
-              .arg(QString::fromUtf8(plugin_name))
+              .arg(QString::fromUtf8(module_name))
               .arg(QString::fromUtf8(instanceId));
     QLocalServer::removeServer(socketName);
     QLocalServer server;

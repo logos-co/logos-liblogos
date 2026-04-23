@@ -23,7 +23,7 @@ namespace DependencyResolver {
                 continue;
 
             if (!isKnown(moduleName)) {
-                spdlog::warn("Module not found in known plugins: {}", moduleName);
+                spdlog::warn("Module not found in known modules: {}", moduleName);
                 missingDependencies.push_back(moduleName);
                 continue;
             }

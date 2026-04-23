@@ -1,5 +1,5 @@
-#include "plugin_manager.h"
-#include "plugin_registry.h"
+#include "module_manager.h"
+#include "module_registry.h"
 #include "dependency_resolver.h"
 #include "runtime_registry.h"
 #include "runtimes/runtime_qt/subprocess_manager.h"
@@ -17,8 +17,8 @@
 #include "instance_persistence.h"
 
 namespace {
-    PluginRegistry& registryInstance() {
-        static PluginRegistry instance;
+    ModuleRegistry& registryInstance() {
+        static ModuleRegistry instance;
         return instance;
     }
 
@@ -77,28 +77,28 @@ namespace {
         }
     }
 
-    bool loadPluginInternal(const char* pluginName) {
-        std::string name(pluginName);
+    bool loadModuleInternal(const char* moduleName) {
+        std::string name(moduleName);
 
         if (!registryInstance().isKnown(name)) {
-            spdlog::warn("Cannot load unknown plugin: {}", name);
+            spdlog::warn("Cannot load unknown module: {}", name);
             return false;
         }
 
         if (registryInstance().isLoaded(name)) {
-            spdlog::warn("Plugin already loaded: {}", name);
+            spdlog::warn("Module already loaded: {}", name);
             return false;
         }
 
-        std::string pluginPath = registryInstance().pluginPath(name);
+        std::string modPath = registryInstance().modulePath(name);
 
         // Build a descriptor for the runtime to inspect.
         LogosCore::ModuleDescriptor desc;
         desc.name        = name;
-        desc.path        = pluginPath;
+        desc.path        = modPath;
         desc.format      = "qt-plugin";
-        desc.dependencies = registryInstance().pluginDependencies(name);
-        desc.pluginsDirs  = registryInstance().pluginsDirs();
+        desc.dependencies = registryInstance().moduleDependencies(name);
+        desc.modulesDirs  = registryInstance().modulesDirs();
 
         if (!persistenceBasePath().empty()) {
             auto info = ModuleLib::InstancePersistence::resolveInstance(
@@ -108,7 +108,7 @@ namespace {
 
         auto rt = runtimeRegistry().select(desc);
         if (!rt) {
-            spdlog::warn("No runtime available to load plugin: {}", name);
+            spdlog::warn("No runtime available to load module: {}", name);
             return false;
         }
 
@@ -133,24 +133,24 @@ namespace {
 
         notifyCapabilityModule(name, authToken);
 
-        spdlog::info("Plugin loaded: {}", name);
+        spdlog::info("Module loaded: {}", name);
 
         return true;
     }
 
     // Unload helper that assumes loadMutex() is already held by the caller.
-    // unloadPluginWithDependents() needs a single lock span so a late-arriving
+    // unloadModuleWithDependents() needs a single lock span so a late-arriving
     // load can't interleave between tearing down the dependents and the target.
-    bool unloadPluginInternalLocked(const std::string& name) {
+    bool unloadModuleInternalLocked(const std::string& name) {
         if (!registryInstance().isLoaded(name)) {
-            spdlog::warn("Cannot unload plugin (not loaded): {}", name);
+            spdlog::warn("Cannot unload module (not loaded): {}", name);
             return false;
         }
 
         auto rt = registryInstance().runtimeFor(name);
         if (rt) {
             if (!rt->hasModule(name)) {
-                spdlog::warn("No module entry found for plugin: {}", name);
+                spdlog::warn("No module entry found for module: {}", name);
                 return false;
             }
             rt->terminate(name);
@@ -158,7 +158,7 @@ namespace {
             // Fallback: module was loaded via markLoaded(name) directly
             // (test scenarios or external setup). Use SubprocessManager directly.
             if (!SubprocessManager::hasProcess(name)) {
-                spdlog::warn("No process found for plugin: {}", name);
+                spdlog::warn("No process found for module: {}", name);
                 return false;
             }
             SubprocessManager::terminateProcess(name);
@@ -166,14 +166,14 @@ namespace {
 
         registryInstance().markUnloaded(name);
 
-        spdlog::info("Plugin unloaded: {}", name);
+        spdlog::info("Module unloaded: {}", name);
         return true;
     }
 }
 
-namespace PluginManager {
+namespace ModuleManager {
 
-    PluginRegistry& registry() {
+    ModuleRegistry& registry() {
         return registryInstance();
     }
 
@@ -181,14 +181,14 @@ namespace PluginManager {
         return runtimeRegistry();
     }
 
-    void setPluginsDir(const char* plugins_dir) {
-        assert(plugins_dir != nullptr);
-        registryInstance().setPluginsDir(std::string(plugins_dir));
+    void setModulesDir(const char* modules_dir) {
+        assert(modules_dir != nullptr);
+        registryInstance().setModulesDir(std::string(modules_dir));
     }
 
-    void addPluginsDir(const char* plugins_dir) {
-        assert(plugins_dir != nullptr);
-        registryInstance().addPluginsDir(std::string(plugins_dir));
+    void addModulesDir(const char* modules_dir) {
+        assert(modules_dir != nullptr);
+        registryInstance().addModulesDir(std::string(modules_dir));
     }
 
     void setPersistenceBasePath(const char* path) {
@@ -200,33 +200,33 @@ namespace PluginManager {
         registryInstance().discoverInstalledModules();
     }
 
-    std::string processPlugin(const std::string& pluginPath) {
-        return registryInstance().processPlugin(pluginPath);
+    std::string processModule(const std::string& modulePath) {
+        return registryInstance().processModule(modulePath);
     }
 
-    char* processPluginCStr(const char* pluginPath) {
-        std::string path(pluginPath);
+    char* processModuleCStr(const char* modulePath) {
+        std::string path(modulePath);
 
-        std::string pluginName = registryInstance().processPlugin(path);
-        if (pluginName.empty()) {
-            spdlog::warn("Failed to process plugin: {}", path);
+        std::string moduleName = registryInstance().processModule(path);
+        if (moduleName.empty()) {
+            spdlog::warn("Failed to process module: {}", path);
             return nullptr;
         }
 
-        char* result = new char[pluginName.size() + 1];
-        strcpy(result, pluginName.c_str());
+        char* result = new char[moduleName.size() + 1];
+        strcpy(result, moduleName.c_str());
         return result;
     }
 
-    bool loadPlugin(const char* pluginName) {
+    bool loadModule(const char* moduleName) {
         std::lock_guard lock(loadMutex());
-        return loadPluginInternal(pluginName);
+        return loadModuleInternal(moduleName);
     }
 
-    bool loadPluginWithDependencies(const char* pluginName) {
+    bool loadModuleWithDependencies(const char* moduleName) {
         std::lock_guard lock(loadMutex());
 
-        std::string name(pluginName);
+        std::string name(moduleName);
 
         std::vector<std::string> requested;
         requested.push_back(name);
@@ -234,7 +234,7 @@ namespace PluginManager {
         std::vector<std::string> resolved = DependencyResolver::resolve(
             requested,
             [](const std::string& n) { return registryInstance().isKnown(n); },
-            [](const std::string& n) { return registryInstance().pluginDependencies(n); }
+            [](const std::string& n) { return registryInstance().moduleDependencies(n); }
         );
 
         bool nameFound = false;
@@ -251,8 +251,8 @@ namespace PluginManager {
         for (const std::string& moduleName : resolved) {
             if (registryInstance().isLoaded(moduleName))
                 continue;
-            if (!loadPluginInternal(moduleName.c_str())) {
-                spdlog::warn("Failed to load plugin: {}", moduleName);
+            if (!loadModuleInternal(moduleName.c_str())) {
+                spdlog::warn("Failed to load module: {}", moduleName);
                 allSucceeded = false;
             }
         }
@@ -266,7 +266,7 @@ namespace PluginManager {
         if (!registryInstance().isKnown("capability_module"))
             return false;
 
-        if (!loadPluginInternal("capability_module")) {
+        if (!loadModuleInternal("capability_module")) {
             spdlog::warn("Failed to load capability module");
             return false;
         }
@@ -274,31 +274,31 @@ namespace PluginManager {
         return true;
     }
 
-    bool unloadPlugin(const char* pluginName) {
+    bool unloadModule(const char* moduleName) {
         std::lock_guard lock(loadMutex());
-        return unloadPluginInternalLocked(std::string(pluginName));
+        return unloadModuleInternalLocked(std::string(moduleName));
     }
 
-    bool unloadPluginWithDependents(const char* pluginName) {
+    bool unloadModuleWithDependents(const char* moduleName) {
         std::lock_guard lock(loadMutex());
 
-        std::string name(pluginName);
+        std::string name(moduleName);
 
         if (!registryInstance().isLoaded(name)) {
-            spdlog::warn("Cannot unload plugin (not loaded): {}", name);
+            spdlog::warn("Cannot unload module (not loaded): {}", name);
             return false;
         }
 
-        // Build the set of plugins that need to come down: the target plus
+        // Build the set of modules that need to come down: the target plus
         // every currently-loaded recursive dependent. Materialise the loaded
         // set into a hash once so the membership check below is O(1).
-        std::vector<std::string> loadedNames = registryInstance().loadedPluginNames();
+        std::vector<std::string> loadedNames = registryInstance().loadedModuleNames();
         std::unordered_set<std::string> loaded(loadedNames.begin(), loadedNames.end());
 
-        // Reverse dependency walk against the in-process graph. PluginRegistry
-        // keeps PluginInfo::dependents in sync with PluginInfo::dependencies
+        // Reverse dependency walk against the in-process graph. ModuleRegistry
+        // keeps ModuleInfo::dependents in sync with ModuleInfo::dependencies
         // across every discovery pass, so we don't need a disk-backed query.
-        std::vector<std::string> dependents = registryInstance().pluginDependents(name, /*recursive=*/true);
+        std::vector<std::string> dependents = registryInstance().moduleDependents(name, /*recursive=*/true);
 
         std::vector<std::string> teardownSet;
         std::unordered_set<std::string> teardownSetMembers;
@@ -310,11 +310,11 @@ namespace PluginManager {
         }
 
         // Order leaves-first: resolve load-order for the teardown set, then
-        // reverse. Dependents come down before the plugins they depend on.
+        // reverse. Dependents come down before the modules they depend on.
         std::vector<std::string> loadOrder = DependencyResolver::resolve(
             teardownSet,
             [](const std::string& n) { return registryInstance().isKnown(n); },
-            [](const std::string& n) { return registryInstance().pluginDependencies(n); }
+            [](const std::string& n) { return registryInstance().moduleDependencies(n); }
         );
         std::vector<std::string> teardownOrder;
         std::unordered_set<std::string> teardownOrderMembers;
@@ -333,8 +333,8 @@ namespace PluginManager {
         bool allSucceeded = true;
         for (const std::string& n : teardownOrder) {
             if (!registryInstance().isLoaded(n)) continue;
-            if (!unloadPluginInternalLocked(n)) {
-                spdlog::warn("Failed to unload plugin during cascade: {}", n);
+            if (!unloadModuleInternalLocked(n)) {
+                spdlog::warn("Failed to unload module during cascade: {}", n);
                 allSucceeded = false;
             }
         }
@@ -354,23 +354,23 @@ namespace PluginManager {
         registryInstance().clear();
     }
 
-    char** getLoadedPluginsCStr() {
-        return toNullTerminatedArray(registryInstance().loadedPluginNames());
+    char** getLoadedModulesCStr() {
+        return toNullTerminatedArray(registryInstance().loadedModuleNames());
     }
 
-    char** getKnownPluginsCStr() {
-        std::vector<std::string> known = registryInstance().knownPluginNames();
+    char** getKnownModulesCStr() {
+        std::vector<std::string> known = registryInstance().knownModuleNames();
         if (known.empty()) {
-            spdlog::warn("No known plugins to return");
+            spdlog::warn("No known modules to return");
         }
         return toNullTerminatedArray(known);
     }
 
-    bool isPluginLoaded(const std::string& name) {
+    bool isModuleLoaded(const std::string& name) {
         return registryInstance().isLoaded(name);
     }
 
-    std::unordered_map<std::string, int64_t> getPluginProcessIds() {
+    std::unordered_map<std::string, int64_t> getModuleProcessIds() {
         return runtimeRegistry().getAllPids();
     }
 
@@ -378,12 +378,12 @@ namespace PluginManager {
         return DependencyResolver::resolve(
             requestedModules,
             [](const std::string& name) { return registryInstance().isKnown(name); },
-            [](const std::string& name) { return registryInstance().pluginDependencies(name); }
+            [](const std::string& name) { return registryInstance().moduleDependencies(name); }
         );
     }
 
     std::vector<std::string> getDependencies(const std::string& name, bool recursive) {
-        std::vector<std::string> deps = registryInstance().pluginDependencies(name, recursive);
+        std::vector<std::string> deps = registryInstance().moduleDependencies(name, recursive);
         std::vector<std::string> knownDeps;
         knownDeps.reserve(deps.size());
         for (const std::string& dep : deps) {
@@ -394,7 +394,7 @@ namespace PluginManager {
     }
 
     std::vector<std::string> getDependents(const std::string& name, bool recursive) {
-        return registryInstance().pluginDependents(name, recursive);
+        return registryInstance().moduleDependents(name, recursive);
     }
 
     char** getDependenciesCStr(const char* name, bool recursive) {

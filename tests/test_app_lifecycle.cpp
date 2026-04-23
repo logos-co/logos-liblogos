@@ -4,7 +4,7 @@
 #include <cstring>
 #include <string>
 
-static void clearPluginState() {
+static void clearModuleState() {
     logos_core_terminate_all();
     logos_core_clear();
 }
@@ -20,11 +20,11 @@ int main(int argc, char** argv) {
 class AppLifecycleTest : public ::testing::Test {
 protected:
     void SetUp() override {
-        clearPluginState();
+        clearModuleState();
     }
 
     void TearDown() override {
-        clearPluginState();
+        clearModuleState();
     }
 };
 
@@ -35,47 +35,47 @@ protected:
 TEST_F(AppLifecycleTest, Init_LibraryIsUsableAfterInit) {
     // After init, basic library operations should not crash.
     logos_core_process_events();
-    EXPECT_EQ(logos_core_get_plugins_dirs_count(), 0);
+    EXPECT_EQ(logos_core_get_modules_dirs_count(), 0);
 }
 
 // =============================================================================
-// Plugin Directory Tests
+// Module Directory Tests
 // =============================================================================
 
-TEST_F(AppLifecycleTest, SetPluginsDir_SetsDirectory) {
-    const char* testDir = "/test/plugins";
+TEST_F(AppLifecycleTest, SetModulesDir_SetsDirectory) {
+    const char* testDir = "/test/modules";
 
-    logos_core_set_plugins_dir(testDir);
+    logos_core_set_modules_dir(testDir);
 
-    ASSERT_EQ(logos_core_get_plugins_dirs_count(), 1);
-    char* dir = logos_core_get_plugins_dir_at(0);
+    ASSERT_EQ(logos_core_get_modules_dirs_count(), 1);
+    char* dir = logos_core_get_modules_dir_at(0);
     ASSERT_NE(dir, nullptr);
     EXPECT_EQ(std::string(dir), std::string(testDir));
     delete[] dir;
 }
 
-TEST_F(AppLifecycleTest, SetPluginsDir_ClearsExisting) {
-    logos_core_add_plugins_dir("/dir1");
-    logos_core_add_plugins_dir("/dir2");
-    ASSERT_EQ(logos_core_get_plugins_dirs_count(), 2);
+TEST_F(AppLifecycleTest, SetModulesDir_ClearsExisting) {
+    logos_core_add_modules_dir("/dir1");
+    logos_core_add_modules_dir("/dir2");
+    ASSERT_EQ(logos_core_get_modules_dirs_count(), 2);
 
-    logos_core_set_plugins_dir("/new_dir");
+    logos_core_set_modules_dir("/new_dir");
 
-    ASSERT_EQ(logos_core_get_plugins_dirs_count(), 1);
-    char* dir = logos_core_get_plugins_dir_at(0);
+    ASSERT_EQ(logos_core_get_modules_dirs_count(), 1);
+    char* dir = logos_core_get_modules_dir_at(0);
     ASSERT_NE(dir, nullptr);
     EXPECT_EQ(std::string(dir), "/new_dir");
     delete[] dir;
 }
 
-TEST_F(AppLifecycleTest, AddPluginsDir_AppendsDirectory) {
-    logos_core_add_plugins_dir("/dir1");
-    logos_core_add_plugins_dir("/dir2");
+TEST_F(AppLifecycleTest, AddModulesDir_AppendsDirectory) {
+    logos_core_add_modules_dir("/dir1");
+    logos_core_add_modules_dir("/dir2");
 
-    ASSERT_EQ(logos_core_get_plugins_dirs_count(), 2);
+    ASSERT_EQ(logos_core_get_modules_dirs_count(), 2);
 
-    char* d0 = logos_core_get_plugins_dir_at(0);
-    char* d1 = logos_core_get_plugins_dir_at(1);
+    char* d0 = logos_core_get_modules_dir_at(0);
+    char* d1 = logos_core_get_modules_dir_at(1);
     ASSERT_NE(d0, nullptr);
     ASSERT_NE(d1, nullptr);
     EXPECT_EQ(std::string(d0), "/dir1");
@@ -84,11 +84,11 @@ TEST_F(AppLifecycleTest, AddPluginsDir_AppendsDirectory) {
     delete[] d1;
 }
 
-TEST_F(AppLifecycleTest, AddPluginsDir_NoDuplicates) {
-    logos_core_add_plugins_dir("/test");
-    logos_core_add_plugins_dir("/test");
+TEST_F(AppLifecycleTest, AddModulesDir_NoDuplicates) {
+    logos_core_add_modules_dir("/test");
+    logos_core_add_modules_dir("/test");
 
-    EXPECT_EQ(logos_core_get_plugins_dirs_count(), 1);
+    EXPECT_EQ(logos_core_get_modules_dirs_count(), 1);
 }
 
 // =============================================================================
@@ -96,17 +96,17 @@ TEST_F(AppLifecycleTest, AddPluginsDir_NoDuplicates) {
 // =============================================================================
 
 TEST_F(AppLifecycleTest, Cleanup_ClearsGlobals) {
-    logos_core_register_plugin("test", "/path/to/test");
-    logos_core_add_plugins_dir("/test");
+    logos_core_register_module("test", "/path/to/test");
+    logos_core_add_modules_dir("/test");
 
-    clearPluginState();
+    clearModuleState();
 
-    char** loaded = logos_core_get_loaded_plugins();
+    char** loaded = logos_core_get_loaded_modules();
     ASSERT_NE(loaded, nullptr);
     EXPECT_EQ(loaded[0], nullptr);
     delete[] loaded;
 
-    char** known = logos_core_get_known_plugins();
+    char** known = logos_core_get_known_modules();
     ASSERT_NE(known, nullptr);
     EXPECT_EQ(known[0], nullptr);
     delete[] known;
@@ -139,15 +139,15 @@ TEST_F(AppLifecycleTest, ProcessEvents_AfterCleanupDoesNotCrash) {
 // Start Function Tests
 // =============================================================================
 
-TEST_F(AppLifecycleTest, Start_UsesCustomPluginsDirs) {
-    logos_core_set_plugins_dir("/custom/plugins");
+TEST_F(AppLifecycleTest, Start_UsesCustomModulesDirs) {
+    logos_core_set_modules_dir("/custom/modules");
 
     logos_core_start();
 
-    ASSERT_EQ(logos_core_get_plugins_dirs_count(), 1);
-    char* dir = logos_core_get_plugins_dir_at(0);
+    ASSERT_EQ(logos_core_get_modules_dirs_count(), 1);
+    char* dir = logos_core_get_modules_dir_at(0);
     ASSERT_NE(dir, nullptr);
-    EXPECT_EQ(std::string(dir), "/custom/plugins");
+    EXPECT_EQ(std::string(dir), "/custom/modules");
     delete[] dir;
 }
 

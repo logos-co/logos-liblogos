@@ -1,15 +1,15 @@
 // =============================================================================
 // Tests for the dependency resolver algorithm exposed via logos_core_resolve_dependencies.
 //
-// The resolver implements Kahn's topological sort over the registered plugin
+// The resolver implements Kahn's topological sort over the registered module
 // graph. These tests cover:
 //   - Empty / unknown input -> empty result
-//   - Single plugin with no deps
+//   - Single module with no deps
 //   - Linear chain (a -> b -> c)
 //   - Diamond topology (a -> b,c ; b,c -> d)
 //   - Multiple requested roots
 //   - Circular dependency (must not hang or crash; partial result expected)
-//   - Plugins already marked as loaded are still included in the resolved list
+//   - Modules already marked as loaded are still included in the resolved list
 //     (the resolver only orders them; the caller decides whether to skip loaded ones)
 // =============================================================================
 #include <gtest/gtest.h>
@@ -20,7 +20,7 @@
 #include <string>
 #include <vector>
 
-static void clearPluginState() {
+static void clearModuleState() {
     logos_core_terminate_all();
     logos_core_clear();
 }
@@ -53,8 +53,8 @@ static void freeResolved(char** arr) {
 
 class DependencyResolverTest : public ::testing::Test {
 protected:
-    void SetUp() override { clearPluginState(); }
-    void TearDown() override { clearPluginState(); }
+    void SetUp() override { clearModuleState(); }
+    void TearDown() override { clearModuleState(); }
 };
 
 // ---------------------------------------------------------------------------
@@ -68,8 +68,8 @@ TEST_F(DependencyResolverTest, EmptyInput_ReturnsEmpty) {
     delete[] result;
 }
 
-TEST_F(DependencyResolverTest, UnknownPlugin_ReturnsEmpty) {
-    const char* names[] = {"ghost_plugin"};
+TEST_F(DependencyResolverTest, UnknownModule_ReturnsEmpty) {
+    const char* names[] = {"ghost_module"};
     char** result = logos_core_resolve_dependencies(names, 1);
     ASSERT_NE(result, nullptr);
     EXPECT_EQ(result[0], nullptr);
@@ -85,12 +85,12 @@ TEST_F(DependencyResolverTest, AllUnknown_ReturnsEmpty) {
 }
 
 // ---------------------------------------------------------------------------
-// Single plugin, no dependencies
+// Single module, no dependencies
 // ---------------------------------------------------------------------------
 
-TEST_F(DependencyResolverTest, SinglePluginNoDeps_ReturnsSelf) {
-    logos_core_register_plugin("solo", "/path/solo");
-    logos_core_register_plugin_dependencies("solo", nullptr, 0);
+TEST_F(DependencyResolverTest, SingleModuleNoDeps_ReturnsSelf) {
+    logos_core_register_module("solo", "/path/solo");
+    logos_core_register_module_dependencies("solo", nullptr, 0);
 
     const char* names[] = {"solo"};
     char** result = logos_core_resolve_dependencies(names, 1);
@@ -106,14 +106,14 @@ TEST_F(DependencyResolverTest, SinglePluginNoDeps_ReturnsSelf) {
 // ---------------------------------------------------------------------------
 
 TEST_F(DependencyResolverTest, LinearChain_CorrectTopologicalOrder) {
-    logos_core_register_plugin("a", "/a");
-    logos_core_register_plugin("b", "/b");
-    logos_core_register_plugin("c", "/c");
+    logos_core_register_module("a", "/a");
+    logos_core_register_module("b", "/b");
+    logos_core_register_module("c", "/c");
     const char* depsA[] = {"b"};
     const char* depsB[] = {"c"};
-    logos_core_register_plugin_dependencies("a", depsA, 1);
-    logos_core_register_plugin_dependencies("b", depsB, 1);
-    logos_core_register_plugin_dependencies("c", nullptr, 0);
+    logos_core_register_module_dependencies("a", depsA, 1);
+    logos_core_register_module_dependencies("b", depsB, 1);
+    logos_core_register_module_dependencies("c", nullptr, 0);
 
     const char* names[] = {"a"};
     char** result = logos_core_resolve_dependencies(names, 1);
@@ -132,17 +132,17 @@ TEST_F(DependencyResolverTest, LinearChain_CorrectTopologicalOrder) {
 // ---------------------------------------------------------------------------
 
 TEST_F(DependencyResolverTest, FourNodeChain_CorrectOrder) {
-    logos_core_register_plugin("d", "/d");
-    logos_core_register_plugin("c", "/c");
-    logos_core_register_plugin("b", "/b");
-    logos_core_register_plugin("a", "/a");
+    logos_core_register_module("d", "/d");
+    logos_core_register_module("c", "/c");
+    logos_core_register_module("b", "/b");
+    logos_core_register_module("a", "/a");
     const char* depsD[] = {"c"};
     const char* depsC[] = {"b"};
     const char* depsB[] = {"a"};
-    logos_core_register_plugin_dependencies("d", depsD, 1);
-    logos_core_register_plugin_dependencies("c", depsC, 1);
-    logos_core_register_plugin_dependencies("b", depsB, 1);
-    logos_core_register_plugin_dependencies("a", nullptr, 0);
+    logos_core_register_module_dependencies("d", depsD, 1);
+    logos_core_register_module_dependencies("c", depsC, 1);
+    logos_core_register_module_dependencies("b", depsB, 1);
+    logos_core_register_module_dependencies("a", nullptr, 0);
 
     const char* names[] = {"d"};
     char** result = logos_core_resolve_dependencies(names, 1);
@@ -162,17 +162,17 @@ TEST_F(DependencyResolverTest, FourNodeChain_CorrectOrder) {
 // ---------------------------------------------------------------------------
 
 TEST_F(DependencyResolverTest, DiamondDependency_DSharedRootComesFirst) {
-    logos_core_register_plugin("a", "/a");
-    logos_core_register_plugin("b", "/b");
-    logos_core_register_plugin("c", "/c");
-    logos_core_register_plugin("d", "/d");
+    logos_core_register_module("a", "/a");
+    logos_core_register_module("b", "/b");
+    logos_core_register_module("c", "/c");
+    logos_core_register_module("d", "/d");
     const char* depsA[] = {"b", "c"};
     const char* depsB[] = {"d"};
     const char* depsC[] = {"d"};
-    logos_core_register_plugin_dependencies("a", depsA, 2);
-    logos_core_register_plugin_dependencies("b", depsB, 1);
-    logos_core_register_plugin_dependencies("c", depsC, 1);
-    logos_core_register_plugin_dependencies("d", nullptr, 0);
+    logos_core_register_module_dependencies("a", depsA, 2);
+    logos_core_register_module_dependencies("b", depsB, 1);
+    logos_core_register_module_dependencies("c", depsC, 1);
+    logos_core_register_module_dependencies("d", nullptr, 0);
 
     const char* names[] = {"a"};
     char** result = logos_core_resolve_dependencies(names, 1);
@@ -199,18 +199,18 @@ TEST_F(DependencyResolverTest, DiamondDependency_DSharedRootComesFirst) {
 
 TEST_F(DependencyResolverTest, MultipleRoots_BothTreesIncluded) {
     // Tree 1: a -> b
-    logos_core_register_plugin("a", "/a");
-    logos_core_register_plugin("b", "/b");
+    logos_core_register_module("a", "/a");
+    logos_core_register_module("b", "/b");
     const char* depsA[] = {"b"};
-    logos_core_register_plugin_dependencies("a", depsA, 1);
-    logos_core_register_plugin_dependencies("b", nullptr, 0);
+    logos_core_register_module_dependencies("a", depsA, 1);
+    logos_core_register_module_dependencies("b", nullptr, 0);
 
     // Tree 2: x -> y
-    logos_core_register_plugin("x", "/x");
-    logos_core_register_plugin("y", "/y");
+    logos_core_register_module("x", "/x");
+    logos_core_register_module("y", "/y");
     const char* depsX[] = {"y"};
-    logos_core_register_plugin_dependencies("x", depsX, 1);
-    logos_core_register_plugin_dependencies("y", nullptr, 0);
+    logos_core_register_module_dependencies("x", depsX, 1);
+    logos_core_register_module_dependencies("y", nullptr, 0);
 
     const char* names[] = {"a", "x"};
     char** result = logos_core_resolve_dependencies(names, 2);
@@ -240,14 +240,14 @@ TEST_F(DependencyResolverTest, MultipleRoots_BothTreesIncluded) {
 // ---------------------------------------------------------------------------
 
 TEST_F(DependencyResolverTest, SharedDependency_AppearsOnce) {
-    logos_core_register_plugin("a", "/a");
-    logos_core_register_plugin("b", "/b");
-    logos_core_register_plugin("shared", "/shared");
+    logos_core_register_module("a", "/a");
+    logos_core_register_module("b", "/b");
+    logos_core_register_module("shared", "/shared");
     const char* depsA[] = {"shared"};
     const char* depsB[] = {"shared"};
-    logos_core_register_plugin_dependencies("a", depsA, 1);
-    logos_core_register_plugin_dependencies("b", depsB, 1);
-    logos_core_register_plugin_dependencies("shared", nullptr, 0);
+    logos_core_register_module_dependencies("a", depsA, 1);
+    logos_core_register_module_dependencies("b", depsB, 1);
+    logos_core_register_module_dependencies("shared", nullptr, 0);
 
     const char* names[] = {"a", "b"};
     char** result = logos_core_resolve_dependencies(names, 2);
@@ -261,14 +261,14 @@ TEST_F(DependencyResolverTest, SharedDependency_AppearsOnce) {
 }
 
 // ---------------------------------------------------------------------------
-// Mixed known/unknown: requesting both a known and an unknown plugin.
-// Known plugin and its deps should be resolved; unknown should be silently
+// Mixed known/unknown: requesting both a known and an unknown module.
+// Known module and its deps should be resolved; unknown should be silently
 // dropped.
 // ---------------------------------------------------------------------------
 
 TEST_F(DependencyResolverTest, MixedKnownUnknown_UnknownDropped) {
-    logos_core_register_plugin("known", "/known");
-    logos_core_register_plugin_dependencies("known", nullptr, 0);
+    logos_core_register_module("known", "/known");
+    logos_core_register_module_dependencies("known", nullptr, 0);
 
     const char* names[] = {"known", "unknown_xyz"};
     char** result = logos_core_resolve_dependencies(names, 2);
@@ -285,13 +285,13 @@ TEST_F(DependencyResolverTest, MixedKnownUnknown_UnknownDropped) {
 // and still return a and b in some valid order.
 // ---------------------------------------------------------------------------
 
-TEST_F(DependencyResolverTest, PartiallyUnknownDep_KnownPluginsStillResolved) {
-    logos_core_register_plugin("a", "/a");
-    logos_core_register_plugin("b", "/b");
+TEST_F(DependencyResolverTest, PartiallyUnknownDep_KnownModulesStillResolved) {
+    logos_core_register_module("a", "/a");
+    logos_core_register_module("b", "/b");
     const char* depsA[] = {"b"};
     const char* depsB[] = {"missing_dep"};
-    logos_core_register_plugin_dependencies("a", depsA, 1);
-    logos_core_register_plugin_dependencies("b", depsB, 1);
+    logos_core_register_module_dependencies("a", depsA, 1);
+    logos_core_register_module_dependencies("b", depsB, 1);
 
     const char* names[] = {"a"};
     char** result = logos_core_resolve_dependencies(names, 1);
@@ -311,12 +311,12 @@ TEST_F(DependencyResolverTest, PartiallyUnknownDep_KnownPluginsStillResolved) {
 // ---------------------------------------------------------------------------
 
 TEST_F(DependencyResolverTest, CircularDependency_DoesNotHangOrCrash) {
-    logos_core_register_plugin("a", "/a");
-    logos_core_register_plugin("b", "/b");
+    logos_core_register_module("a", "/a");
+    logos_core_register_module("b", "/b");
     const char* depsA[] = {"b"};
     const char* depsB[] = {"a"};
-    logos_core_register_plugin_dependencies("a", depsA, 1);
-    logos_core_register_plugin_dependencies("b", depsB, 1);
+    logos_core_register_module_dependencies("a", depsA, 1);
+    logos_core_register_module_dependencies("b", depsB, 1);
 
     const char* names[] = {"a"};
     // Must return without hanging.
@@ -327,19 +327,19 @@ TEST_F(DependencyResolverTest, CircularDependency_DoesNotHangOrCrash) {
 }
 
 // ---------------------------------------------------------------------------
-// Already-loaded plugins still appear in the resolved list.
+// Already-loaded modules still appear in the resolved list.
 // The resolver is purely structural; the caller decides whether to skip them.
 // ---------------------------------------------------------------------------
 
-TEST_F(DependencyResolverTest, AlreadyLoadedPlugin_StillIncludedInResolution) {
-    logos_core_register_plugin("a", "/a");
-    logos_core_register_plugin("b", "/b");
+TEST_F(DependencyResolverTest, AlreadyLoadedModule_StillIncludedInResolution) {
+    logos_core_register_module("a", "/a");
+    logos_core_register_module("b", "/b");
     const char* depsA[] = {"b"};
-    logos_core_register_plugin_dependencies("a", depsA, 1);
-    logos_core_register_plugin_dependencies("b", nullptr, 0);
+    logos_core_register_module_dependencies("a", depsA, 1);
+    logos_core_register_module_dependencies("b", nullptr, 0);
 
     // Simulate b already loaded.
-    logos_core_mark_plugin_loaded("b");
+    logos_core_mark_module_loaded("b");
 
     const char* names[] = {"a"};
     char** result = logos_core_resolve_dependencies(names, 1);
@@ -357,8 +357,8 @@ TEST_F(DependencyResolverTest, AlreadyLoadedPlugin_StillIncludedInResolution) {
 // ---------------------------------------------------------------------------
 
 TEST_F(DependencyResolverTest, DuplicateNamesInRequest_AppearOnce) {
-    logos_core_register_plugin("a", "/a");
-    logos_core_register_plugin_dependencies("a", nullptr, 0);
+    logos_core_register_module("a", "/a");
+    logos_core_register_module_dependencies("a", nullptr, 0);
 
     const char* names[] = {"a", "a", "a"};
     char** result = logos_core_resolve_dependencies(names, 3);

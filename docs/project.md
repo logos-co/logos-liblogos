@@ -17,8 +17,8 @@ logos-liblogos/
 │   ├── logos_core/                      # Core library implementation
 │   │   ├── logos_core.h                 # C API header (public)
 │   │   ├── logos_core.cpp               # C API implementation
-│   │   ├── plugin_manager.h/cpp         # Facade: orchestrates registry, runtime registry, resolver
-│   │   ├── plugin_registry.h/cpp        # In-memory registry of discovered/loaded modules
+│   │   ├── module_manager.h/cpp         # Facade: orchestrates registry, runtime registry, resolver
+│   │   ├── module_registry.h/cpp        # In-memory registry of discovered/loaded modules
 │   │   ├── dependency_resolver.h/cpp    # Topological sort with circular dependency detection
 │   │   ├── module_runtime.h             # Abstract ModuleRuntime interface (Qt-free)
 │   │   └── runtime_registry.h/cpp       # Registry of ModuleRuntime implementations
@@ -27,14 +27,14 @@ logos-liblogos/
 │           ├── subprocess_manager.h/cpp     # ModuleRuntime impl + Boost.Process subprocess management
 │           ├── logos_host.cpp               # Host entry point (logos_host_qt binary)
 │           ├── command_line_parser.h/cpp    # CLI argument parsing (--name, --path)
-│           ├── plugin_initializer.h/cpp     # Plugin loading and token setup
+│           ├── module_initializer.h/cpp     # Module loading and token setup
 │           └── qt/                          # Qt-specific host implementations
 │               ├── qt_app.h/cpp             # Qt application setup for host
 │               └── qt_token_receiver.h/cpp  # Auth token reception via local socket
 ├── tests/                               # Google Test suite
 │   ├── CMakeLists.txt                   # Test build configuration
 │   ├── test_app_lifecycle.cpp           # C API lifecycle tests (init, exec, cleanup, processEvents)
-│   ├── test_plugin_manager.cpp          # PluginManager + PluginRegistry tests
+│   ├── test_module_manager.cpp          # ModuleManager + ModuleRegistry tests
 │   ├── test_subprocess_manager.cpp      # SubprocessManager lifecycle and subprocess tests
 │   ├── test_runtime_registry.cpp        # RuntimeRegistry selection and fan-out tests
 │   ├── test_module_runtime_abstraction.cpp  # End-to-end runtime abstraction tests (FakeRuntime)
@@ -61,7 +61,7 @@ logos-liblogos/
 |-----------|---------|
 | **C++17** | Implementation language |
 | **CMake 3.14+** | Build system |
-| **Qt 6** (Core, RemoteObjects) | Event loop, plugin system, IPC, meta-object system |
+| **Qt 6** (Core, RemoteObjects) | Event loop, module system, IPC, meta-object system |
 | **Boost** (Process, Asio, Uuid) | Subprocess management, async I/O, and UUID generation |
 | **nlohmann_json** | JSON parsing/serialization (replaces Qt JSON internally) |
 | **CLI11** | Command-line argument parsing (logos_host) |
@@ -75,7 +75,7 @@ logos-liblogos/
 | Dependency | Purpose |
 |------------|---------|
 | **[logos-cpp-sdk](https://github.com/logos-co/logos-cpp-sdk)** | C++ client library (LogosAPI, LogosAPIClient, TokenManager, PluginInterface) |
-| **[logos-module](https://github.com/logos-co/logos-module)** | Module library (metadata extraction, plugin loading utilities) |
+| **[logos-module](https://github.com/logos-co/logos-module)** | Module library (metadata extraction, module loading utilities) |
 | **[logos-capability-module](https://github.com/logos-co/logos-capability-module)** | Built-in capability authorization module |
 | **[process-stats](https://github.com/logos-co/process-stats)** | CPU and memory monitoring for module processes |
 | **[logos-package-manager](https://github.com/logos-co/logos-package-manager-module)** | Package management library for installed module discovery |
@@ -83,31 +83,31 @@ logos-liblogos/
 
 ## Core Modules
 
-### PluginManager
+### ModuleManager
 
-**Files:** `src/logos_core/plugin_manager.h`, `src/logos_core/plugin_manager.cpp`
+**Files:** `src/logos_core/module_manager.h`, `src/logos_core/module_manager.cpp`
 
-**Purpose:** Thin facade that orchestrates `PluginRegistry`, `RuntimeRegistry`, and `DependencyResolver`. Provides the C++-level API for module lifecycle management. Each module runs in a separate subprocess managed by the selected `ModuleRuntime` implementation (default: `SubprocessManager`, which spawns `logos_host_qt` processes).
+**Purpose:** Thin facade that orchestrates `ModuleRegistry`, `RuntimeRegistry`, and `DependencyResolver`. Provides the C++-level API for module lifecycle management. Each module runs in a separate subprocess managed by the selected `ModuleRuntime` implementation (default: `SubprocessManager`, which spawns `logos_host_qt` processes).
 
-**Thread safety:** `loadPlugin`, `loadPluginWithDependencies`, and `unloadPlugin` are serialised by a static `loadMutex()` (one load/unload at a time). `discoverInstalledModules` delegates to `PluginRegistry` which has its own reader-writer lock.
+**Thread safety:** `loadModule`, `loadModuleWithDependencies`, and `unloadModule` are serialised by a static `loadMutex()` (one load/unload at a time). `discoverInstalledModules` delegates to `ModuleRegistry` which has its own reader-writer lock.
 
-**API (namespace `PluginManager`):**
+**API (namespace `ModuleManager`):**
 
 | Method | Description |
 |--------|-------------|
-| `registry() → PluginRegistry&` | Access the shared plugin registry |
+| `registry() → ModuleRegistry&` | Access the shared module registry |
 | `runtimes() → RuntimeRegistry&` | Access the shared runtime registry |
-| `setPluginsDir(path)` | Set the primary plugin directory (clears existing) |
-| `addPluginsDir(path)` | Add an additional plugin directory |
+| `setModulesDir(path)` | Set the primary module directory (clears existing) |
+| `addModulesDir(path)` | Add an additional module directory |
 | `setPersistenceBasePath(path)` | Set base directory for module instance persistence |
-| `discoverInstalledModules()` | Scan all plugin directories and register discovered modules |
-| `processPlugin(path) → std::string` | Extract metadata from a module file, register as known |
-| `processPluginCStr(path) → char*` | C-string variant of processPlugin |
-| `loadPlugin(name) → bool` | Load a module (selects a runtime via RuntimeRegistry, spawns subprocess, sends auth token) |
-| `loadPluginWithDependencies(name) → bool` | Resolve dependency tree, load in topological order |
+| `discoverInstalledModules()` | Scan all module directories and register discovered modules |
+| `processModule(path) → std::string` | Extract metadata from a module file, register as known |
+| `processModuleCStr(path) → char*` | C-string variant of processModule |
+| `loadModule(name) → bool` | Load a module (selects a runtime via RuntimeRegistry, spawns subprocess, sends auth token) |
+| `loadModuleWithDependencies(name) → bool` | Resolve dependency tree, load in topological order |
 | `initializeCapabilityModule() → bool` | Load the built-in capability module if available |
-| `unloadPlugin(name) → bool` | Terminate module process and update registry |
-| `unloadPluginWithDependents(name) → bool` | Cascade unload: terminate the named module together with every currently loaded module that transitively depends on it, leaves-first |
+| `unloadModule(name) → bool` | Terminate module process and update registry |
+| `unloadModuleWithDependents(name) → bool` | Cascade unload: terminate the named module together with every currently loaded module that transitively depends on it, leaves-first |
 | `terminateAll()` | Terminate all running module processes |
 | `clear()` | Clear registry and reset all state |
 | `resolveDependencies(modules) → std::vector<std::string>` | Topological sort with circular dependency detection |
@@ -115,46 +115,46 @@ logos-liblogos/
 | `getDependents(name, recursive) → std::vector<std::string>` | Declared dependents of `name` among known modules; walks the reverse graph transitively when `recursive=true`. Reads from the in-process registry, no disk query |
 | `getDependenciesCStr(name, recursive) → char**` | C-string variant backing `logos_core_get_module_dependencies` |
 | `getDependentsCStr(name, recursive) → char**` | C-string variant backing `logos_core_get_module_dependents` |
-| `getLoadedPluginsCStr() → char**` | Return loaded module names as null-terminated C string array |
-| `getKnownPluginsCStr() → char**` | Return known module names as null-terminated C string array |
-| `isPluginLoaded(name) → bool` | Check if a module is currently loaded |
-| `getPluginProcessIds() → std::unordered_map<std::string, int64_t>` | Return module name → process ID mappings |
+| `getLoadedModulesCStr() → char**` | Return loaded module names as null-terminated C string array |
+| `getKnownModulesCStr() → char**` | Return known module names as null-terminated C string array |
+| `isModuleLoaded(name) → bool` | Check if a module is currently loaded |
+| `getModuleProcessIds() → std::unordered_map<std::string, int64_t>` | Return module name → process ID mappings |
 
-### PluginRegistry
+### ModuleRegistry
 
-**Files:** `src/logos_core/plugin_registry.h`, `src/logos_core/plugin_registry.cpp`
+**Files:** `src/logos_core/module_registry.h`, `src/logos_core/module_registry.cpp`
 
-**Purpose:** In-memory registry of discovered and loaded modules. Single source of truth for the dependency graph: stores plugin paths, forward dependencies, and the derived reverse edges (dependents). All public methods are thread-safe: mutating methods acquire a `std::unique_lock` on an internal `std::shared_mutex`; read-only methods acquire a `std::shared_lock`, allowing concurrent reads.
+**Purpose:** In-memory registry of discovered and loaded modules. Single source of truth for the dependency graph: stores module paths, forward dependencies, and the derived reverse edges (dependents). All public methods are thread-safe: mutating methods acquire a `std::unique_lock` on an internal `std::shared_mutex`; read-only methods acquire a `std::shared_lock`, allowing concurrent reads.
 
 **Data:**
-- `PluginInfo` struct — holds `path`, `dependencies` (`std::vector<std::string>`), `dependents` (`std::vector<std::string>`, reverse-edge cache), `loaded` flag, `runtime` (`std::shared_ptr<ModuleRuntime>`), `handle` (`LoadedModuleHandle`)
-- `std::unordered_map<std::string, PluginInfo> m_plugins` — plugin database keyed by name
-- `std::vector<std::string> m_pluginsDirs` — configured plugin directories
+- `ModuleInfo` struct — holds `path`, `dependencies` (`std::vector<std::string>`), `dependents` (`std::vector<std::string>`, reverse-edge cache), `loaded` flag, `runtime` (`std::shared_ptr<ModuleRuntime>`), `handle` (`LoadedModuleHandle`)
+- `std::unordered_map<std::string, ModuleInfo> m_modules` — module database keyed by name
+- `std::vector<std::string> m_modulesDirs` — configured module directories
 - `std::shared_mutex m_mutex` — reader-writer lock protecting all fields
 
-**Dependency graph invariant:** `PluginInfo::dependents` mirrors the inverse of `dependencies` across all known plugins. `PluginRegistry` owns this invariant and maintains it by calling the private `recomputeDependentsLocked()` at the tail of every forward-edge mutation (`discoverInstalledModules`, `processPlugin`, `registerPlugin` when deps are passed, `registerDependencies`). Callers never populate `dependents` directly. This replaces the previous pattern of querying `PackageManagerLib::resolveDependents()` on disk — the registry is now the single authority for reverse-dep lookups, and `PluginManager::getDependents` / `unloadPluginWithDependents` read straight from it.
+**Dependency graph invariant:** `ModuleInfo::dependents` mirrors the inverse of `dependencies` across all known modules. `ModuleRegistry` owns this invariant and maintains it by calling the private `recomputeDependentsLocked()` at the tail of every forward-edge mutation (`discoverInstalledModules`, `processModule`, `registerModule` when deps are passed, `registerDependencies`). Callers never populate `dependents` directly. This replaces the previous pattern of querying `PackageManagerLib::resolveDependents()` on disk — the registry is now the single authority for reverse-dep lookups, and `ModuleManager::getDependents` / `unloadModuleWithDependents` read straight from it.
 
-**API (class `PluginRegistry`):**
+**API (class `ModuleRegistry`):**
 
 | Method | Description |
 |--------|-------------|
-| `setPluginsDir(dir)` | Clear and set single plugin directory |
-| `addPluginsDir(dir)` | Add to plugin directory list |
-| `pluginsDirs() → std::vector<std::string>` | Return configured directories |
+| `setModulesDir(dir)` | Clear and set single module directory |
+| `addModulesDir(dir)` | Add to module directory list |
+| `modulesDirs() → std::vector<std::string>` | Return configured directories |
 | `discoverInstalledModules()` | Scan directories, parse manifest.json files; recomputes dependents at end |
-| `processPlugin(path) → std::string` | Extract metadata from module file, register as known; recomputes dependents at end |
-| `registerPlugin(name, path, deps)` | Manually register a plugin; recomputes dependents when deps are passed |
-| `registerDependencies(name, deps)` | Set dependencies for a known plugin; recomputes dependents |
-| `isKnown(name) → bool` | Plugin exists in registry |
-| `pluginPath(name) → std::string` | Get file path for a known plugin |
-| `pluginDependencies(name, recursive) → std::vector<std::string>` | Forward-edge lookup. `recursive=false` returns direct dependencies from `PluginInfo`; `recursive=true` walks the forward graph breadth-first (cycle/diamond safe) |
-| `pluginDependents(name, recursive) → std::vector<std::string>` | Reverse-edge lookup. `recursive=false` returns direct dependents from `PluginInfo`; `recursive=true` walks the reverse graph breadth-first (cycle/diamond safe) |
-| `knownPluginNames() → std::vector<std::string>` | All discovered module names |
-| `isLoaded(name) → bool` | Plugin is currently running |
+| `processModule(path) → std::string` | Extract metadata from module file, register as known; recomputes dependents at end |
+| `registerModule(name, path, deps)` | Manually register a module; recomputes dependents when deps are passed |
+| `registerDependencies(name, deps)` | Set dependencies for a known module; recomputes dependents |
+| `isKnown(name) → bool` | Module exists in registry |
+| `modulePath(name) → std::string` | Get file path for a known module |
+| `moduleDependencies(name, recursive) → std::vector<std::string>` | Forward-edge lookup. `recursive=false` returns direct dependencies from `ModuleInfo`; `recursive=true` walks the forward graph breadth-first (cycle/diamond safe) |
+| `moduleDependents(name, recursive) → std::vector<std::string>` | Reverse-edge lookup. `recursive=false` returns direct dependents from `ModuleInfo`; `recursive=true` walks the reverse graph breadth-first (cycle/diamond safe) |
+| `knownModuleNames() → std::vector<std::string>` | All discovered module names |
+| `isLoaded(name) → bool` | Module is currently running |
 | `markLoaded(name)` / `markUnloaded(name)` | Update load state |
 | `markLoaded(name, runtime, handle)` | Mark loaded with associated runtime and handle |
 | `runtimeFor(name) → std::shared_ptr<ModuleRuntime>` | Get the runtime that loaded a given module |
-| `loadedPluginNames() → std::vector<std::string>` | Currently running module names |
+| `loadedModuleNames() → std::vector<std::string>` | Currently running module names |
 | `clearLoaded()` | Clear all loaded state |
 | `clear()` | Reset entire registry |
 
@@ -162,10 +162,10 @@ logos-liblogos/
 
 **Files:** `src/logos_core/module_runtime.h`
 
-**Purpose:** Abstract interface for module loading strategies. Decouples the core from any specific subprocess or plugin-loading mechanism (Qt, WASM, in-process, etc.). Each implementation handles a particular module format.
+**Purpose:** Abstract interface for module loading strategies. Decouples the core from any specific subprocess or module-loading mechanism (Qt, WASM, in-process, etc.). Each implementation handles a particular module format.
 
 **Supporting types:**
-- `ModuleDescriptor` — describes a module to load: `name`, `path`, `format`, `pluginsDirs`, `instancePersistencePath`, `onTerminated` callback
+- `ModuleDescriptor` — describes a module to load: `name`, `path`, `format`, `modulesDirs`, `instancePersistencePath`, `onTerminated` callback
 - `LoadedModuleHandle` — opaque handle returned by `load()`: `pid` and `runtimeData` (`std::any`)
 
 **API (class `ModuleRuntime`):**
@@ -255,9 +255,9 @@ Takes callback functions (`IsKnownFn`, `GetDependenciesFn`) so it has no couplin
 
 ### LogosHost
 
-**Files:** `src/runtimes/runtime_qt/logos_host.cpp`, `src/runtimes/runtime_qt/command_line_parser.h/cpp`, `src/runtimes/runtime_qt/plugin_initializer.h/cpp`, `src/runtimes/runtime_qt/qt/qt_app.h/cpp`, `src/runtimes/runtime_qt/qt/qt_token_receiver.h/cpp`
+**Files:** `src/runtimes/runtime_qt/logos_host.cpp`, `src/runtimes/runtime_qt/command_line_parser.h/cpp`, `src/runtimes/runtime_qt/module_initializer.h/cpp`, `src/runtimes/runtime_qt/qt/qt_app.h/cpp`, `src/runtimes/runtime_qt/qt/qt_token_receiver.h/cpp`
 
-**Purpose:** Lightweight subprocess (`logos_host_qt`) that loads a single Qt module. Parses `--name`, `--path`, and optional `--instance-persistence-path` arguments, loads the plugin, authenticates via token from the core, registers the module with the remote object registry, and runs the Qt event loop. A `logos_host` compatibility symlink is installed for backward compatibility with downstream consumers.
+**Purpose:** Lightweight subprocess (`logos_host_qt`) that loads a single Qt module. Parses `--name`, `--path`, and optional `--instance-persistence-path` arguments, loads the module, authenticates via token from the core, registers the module with the remote object registry, and runs the Qt event loop. A `logos_host` compatibility symlink is installed for backward compatibility with downstream consumers.
 
 ## C API
 
@@ -273,28 +273,28 @@ The public C API (`logos_core.h`) is the only exported interface. All functions 
 | `logos_core_cleanup()` | Terminate all modules and clean up |
 | `logos_core_process_events()` | Process Qt events without blocking |
 
-**Plugin Management:**
+**Module Management:**
 
 | Function | Description |
 |----------|-------------|
-| `logos_core_set_plugins_dir(dir)` | Set primary plugin directory |
-| `logos_core_add_plugins_dir(dir)` | Add additional plugin directory |
+| `logos_core_set_modules_dir(dir)` | Set primary module directory |
+| `logos_core_add_modules_dir(dir)` | Add additional module directory |
 | `logos_core_set_persistence_base_path(path)` | Set base directory for module instance persistence |
-| `logos_core_load_plugin(name) → int` | Load a module (1 = success, 0 = failure) |
-| `logos_core_load_plugin_with_dependencies(name) → int` | Load module and dependencies in order |
-| `logos_core_unload_plugin(name) → int` | Unload a module |
-| `logos_core_unload_plugin_with_dependents(name) → int` | Cascade unload: terminate the module together with every loaded transitive dependent, leaves-first. Returns 1 only if every step succeeded |
+| `logos_core_load_module(name) → int` | Load a module (1 = success, 0 = failure) |
+| `logos_core_load_module_with_dependencies(name) → int` | Load module and dependencies in order |
+| `logos_core_unload_module(name) → int` | Unload a module |
+| `logos_core_unload_module_with_dependents(name) → int` | Cascade unload: terminate the module together with every loaded transitive dependent, leaves-first. Returns 1 only if every step succeeded |
 | `logos_core_get_module_dependencies(name, recursive) → char**` | Modules that `name` depends on (forward edges). `recursive=true` walks the forward graph transitively. Unknown names yield an empty array. Caller frees |
 | `logos_core_get_module_dependents(name, recursive) → char**` | Modules that depend on `name` (reverse edges). `recursive=true` walks transitively. Unknown names yield an empty array. Caller frees |
-| `logos_core_process_plugin(path) → char*` | Process plugin file, return name (caller frees) |
-| `logos_core_refresh_plugins()` | Re-scan plugin directories |
+| `logos_core_process_module(path) → char*` | Process module file, return name (caller frees) |
+| `logos_core_refresh_modules()` | Re-scan module directories |
 
 **Queries:**
 
 | Function | Description |
 |----------|-------------|
-| `logos_core_get_loaded_plugins() → char**` | Null-terminated array of loaded names (caller frees) |
-| `logos_core_get_known_plugins() → char**` | Null-terminated array of known names (caller frees) |
+| `logos_core_get_loaded_modules() → char**` | Null-terminated array of loaded names (caller frees) |
+| `logos_core_get_known_modules() → char**` | Null-terminated array of known names (caller frees) |
 | `logos_core_get_module_stats() → char*` | JSON array of CPU/memory stats (caller frees) |
 | `logos_core_get_token(key) → char*` | Get auth token by key (caller frees) |
 
@@ -302,9 +302,9 @@ The public C API (`logos_core.h`) is the only exported interface. All functions 
 
 | Category | Guarantee |
 |----------|-----------|
-| `logos_core_load_plugin`, `logos_core_load_plugin_with_dependencies`, `logos_core_unload_plugin`, `logos_core_unload_plugin_with_dependents` | Serialised by a single internal mutex — safe to call concurrently from multiple threads. The cascade variant holds the lock for the entire leaves-first teardown so a late-arriving load can't interleave between tearing down the dependents and the target |
-| `logos_core_get_known_plugins`, `logos_core_get_loaded_plugins` | Protected by a shared reader-writer lock — safe to call concurrently with each other and with the mutating functions above |
-| `logos_core_refresh_plugins` | Protected by `PluginRegistry`'s reader-writer lock (write side) — safe for concurrent registry access but not serialised against load/unload |
+| `logos_core_load_module`, `logos_core_load_module_with_dependencies`, `logos_core_unload_module`, `logos_core_unload_module_with_dependents` | Serialised by a single internal mutex — safe to call concurrently from multiple threads. The cascade variant holds the lock for the entire leaves-first teardown so a late-arriving load can't interleave between tearing down the dependents and the target |
+| `logos_core_get_known_modules`, `logos_core_get_loaded_modules` | Protected by a shared reader-writer lock — safe to call concurrently with each other and with the mutating functions above |
+| `logos_core_refresh_modules` | Protected by `ModuleRegistry`'s reader-writer lock (write side) — safe for concurrent registry access but not serialised against load/unload |
 | `logos_core_init`, `logos_core_start`, `logos_core_cleanup` | Not thread-safe — must be called from a single thread during startup/shutdown |
 
 ## Build Artifacts
@@ -418,12 +418,12 @@ Build portable with Nix: `nix build '.#portable'`
 
 int main(int argc, char *argv[]) {
     logos_core_init(argc, argv);
-    logos_core_set_plugins_dir("/path/to/plugins");
+    logos_core_set_modules_dir("/path/to/modules");
 
     logos_core_start();
-    logos_core_load_plugin("chat");
+    logos_core_load_module("chat");
 
-    char** loaded = logos_core_get_loaded_plugins();
+    char** loaded = logos_core_get_loaded_modules();
     for (int i = 0; loaded[i] != NULL; i++) {
         printf("Loaded: %s\n", loaded[i]);
     }
@@ -439,7 +439,7 @@ int main(int argc, char *argv[]) {
 
 ```c
 // Resolves the dependency tree and loads in correct order
-logos_core_load_plugin_with_dependencies("my_module");
+logos_core_load_module_with_dependencies("my_module");
 ```
 
 ## Continuous Integration

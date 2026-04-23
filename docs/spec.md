@@ -2,7 +2,7 @@
 
 ## Overall Description
 
-Logos Core is a modular runtime platform for hosting and orchestrating independently developed modules (plugins). It provides a C-API shared library (`liblogos_core`) and a pluggable runtime system that together enable a plug-in-based architecture for decentralised applications. The default runtime (`SubprocessManager`) spawns a `logos_host_qt` process per module, but the architecture allows registering alternative runtimes for different module formats.
+Logos Core is a modular runtime platform for hosting and orchestrating independently developed modules. It provides a C-API shared library (`liblogos_core`) and a pluggable runtime system that together enable a module-based architecture for decentralised applications. The default runtime (`SubprocessManager`) spawns a `logos_host_qt` process per module, but the architecture allows registering alternative runtimes for different module formats.
 
 The platform is designed to:
 - Load, start, stop, and introspect modules at runtime
@@ -15,7 +15,7 @@ The platform is designed to:
 
 | Term | Definition |
 |------|------------|
-| **Module** | An independently developed plugin that implements `PluginInterface` and is dynamically loaded by the core |
+| **Module** | An independently developed module that implements `PluginInterface` and is dynamically loaded by the core |
 | **Core Library** | `liblogos_core` — the shared library that provides the C API for module management |
 | **Module Host** | `logos_host_qt` — a lightweight executable that loads a single Qt module in its own process (a `logos_host` symlink exists for backward compatibility) |
 | **Module Runtime** | An abstract interface (`ModuleRuntime`) that encapsulates a strategy for loading and managing modules (e.g. subprocess, in-process, WASM) |
@@ -100,7 +100,7 @@ Every module ships a `metadata.json` referenced by Qt's `Q_PLUGIN_METADATA` macr
 | `author` | Module author or organization |
 | `type` | Module type (e.g., `"core"`) |
 | `category` | Module category for organization |
-| `main` | Main plugin class name |
+| `main` | Main module class name |
 | `dependencies` | Array of required module names |
 | `capabilities` | Array of capabilities this module provides |
 | `include` | Optional array of extra files (shared libs, resources) to bundle |
@@ -111,24 +111,24 @@ Every module ships a `metadata.json` referenced by Qt's `Q_PLUGIN_METADATA` macr
 
 #### Discovery
 
-1. Core scans configured plugin directories for `.so`, `.dylib`, or `.dll` files
+1. Core scans configured module directories for `.so`, `.dylib`, or `.dll` files
 2. For each file, metadata is extracted via `QPluginLoader`
 3. Modules are added to the "known" list without being loaded
-4. Multiple plugin directories can be configured
+4. Multiple module directories can be configured
 
 #### Loading
 
-1. Core locates the plugin file for the requested module name
+1. Core locates the module file for the requested module name
 2. Core resolves dependencies and loads them first (topological sort with circular dependency detection)
 3. If a persistence base path is configured, core resolves an instance ID and persistence directory for the module (reusing an existing instance or creating a new one)
-4. Core builds a `ModuleDescriptor` (name, path, format, plugin dirs, persistence path)
+4. Core builds a `ModuleDescriptor` (name, path, format, module dirs, persistence path)
 5. Core asks the `RuntimeRegistry` to `select()` a runtime for the descriptor (the default `SubprocessManager` handles `"qt-plugin"` format and modules with no explicit format)
 6. The selected runtime's `load()` spawns the appropriate process (e.g. `logos_host_qt` for the Qt subprocess runtime)
 7. Core generates a UUID authentication token
 8. Core sends the token to the module via the runtime's `sendToken()`
-9. Host process loads the plugin and calls `initLogos(LogosAPI*)`
+9. Host process loads the module and calls `initLogos(LogosAPI*)`
 10. The `LogosAPI` instance exposes `modulePath`, `instanceId`, and `instancePersistencePath` as properties
-11. Host process registers the plugin with the remote object registry
+11. Host process registers the module with the remote object registry
 12. Core waits for registration and records the module as loaded (along with the runtime and handle)
 
 #### Unloading
@@ -139,12 +139,12 @@ Every module ships a `metadata.json` referenced by Qt's `Q_PLUGIN_METADATA` macr
 
 #### Cascade Unloading
 
-`logos_core_unload_plugin_with_dependents()` unloads the named module together with every currently loaded module that transitively depends on it. Teardown order is leaves-first (dependents before dependencies) so no process is left briefly pointing at a terminated parent. The call is serialised with ordinary load/unload operations under a single lock span — a late-arriving load cannot interleave between tearing down the dependents and the target.
+`logos_core_unload_module_with_dependents()` unloads the named module together with every currently loaded module that transitively depends on it. Teardown order is leaves-first (dependents before dependencies) so no process is left briefly pointing at a terminated parent. The call is serialised with ordinary load/unload operations under a single lock span — a late-arriving load cannot interleave between tearing down the dependents and the target.
 
 ### Dependency Resolution
 
 - Dependencies are declared in each module's `metadata.json`
-- `logos_core_load_plugin_with_dependencies()` performs topological sort
+- `logos_core_load_module_with_dependencies()` performs topological sort
 - Circular dependencies are detected and reported as errors
 - Missing dependencies produce warnings
 - Dependencies are loaded in correct order before the requesting module
@@ -161,16 +161,16 @@ Every module ships a `metadata.json` referenced by Qt's `Q_PLUGIN_METADATA` macr
 
 The C API is designed to be safe for use from multi-threaded host applications:
 
-- **Load/unload operations** (`load_plugin`, `load_plugin_with_dependencies`, `unload_plugin`, `unload_plugin_with_dependents`) are serialised — only one runs at a time, so rapid concurrent load/unload cycles on the same or different modules do not produce data races. The cascade variant holds the lock for its full leaves-first teardown.
-- **Read-only queries** (`get_known_plugins`, `get_loaded_plugins`) use a shared reader-writer lock and may execute concurrently with each other and with load/unload operations.
-- **Plugin discovery** (`refresh_plugins`) is protected by the registry's own write lock.
+- **Load/unload operations** (`load_module`, `load_module_with_dependencies`, `unload_module`, `unload_module_with_dependents`) are serialised — only one runs at a time, so rapid concurrent load/unload cycles on the same or different modules do not produce data races. The cascade variant holds the lock for its full leaves-first teardown.
+- **Read-only queries** (`get_known_modules`, `get_loaded_modules`) use a shared reader-writer lock and may execute concurrently with each other and with load/unload operations.
+- **Module discovery** (`refresh_modules`) is protected by the registry's own write lock.
 - **Lifecycle functions** (`init`, `start`, `cleanup`) are not thread-safe and must be called from a single thread.
 
 ### Dev vs Portable Builds
 
 The platform supports two build variants:
 
-- **Dev build** (default): Plugin loading looks for LGX variants with `-dev` suffix (e.g., `linux-amd64-dev`). Used in Nix/development environments.
+- **Dev build** (default): Module loading looks for LGX variants with `-dev` suffix (e.g., `linux-amd64-dev`). Used in Nix/development environments.
 - **Portable build**: Looks for portable variants without suffix (e.g., `linux-amd64`). Used in self-contained distributed applications.
 
 ## API Description
@@ -179,27 +179,27 @@ The platform supports two build variants:
 
 | Function | Purpose |
 |----------|---------|
-| `logos_core_init(argc, argv)` | Initialize global state, optionally set plugin directory. Creates a QCoreApplication if one does not exist. |
-| `logos_core_set_plugins_dir(path)` | Set the plugin directory. Must be called before starting. |
-| `logos_core_add_plugins_dir(path)` | Add an additional plugin directory to scan. |
-| `logos_core_start()` | Scan plugin directories, process metadata, create Core Manager, load built-in modules, start remote object registry. |
+| `logos_core_init(argc, argv)` | Initialize global state, optionally set module directory. Creates a QCoreApplication if one does not exist. |
+| `logos_core_set_modules_dir(path)` | Set the module directory. Must be called before starting. |
+| `logos_core_add_modules_dir(path)` | Add an additional module directory to scan. |
+| `logos_core_start()` | Scan module directories, process metadata, create Core Manager, load built-in modules, start remote object registry. |
 | `logos_core_exec()` | Run the Qt event loop. Returns when the application exits. |
 | `logos_core_cleanup()` | Unload all modules, stop processes, clean up global state. |
 | `logos_core_process_events()` | Process Qt events without blocking, for integration with external event loops. |
 
-### Plugin Management
+### Module Management
 
 | Function | Purpose |
 |----------|---------|
-| `logos_core_get_loaded_plugins() → char**` | Return null-terminated array of loaded module names. Caller must free. |
-| `logos_core_get_known_plugins() → char**` | Return null-terminated array of all discovered modules. Caller must free. |
-| `logos_core_load_plugin(name) → int` | Load a module by name. Returns 1 on success, 0 on failure. |
-| `logos_core_load_plugin_with_dependencies(name) → int` | Load a module and all its dependencies in correct order. Returns 1 if all succeed. |
-| `logos_core_unload_plugin(name) → int` | Terminate the module's process and remove it. Returns 1 on success. |
-| `logos_core_unload_plugin_with_dependents(name) → int` | Cascade unload: terminate the module together with every currently loaded transitive dependent, leaves-first. Returns 1 only if every step succeeded. |
+| `logos_core_get_loaded_modules() → char**` | Return null-terminated array of loaded module names. Caller must free. |
+| `logos_core_get_known_modules() → char**` | Return null-terminated array of all discovered modules. Caller must free. |
+| `logos_core_load_module(name) → int` | Load a module by name. Returns 1 on success, 0 on failure. |
+| `logos_core_load_module_with_dependencies(name) → int` | Load a module and all its dependencies in correct order. Returns 1 if all succeed. |
+| `logos_core_unload_module(name) → int` | Terminate the module's process and remove it. Returns 1 on success. |
+| `logos_core_unload_module_with_dependents(name) → int` | Cascade unload: terminate the module together with every currently loaded transitive dependent, leaves-first. Returns 1 only if every step succeeded. |
 | `logos_core_get_module_dependencies(name, recursive) → char**` | Return null-terminated array of modules that `name` depends on (forward edges). With `recursive=true`, walks the forward dependency graph transitively via BFS. Unknown names yield an empty array. Caller must free. |
 | `logos_core_get_module_dependents(name, recursive) → char**` | Return null-terminated array of modules that depend on `name` (reverse edges). With `recursive=true`, walks the reverse dependency graph transitively via BFS. Unknown names yield an empty array. Caller must free. |
-| `logos_core_process_plugin(path) → char*` | Read a module file's metadata and register it as known without loading. Returns the module name or NULL. Caller must free. |
+| `logos_core_process_module(path) → char*` | Read a module file's metadata and register it as known without loading. Returns the module name or NULL. Caller must free. |
 
 ### Token and Monitoring
 
@@ -214,15 +214,15 @@ The Core Manager is a built-in module exposing core functionality to remote modu
 
 | Method | Purpose |
 |--------|---------|
-| `setPluginsDirectory(directory)` | Set the module search directory. |
+| `setModulesDirectory(directory)` | Set the module search directory. |
 | `start()` | Start the core's registry and load built-in modules. |
 | `cleanup()` | Unload all modules and shut down. |
-| `getLoadedPlugins() → std::vector<std::string>` | Return names of loaded modules. |
-| `getKnownPlugins() → QJsonArray` | Return all known modules with `loaded` flag. |
-| `loadPlugin(name) → bool` | Load a plugin by name. |
-| `unloadPlugin(name) → bool` | Unload a plugin by name. |
-| `processPlugin(filePath) → std::string` | Read a plugin file's metadata and register it. |
-| `getPluginMethods(name) → QJsonArray` | Introspect a module's methods via Qt meta-object system. |
+| `getLoadedModules() → std::vector<std::string>` | Return names of loaded modules. |
+| `getKnownModules() → QJsonArray` | Return all known modules with `loaded` flag. |
+| `loadModule(name) → bool` | Load a module by name. |
+| `unloadModule(name) → bool` | Unload a module by name. |
+| `processModule(filePath) → std::string` | Read a module file's metadata and register it. |
+| `getModuleMethods(name) → QJsonArray` | Introspect a module's methods via Qt meta-object system. |
 
 ## Module Implementation
 
@@ -250,4 +250,4 @@ The SDK abstracts away registry lookup, token management, and async invocation.
 - **Signature support** — Signing and verifying module packages
 - **Additional runtimes** — Register alternative `ModuleRuntime` implementations (e.g. in-process, WASM) alongside the default `SubprocessManager`
 - **Cross-language modules** — Modules in languages other than C++
-- **Move away from Qt** — Logos API will move away from Qt. Process management has been migrated from Qt (`QProcess`) to Boost.Process v2, and Qt container/utility types (`QString`, `QStringList`, `QHash`, `QDir`, `QFile`, `QUuid`) have been replaced with standard C++ and Boost equivalents (`std::string`, `std::vector`, `std::unordered_map`, `std::filesystem`, `boost::uuids`). The runtime abstraction (`ModuleRuntime` / `RuntimeRegistry`) decouples the core from any specific loading strategy. Remaining Qt dependencies (event loop, plugin loading, remote objects) are isolated in `SubprocessManager` and the host binary.
+- **Move away from Qt** — Logos API will move away from Qt. Process management has been migrated from Qt (`QProcess`) to Boost.Process v2, and Qt container/utility types (`QString`, `QStringList`, `QHash`, `QDir`, `QFile`, `QUuid`) have been replaced with standard C++ and Boost equivalents (`std::string`, `std::vector`, `std::unordered_map`, `std::filesystem`, `boost::uuids`). The runtime abstraction (`ModuleRuntime` / `RuntimeRegistry`) decouples the core from any specific loading strategy. Remaining Qt dependencies (event loop, module loading, remote objects) are isolated in `SubprocessManager` and the host binary.

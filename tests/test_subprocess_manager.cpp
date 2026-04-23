@@ -2,7 +2,7 @@
 // Tests for the process manager lifecycle, exposed via logos_core.h.
 //
 // The process manager maintains a registry of named child processes and
-// provides token-IPC (sendToken / receive) between the core and plugin
+// provides token-IPC (sendToken / receive) between the core and module
 // host processes. These tests verify:
 //   - register / hasProcess / clearAll lifecycle
 //   - registerProcess is idempotent
@@ -43,8 +43,8 @@ protected:
 // ---------------------------------------------------------------------------
 
 TEST_F(ProcessManagerTest, RegisterProcess_HasProcessReturnsTrue) {
-    logos_core_register_process("my_plugin");
-    EXPECT_EQ(logos_core_has_process("my_plugin"), 1);
+    logos_core_register_process("my_module");
+    EXPECT_EQ(logos_core_has_process("my_module"), 1);
 }
 
 TEST_F(ProcessManagerTest, HasProcess_ReturnsFalseForUnregistered) {

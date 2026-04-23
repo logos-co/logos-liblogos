@@ -6,7 +6,7 @@
 //
 // The point of these tests is to pin the behavioural contract so any
 // replacement implementation must preserve it:
-//   - socket name mapping is "logos_token_<plugin_name>"
+//   - socket name mapping is "logos_token_<module_name>"
 //   - client can retry if server is not listening yet
 //   - token round-trip is byte-exact (no truncation, no trailing null)
 //   - stale socket files do not prevent a new receiver from binding
@@ -50,10 +50,10 @@ struct ReceiverHandle {
     std::atomic<bool> finished{false};
     std::string token;
 
-    void start(const std::string& pluginName) {
-        thread = std::thread([this, pluginName]() {
+    void start(const std::string& moduleName) {
+        thread = std::thread([this, moduleName]() {
             started = true;
-            char* raw = logos_core_receive_auth_token(pluginName.c_str());
+            char* raw = logos_core_receive_auth_token(moduleName.c_str());
             if (raw) {
                 token = raw;
                 delete[] raw;
@@ -86,18 +86,18 @@ protected:
 // =============================================================================
 
 TEST_F(TokenExchangeTest, RoundTrip_SucceedsWithServerRunningFirst) {
-    const std::string pluginName = "rt_happy";
+    const std::string moduleName = "rt_happy";
     const std::string token = "8400e3a5-1b3a-4de5-9f1f-abcdef012345";
 
     ReceiverHandle receiver;
-    receiver.start(pluginName);
+    receiver.start(moduleName);
 
-    logos_core_register_process(pluginName.c_str());
+    logos_core_register_process(moduleName.c_str());
 
     // Give the server's listen() a moment so the first connect attempt succeeds.
     std::this_thread::sleep_for(Ms(100));
 
-    int sent = logos_core_send_token(pluginName.c_str(), token.c_str());
+    int sent = logos_core_send_token(moduleName.c_str(), token.c_str());
     EXPECT_EQ(sent, 1);
 
     ASSERT_TRUE(waitUntil([&]() { return receiver.finished.load(); }, 5000))
@@ -113,14 +113,14 @@ TEST_F(TokenExchangeTest, RoundTrip_SucceedsWithServerRunningFirst) {
 // =============================================================================
 
 TEST_F(TokenExchangeTest, RoundTrip_SucceedsWhenClientStartsBeforeServer) {
-    const std::string pluginName = "rt_retry";
+    const std::string moduleName = "rt_retry";
     const std::string token = "deadbeef-1234-5678-9abc-def012345678";
-    logos_core_register_process(pluginName.c_str());
+    logos_core_register_process(moduleName.c_str());
 
     std::atomic<int> sendResult{0};
     std::atomic<bool> senderDone{false};
     std::thread senderThread([&]() {
-        sendResult = logos_core_send_token(pluginName.c_str(), token.c_str());
+        sendResult = logos_core_send_token(moduleName.c_str(), token.c_str());
         senderDone = true;
     });
 
@@ -128,7 +128,7 @@ TEST_F(TokenExchangeTest, RoundTrip_SucceedsWhenClientStartsBeforeServer) {
     std::this_thread::sleep_for(Ms(250));
 
     ReceiverHandle receiver;
-    receiver.start(pluginName);
+    receiver.start(moduleName);
 
     ASSERT_TRUE(waitUntil([&]() {
         return senderDone.load() && receiver.finished.load();
@@ -147,15 +147,15 @@ TEST_F(TokenExchangeTest, RoundTrip_SucceedsWhenClientStartsBeforeServer) {
 // =============================================================================
 
 TEST_F(TokenExchangeTest, TokenBytes_RoundTripIsByteExact) {
-    const std::string pluginName = "rt_bytes";
+    const std::string moduleName = "rt_bytes";
     const std::string token = "f47ac10b-58cc-4372-a567-0e02b2c3d479";
-    logos_core_register_process(pluginName.c_str());
+    logos_core_register_process(moduleName.c_str());
 
     ReceiverHandle receiver;
-    receiver.start(pluginName);
+    receiver.start(moduleName);
     std::this_thread::sleep_for(Ms(100));
 
-    ASSERT_EQ(logos_core_send_token(pluginName.c_str(), token.c_str()), 1);
+    ASSERT_EQ(logos_core_send_token(moduleName.c_str(), token.c_str()), 1);
     ASSERT_TRUE(waitUntil([&]() { return receiver.finished.load(); }));
     receiver.join();
 
@@ -176,19 +176,19 @@ TEST_F(TokenExchangeTest, TokenBytes_RoundTripIsByteExact) {
 // =============================================================================
 
 TEST_F(TokenExchangeTest, StaleSocketFile_DoesNotBlockNewReceiver) {
-    const std::string pluginName = "rt_stale";
+    const std::string moduleName = "rt_stale";
     const std::string token = "cafef00d-0000-0000-0000-000000000001";
 
     // Create and immediately close a socket file to simulate stale state.
-    logos_core_create_stale_token_socket(pluginName.c_str());
+    logos_core_create_stale_token_socket(moduleName.c_str());
 
     ReceiverHandle receiver;
-    receiver.start(pluginName);
+    receiver.start(moduleName);
 
-    logos_core_register_process(pluginName.c_str());
+    logos_core_register_process(moduleName.c_str());
     std::this_thread::sleep_for(Ms(100));
 
-    EXPECT_EQ(logos_core_send_token(pluginName.c_str(), token.c_str()), 1);
+    EXPECT_EQ(logos_core_send_token(moduleName.c_str(), token.c_str()), 1);
     ASSERT_TRUE(waitUntil([&]() { return receiver.finished.load(); }, 5000))
         << "receiver must be able to bind over a stale socket path";
     receiver.join();
@@ -201,13 +201,13 @@ TEST_F(TokenExchangeTest, StaleSocketFile_DoesNotBlockNewReceiver) {
 // =============================================================================
 
 TEST_F(TokenExchangeTest, WrongName_FailsCleanlyWithinTimeout) {
-    const std::string pluginName = "rt_nobody_listening";
+    const std::string moduleName = "rt_nobody_listening";
     const std::string token = "deadbeef-dead-beef-dead-beefdeadbeef";
 
-    logos_core_register_process(pluginName.c_str());
+    logos_core_register_process(moduleName.c_str());
 
     auto start = Clock::now();
-    int sent = logos_core_send_token(pluginName.c_str(), token.c_str());
+    int sent = logos_core_send_token(moduleName.c_str(), token.c_str());
     auto elapsed = std::chrono::duration_cast<Ms>(Clock::now() - start).count();
 
     EXPECT_EQ(sent, 0) << "sendToken to a nonexistent server must fail";
@@ -215,19 +215,19 @@ TEST_F(TokenExchangeTest, WrongName_FailsCleanlyWithinTimeout) {
         << "sendToken must give up within its retry budget, got " << elapsed << "ms";
 
     // The failure path removes the placeholder entry.
-    EXPECT_EQ(logos_core_has_process(pluginName.c_str()), 0);
+    EXPECT_EQ(logos_core_has_process(moduleName.c_str()), 0);
 }
 
 // =============================================================================
-// Receiver timeout — start a receiver for a plugin name, never send a token.
+// Receiver timeout — start a receiver for a module name, never send a token.
 // =============================================================================
 
 TEST_F(TokenExchangeTest, Receiver_TimesOutWhenNoClientConnects) {
-    const std::string pluginName = "rt_no_client";
+    const std::string moduleName = "rt_no_client";
 
     ReceiverHandle receiver;
     auto start = Clock::now();
-    receiver.start(pluginName);
+    receiver.start(moduleName);
 
     ASSERT_TRUE(waitUntil([&]() { return receiver.finished.load(); }, 15000))
         << "receiver did not return within its own timeout";
@@ -241,10 +241,10 @@ TEST_F(TokenExchangeTest, Receiver_TimesOutWhenNoClientConnects) {
 }
 
 // =============================================================================
-// Concurrent round-trips on distinct plugin names must not interfere.
+// Concurrent round-trips on distinct module names must not interfere.
 // =============================================================================
 
-TEST_F(TokenExchangeTest, ConcurrentDistinctPlugins_EachRoundTripsCorrectly) {
+TEST_F(TokenExchangeTest, ConcurrentDistinctModules_EachRoundTripsCorrectly) {
     const std::string nameA = "rt_a";
     const std::string nameB = "rt_b";
     const std::string tokenA = "11111111-1111-1111-1111-111111111111";
