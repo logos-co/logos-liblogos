@@ -70,10 +70,13 @@ pkgs.stdenv.mkDerivation {
     ${pkgs.lib.optionalString pkgs.stdenv.isLinux ''
       # Fix RPATH on Linux to avoid /build/ references and include all dependencies.
       # spdlog links libfmt; both must be on RPATH because patchelf replaces the default search paths.
-      _rpath="$out/lib:${pkgs.boost}/lib:${common.env.LOGOS_PACKAGE_MANAGER_ROOT}/lib:${pkgs.gtest}/lib:${pkgs.qt6.qtbase}/lib:${pkgs.qt6.qtremoteobjects}/lib:${pkgs.spdlog}/lib:${pkgs.fmt}/lib:${pkgs.stdenv.cc.cc.lib}/lib"
+      # OpenSSL (libssl, libcrypto) is needed because the SDK's plain-C++ TLS
+      # transport links it transitively — without this the wrapped binary
+      # dies with `libssl.so.3: cannot open shared object`.
+      _rpath="$out/lib:${pkgs.boost}/lib:${common.env.LOGOS_PACKAGE_MANAGER_ROOT}/lib:${pkgs.gtest}/lib:${pkgs.qt6.qtbase}/lib:${pkgs.qt6.qtremoteobjects}/lib:${pkgs.spdlog}/lib:${pkgs.fmt}/lib:${pkgs.openssl.out}/lib:${pkgs.stdenv.cc.cc.lib}/lib"
       patchelf --set-rpath "$_rpath" $out/bin/logos_core_tests || true
-      # Fix RPATH on liblogos_core.so so it can find its transitive deps (e.g. libboost_process, spdlog, fmt)
-      _rpath_lib="$out/lib:${pkgs.boost}/lib:${common.env.LOGOS_PACKAGE_MANAGER_ROOT}/lib:${pkgs.qt6.qtbase}/lib:${pkgs.qt6.qtremoteobjects}/lib:${pkgs.spdlog}/lib:${pkgs.fmt}/lib:${pkgs.stdenv.cc.cc.lib}/lib"
+      # Fix RPATH on liblogos_core.so so it can find its transitive deps (e.g. libboost_process, spdlog, fmt, libssl)
+      _rpath_lib="$out/lib:${pkgs.boost}/lib:${common.env.LOGOS_PACKAGE_MANAGER_ROOT}/lib:${pkgs.qt6.qtbase}/lib:${pkgs.qt6.qtremoteobjects}/lib:${pkgs.spdlog}/lib:${pkgs.fmt}/lib:${pkgs.openssl.out}/lib:${pkgs.stdenv.cc.cc.lib}/lib"
       patchelf --set-rpath "$_rpath_lib" $out/lib/liblogos_core.so || true
     ''}
     
