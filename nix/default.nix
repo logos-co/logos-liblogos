@@ -22,6 +22,7 @@
     pkgs.nlohmann_json
     pkgs.cli11
     pkgs.boost
+    pkgs.openssl              # Needed for SDK's plain-C++ TLS transport
     pkgs.spdlog
     logosModule
     processStats

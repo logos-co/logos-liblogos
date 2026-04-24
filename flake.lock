@@ -59,15 +59,16 @@
         ]
       },
       "locked": {
-        "lastModified": 1776359718,
-        "narHash": "sha256-G2+MbYPictF9V9864KndteaEJzd8iUMktSzCphETabw=",
+        "lastModified": 1777049055,
+        "narHash": "sha256-SRrm0fMJfIW2wpqCZclVjdguWDhbYeARuCSsZD7jGo8=",
         "owner": "logos-co",
         "repo": "logos-cpp-sdk",
-        "rev": "04b75c84b821662c9ae8f69967d4dd508e6d9e17",
+        "rev": "d143d2523c029ced26c33cbb89f9da6c532707b9",
         "type": "github"
       },
       "original": {
         "owner": "logos-co",
+        "ref": "support-non-local-remote-transports",
         "repo": "logos-cpp-sdk",
         "type": "github"
       }
@@ -232,11 +233,11 @@
         "nixpkgs": "nixpkgs_4"
       },
       "locked": {
-        "lastModified": 1773955630,
-        "narHash": "sha256-KqzMoWYIVp2xMgphs7v02T/BE54RKMFxpdC2duhJKG0=",
+        "lastModified": 1774455309,
+        "narHash": "sha256-3AN7aFnArdysrbQQ2UskWzjNSFADb4hDCsnx69Fa0ng=",
         "owner": "logos-co",
         "repo": "logos-nix",
-        "rev": "0e9e6d66ab8eb34f59e45ed448f7dc29130feb88",
+        "rev": "e637a1f5e871244d1c2df1e3c52a067f2eb406f2",
         "type": "github"
       },
       "original": {

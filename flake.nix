@@ -4,7 +4,7 @@
   inputs = {
     logos-nix.url = "github:logos-co/logos-nix";
     nixpkgs.follows = "logos-nix/nixpkgs";
-    logos-cpp-sdk.url = "github:logos-co/logos-cpp-sdk";
+    logos-cpp-sdk.url = "github:logos-co/logos-cpp-sdk/support-non-local-remote-transports";
     logos-capability-module.url = "github:logos-co/logos-capability-module";
     logos-module.url = "github:logos-co/logos-module";
     process-stats.url = "github:logos-co/process-stats";
