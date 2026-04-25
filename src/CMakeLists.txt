@@ -170,9 +170,21 @@ target_link_libraries(logos_core PUBLIC
     package_manager_lib
     nlohmann_json::nlohmann_json
     Boost::process
+    spdlog::spdlog
+)
+
+# OpenSSL is an implementation detail of the plain-C++ TCP+SSL transport
+# that logos_sdk uses internally. logos_core does not expose any
+# OpenSSL types in its public headers, so keep the dependency PRIVATE
+# — otherwise downstream consumers of logos_core (logoscore CLI, basecamp
+# app, modules) would be forced to find_package(OpenSSL) themselves
+# even though they never touch SSL_CTX or X509. The transitive link
+# requirement still flows correctly because the SDK target carries
+# OpenSSL on its own link interface (INTERFACE_LINK_LIBRARIES in the
+# imported-sdk path; PUBLIC in the add_subdirectory path).
+target_link_libraries(logos_core PRIVATE
     OpenSSL::SSL
     OpenSSL::Crypto
-    spdlog::spdlog
 )
 
 # Include directories for the library
