@@ -111,7 +111,26 @@ struct IoRuntime {
     ~IoRuntime() {
         guard.reset();
         ctx.stop();
-        if (thread.joinable()) thread.join();
+        if (thread.joinable()) {
+            // Common case: destructor fires from the main thread at process
+            // exit, ctx.run() returned cleanly, just join.
+            //
+            // Pathological case: destructor fires from *this very thread*.
+            // Happens when an asio handler running on `thread` calls
+            // exit() (e.g. the onFinished callback below crash-aborts the
+            // process). exit() triggers static destruction in the calling
+            // thread; that's us. join() on yourself is EDEADLK and would
+            // throw a std::system_error → uncaught → terminate() → SIGABRT,
+            // masking the real crash that triggered the exit() in the first
+            // place. Detach instead: the OS reaps the thread on process
+            // exit, no observable difference vs join in this single-process
+            // scenario.
+            if (thread.get_id() == std::this_thread::get_id()) {
+                thread.detach();
+            } else {
+                thread.join();
+            }
+        }
     }
 };
 
