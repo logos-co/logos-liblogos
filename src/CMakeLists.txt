@@ -23,11 +23,17 @@ if(EXISTS "${LOGOS_CPP_SDK_ROOT}/lib" AND EXISTS "${LOGOS_CPP_SDK_ROOT}/include"
     message(FATAL_ERROR "logos_sdk library not found in ${LOGOS_CPP_SDK_ROOT}/lib")
   endif()
   
-  # Create an imported target for the SDK
+  # Create an imported target for the SDK. IMPORTANT: the SDK static lib
+  # references symbols from Boost.Asio's SSL wrappers + OpenSSL (via the
+  # plain-C++ TCP+SSL transport added alongside the QRO local-socket
+  # backend). Since this is a STATIC IMPORTED target, we have to wire its
+  # INTERFACE_LINK_LIBRARIES manually so executables that link logos_sdk
+  # pull in OpenSSL automatically.
   add_library(logos_sdk STATIC IMPORTED)
   set_target_properties(logos_sdk PROPERTIES
     IMPORTED_LOCATION "${LOGOS_SDK_LIBRARY}"
     INTERFACE_INCLUDE_DIRECTORIES "${LOGOS_CPP_SDK_ROOT}/include"
+    INTERFACE_LINK_LIBRARIES "OpenSSL::SSL;OpenSSL::Crypto"
   )
   
 elseif(EXISTS "${LOGOS_CPP_SDK_ROOT}/cpp/CMakeLists.txt")
@@ -165,6 +171,20 @@ target_link_libraries(logos_core PUBLIC
     nlohmann_json::nlohmann_json
     Boost::process
     spdlog::spdlog
+)
+
+# OpenSSL is an implementation detail of the plain-C++ TCP+SSL transport
+# that logos_sdk uses internally. logos_core does not expose any
+# OpenSSL types in its public headers, so keep the dependency PRIVATE
+# — otherwise downstream consumers of logos_core (logoscore CLI, basecamp
+# app, modules) would be forced to find_package(OpenSSL) themselves
+# even though they never touch SSL_CTX or X509. The transitive link
+# requirement still flows correctly because the SDK target carries
+# OpenSSL on its own link interface (INTERFACE_LINK_LIBRARIES in the
+# imported-sdk path; PUBLIC in the add_subdirectory path).
+target_link_libraries(logos_core PRIVATE
+    OpenSSL::SSL
+    OpenSSL::Crypto
 )
 
 # Include directories for the library
