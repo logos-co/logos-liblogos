@@ -26,6 +26,14 @@ struct ModuleDescriptor {
     std::vector<std::string> modulesDirs;  // directories siblings are looked up in
     nlohmann::json rawMetadata;            // metadata parsed from manifest.json
     nlohmann::json runtimeConfig;          // optional: {"id":"docker","image":"..."}, etc.
+
+    // Per-module transport set, serialized as JSON (see
+    // logos-cpp-sdk/cpp/logos_transport_config_json.h for the wire
+    // shape). Empty = inherit the global default (LocalSocket only).
+    // Threaded through to the child subprocess by ModuleRuntime
+    // implementations so its LogosAPIProvider binds every transport
+    // in the set rather than only the global default.
+    std::string transportSetJson;
 };
 
 // A handle to a successfully loaded module. Stored in ModuleRegistry (ModuleInfo).

@@ -27,6 +27,15 @@ namespace {
         return mutex;
     }
 
+    // Per-module transport set, keyed by module name. Set by the
+    // daemon before the corresponding module loads (capability_module
+    // before logos_core_start; user modules before loadModule). Empty
+    // = inherit the global default. See module_manager.h for details.
+    std::unordered_map<std::string, std::string>& moduleTransportsMap() {
+        static std::unordered_map<std::string, std::string> m;
+        return m;
+    }
+
     std::string& persistenceBasePath() {
         static std::string path;
         return path;
@@ -104,6 +113,15 @@ namespace {
             auto info = ModuleLib::InstancePersistence::resolveInstance(
                 persistenceBasePath(), name);
             desc.instancePersistencePath = info.persistencePath;
+        }
+
+        // Per-module transport set, if the daemon registered one before
+        // calling load. The runtime threads it through to the child via
+        // a CLI argument so the child's LogosAPIProvider binds the right
+        // listeners. Modules without an entry inherit the global default.
+        if (auto it = moduleTransportsMap().find(name);
+            it != moduleTransportsMap().end()) {
+            desc.transportSetJson = it->second;
         }
 
         auto rt = runtimeRegistry().select(desc);
@@ -194,6 +212,14 @@ namespace ModuleManager {
     void setPersistenceBasePath(const char* path) {
         assert(path != nullptr);
         persistenceBasePath() = std::string(path);
+    }
+
+    void setModuleTransports(const std::string& moduleName,
+                             const std::string& transportSetJson) {
+        if (transportSetJson.empty())
+            moduleTransportsMap().erase(moduleName);
+        else
+            moduleTransportsMap()[moduleName] = transportSetJson;
     }
 
     void discoverInstalledModules() {
