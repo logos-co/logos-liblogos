@@ -216,6 +216,12 @@ namespace ModuleManager {
 
     void setModuleTransports(const std::string& moduleName,
                              const std::string& transportSetJson) {
+        // Same mutex as loadModule()'s read of the map (see line ~122
+        // for the lookup). Without this, an operator can race with
+        // an in-flight loadModule and the child gets garbled JSON
+        // (or sees an empty transport set after the operator
+        // overwrote what the child was about to read).
+        std::lock_guard<std::mutex> g(loadMutex());
         if (transportSetJson.empty())
             moduleTransportsMap().erase(moduleName);
         else
@@ -378,6 +384,12 @@ namespace ModuleManager {
         std::lock_guard lock(loadMutex());
         runtimeRegistry().terminateAll();
         registryInstance().clear();
+        // Per-module transport overrides are part of the manager's
+        // mutable state — without clearing them here, a daemon
+        // restart in the same process (or a unit test that calls
+        // clear() between scenarios) would inherit the previous
+        // run's transport map and bind unexpected ports.
+        moduleTransportsMap().clear();
     }
 
     char** getLoadedModulesCStr() {
