@@ -13,6 +13,7 @@
 #include <boost/uuid/uuid_io.hpp>
 #include "logos_api.h"
 #include "logos_api_client.h"
+#include "logos_transport_config_json.h"
 #include "token_manager.h"
 #include "instance_persistence.h"
 
@@ -80,7 +81,33 @@ namespace {
         if (!s_coreApi)
             s_coreApi = new LogosAPI(std::string("core"));
 
-        LogosAPIClient* client = s_coreApi->getClient(std::string("capability_module"));
+        // Pick the right transport for dialing capability_module. The
+        // single-arg getClient() defaults to the *global* transport
+        // config (LocalSocket), which is wrong when an operator
+        // configured capability_module for tcp / tcp_ssl only — the
+        // parent's RPC then hangs trying to reach a LocalSocket that
+        // capability_module never bound.
+        //
+        // Resolution order matches the operator's intent: prefer the
+        // first transport the operator named (so a `--module-transport
+        // capability_module=local --module-transport
+        // capability_module=tcp` setup uses LocalSocket, but a tcp-only
+        // setup uses tcp). Empty / unset map → fall back to the global
+        // default, which is correct for the default LocalSocket-only
+        // case (no per-module config registered).
+        LogosAPIClient* client = nullptr;
+        if (auto it = moduleTransportsMap().find("capability_module");
+            it != moduleTransportsMap().end() && !it->second.empty()) {
+            const auto ts = logos::transportSetFromJsonString(it->second);
+            if (!ts.empty()) {
+                client = s_coreApi->getClient(
+                    QStringLiteral("capability_module"), ts.front());
+            }
+        }
+        if (!client) {
+            client = s_coreApi->getClient(std::string("capability_module"));
+        }
+
         if (!client->informModuleToken(capabilityModuleToken, name, token)) {
             spdlog::warn("Failed to register token with capability module for: {}", name);
         }
