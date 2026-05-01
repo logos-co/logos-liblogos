@@ -211,8 +211,14 @@ TEST_F(TokenExchangeTest, WrongName_FailsCleanlyWithinTimeout) {
     auto elapsed = std::chrono::duration_cast<Ms>(Clock::now() - start).count();
 
     EXPECT_EQ(sent, 0) << "sendToken to a nonexistent server must fail";
-    EXPECT_LT(elapsed, 5000)
-        << "sendToken must give up within its retry budget, got " << elapsed << "ms";
+    // The default budget is 5000 ms; with 50 ms polls the deadline check
+    // can overshoot by ~one poll interval before the loop exits, plus
+    // syscall and scheduler slack. 5500 ms is the budget + a single
+    // generous poll's worth of margin — far below the next-larger
+    // budget anyone reasonably picks (10 s+).
+    EXPECT_LT(elapsed, 5500)
+        << "sendToken must give up within its retry budget + slack, got "
+        << elapsed << "ms";
 
     // The failure path removes the placeholder entry.
     EXPECT_EQ(logos_core_has_process(moduleName.c_str()), 0);

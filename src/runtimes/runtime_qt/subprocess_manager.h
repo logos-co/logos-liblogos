@@ -32,7 +32,21 @@ public:
     // -- Low-level static process management (used by tests / qt_test_adapter) --
     static bool startProcess(const std::string& name, const std::string& executable,
                              const std::vector<std::string>& arguments, const ProcessCallbacks& callbacks);
-    static bool sendTokenToProcess(const std::string& name, const std::string& token);
+    // Connect to the child's QtTokenReceiver Unix socket and write the
+    // auth token. The child binds the socket inside `setupModule` →
+    // `receiveAuthToken`, which runs *after* a non-trivial chain of
+    // child-side initialisation (dynamic loader, Qt platform bring-up,
+    // CLI11 parse, plugin loadFromPath). This call retries until the
+    // socket appears or the budget runs out.
+    //
+    // `max_wait_ms` is the total budget; defaults to 5 seconds, which
+    // comfortably covers cold-start child initialisation on realistic
+    // hardware. The previous 900 ms budget (10 × 100 ms) was tight
+    // enough that races against the child binding its socket were
+    // observable in the wild — see tests/test_subprocess_manager.cpp.
+    static bool sendTokenToProcess(const std::string& name,
+                                    const std::string& token,
+                                    int max_wait_ms = 5000);
     static void terminateProcess(const std::string& name);
     static void terminateAllProcesses();
     static bool hasProcess(const std::string& name);

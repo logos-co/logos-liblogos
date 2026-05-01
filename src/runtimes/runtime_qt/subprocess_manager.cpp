@@ -111,7 +111,26 @@ struct IoRuntime {
     ~IoRuntime() {
         guard.reset();
         ctx.stop();
-        if (thread.joinable()) thread.join();
+        if (thread.joinable()) {
+            // Common case: destructor fires from the main thread at process
+            // exit, ctx.run() returned cleanly, just join.
+            //
+            // Pathological case: destructor fires from *this very thread*.
+            // Happens when an asio handler running on `thread` calls
+            // exit() (e.g. the onFinished callback below crash-aborts the
+            // process). exit() triggers static destruction in the calling
+            // thread; that's us. join() on yourself is EDEADLK and would
+            // throw a std::system_error → uncaught → terminate() → SIGABRT,
+            // masking the real crash that triggered the exit() in the first
+            // place. Detach instead: the OS reaps the thread on process
+            // exit, no observable difference vs join in this single-process
+            // scenario.
+            if (thread.get_id() == std::this_thread::get_id()) {
+                thread.detach();
+            } else {
+                thread.join();
+            }
+        }
     }
 };
 
@@ -471,7 +490,9 @@ bool SubprocessManager::startProcess(const std::string& name, const std::string&
     return true;
 }
 
-bool SubprocessManager::sendTokenToProcess(const std::string& name, const std::string& token)
+bool SubprocessManager::sendTokenToProcess(const std::string& name,
+                                            const std::string& token,
+                                            int max_wait_ms)
 {
     // Socket name is scoped by LOGOS_INSTANCE_ID so parallel Logos instances
     // (multiple daemons or Basecamp profiles) don't clash when loading the same
@@ -484,8 +505,47 @@ bool SubprocessManager::sendTokenToProcess(const std::string& name, const std::s
     }
     std::string path = unixSocketPath(socketName);
 
+    // Validate up front: sockaddr_un::sun_path is fixed-size
+    // (~104 bytes on macOS, ~108 on Linux). A long TMPDIR + module
+    // name + LOGOS_INSTANCE_ID combination overflows that buffer,
+    // and `strncpy(...sizeof(...) - 1)` below would silently
+    // truncate — leaving us connecting to a *different* (or
+    // nonexistent) socket while the child is bound to the full
+    // path. Fail loudly instead.
+    {
+        struct sockaddr_un sample{};
+        if (path.size() >= sizeof(sample.sun_path)) {
+            fprintf(stderr,
+                "[SubprocessManager] Unix socket path too long (%zu >= %zu): %s\n",
+                path.size(), sizeof(sample.sun_path), path.c_str());
+            std::shared_ptr<ProcessEntry> entry;
+            {
+                std::lock_guard<std::mutex> lock(s_processesMutex);
+                auto it = s_processes.find(name);
+                if (it != s_processes.end()) {
+                    entry = it->second;
+                    s_processes.erase(it);
+                }
+            }
+            syncKill(entry);
+            return false;
+        }
+    }
+
+    // Deadline-driven retry loop. Sleep 50ms between attempts — fine
+    // grained enough that a hot child (socket up before we finish our
+    // own setup) returns within a couple of polls, but the total
+    // budget is generous: previously a hard-coded 900ms (10 × 100ms),
+    // which was tight enough that we'd lose to cold-start child Qt
+    // initialisation under load and end up with "Failed to connect to
+    // token socket" + a half-loaded module. The 5s default covers
+    // realistic worst case (cold dylib load + Qt platform bring-up
+    // + plugin parse) with margin.
+    using clock = std::chrono::steady_clock;
+    const auto deadline = clock::now() + std::chrono::milliseconds(max_wait_ms);
+
     int sock = -1;
-    for (int attempt = 0; attempt < 10; ++attempt) {
+    for (;;) {
         sock = ::socket(AF_UNIX, SOCK_STREAM, 0);
         if (sock < 0) {
             fprintf(stderr, "[SubprocessManager] socket() failed: %s\n", strerror(errno));
@@ -494,6 +554,7 @@ bool SubprocessManager::sendTokenToProcess(const std::string& name, const std::s
 
         struct sockaddr_un addr{};
         addr.sun_family = AF_UNIX;
+        // Length already validated above — strncpy is safe here.
         strncpy(addr.sun_path, path.c_str(), sizeof(addr.sun_path) - 1);
 
         if (::connect(sock, reinterpret_cast<struct sockaddr*>(&addr), sizeof(addr)) == 0)
@@ -501,7 +562,8 @@ bool SubprocessManager::sendTokenToProcess(const std::string& name, const std::s
 
         ::close(sock);
         sock = -1;
-        std::this_thread::sleep_for(std::chrono::milliseconds(100));
+        if (clock::now() >= deadline) break;
+        std::this_thread::sleep_for(std::chrono::milliseconds(50));
     }
 
     if (sock < 0) {

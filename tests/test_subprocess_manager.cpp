@@ -20,9 +20,14 @@
 #include <atomic>
 #include <chrono>
 #include <condition_variable>
+#include <cerrno>       // for EINTR in the read-until-EOF loop
 #include <cstdint>
+#include <cstdlib>
+#include <cstring>      // for strncpy
 #include <mutex>
 #include <string>
+#include <sys/socket.h>
+#include <sys/un.h>
 #include <thread>
 #include <unistd.h>
 #include <utility>
@@ -259,4 +264,128 @@ TEST_F(ProcessManagerTest, TerminateAll_RemovesAllRunningProcesses) {
     EXPECT_EQ(logos_core_has_process("ta_1"), 0);
     EXPECT_EQ(logos_core_has_process("ta_2"), 0);
     EXPECT_EQ(logos_core_has_process("ta_placeholder"), 0);
+}
+
+// ---------------------------------------------------------------------------
+// sendTokenToProcess: race against the child binding its Unix socket
+//
+// Real failure mode in production: the parent calls sendTokenToProcess
+// immediately after fork+exec, but the child has to do dynamic loader work,
+// Qt platform bring-up, CLI11 parse, and plugin loadFromPath before its
+// QtTokenReceiver binds the socket inside setupModule → receiveAuthToken.
+// Under load, that prelude exceeded the old 900ms budget (10 × 100ms) and
+// produced "Failed to connect to token socket" + a half-loaded module.
+// These tests pin down the new contract: a configurable max_wait_ms budget
+// that succeeds when the socket appears within it, and fails (without
+// busy-looping past the deadline) when it does not.
+// ---------------------------------------------------------------------------
+
+namespace {
+
+std::string tokenSocketPath(const std::string& name) {
+    const char* tmp = std::getenv("TMPDIR");
+    std::string dir;
+    if (tmp && tmp[0]) {
+        dir = tmp;
+        while (!dir.empty() && dir.back() == '/') dir.pop_back();
+    } else {
+        dir = "/tmp";
+    }
+    std::string socketName = "logos_token_" + name;
+    const char* instanceId = std::getenv("LOGOS_INSTANCE_ID");
+    if (instanceId && *instanceId) {
+        socketName += "_";
+        socketName += instanceId;
+    }
+    return dir + "/" + socketName;
+}
+
+int bindUnixListener(const std::string& path) {
+    ::unlink(path.c_str());
+    int fd = ::socket(AF_UNIX, SOCK_STREAM, 0);
+    if (fd < 0) return -1;
+    struct sockaddr_un addr{};
+    addr.sun_family = AF_UNIX;
+    strncpy(addr.sun_path, path.c_str(), sizeof(addr.sun_path) - 1);
+    if (::bind(fd, reinterpret_cast<struct sockaddr*>(&addr), sizeof(addr)) != 0) {
+        ::close(fd);
+        return -1;
+    }
+    if (::listen(fd, 1) != 0) {
+        ::close(fd);
+        return -1;
+    }
+    return fd;
+}
+
+} // namespace
+
+TEST_F(ProcessManagerTest, SendToken_FailsFast_WhenSocketNeverAppears) {
+    const std::string name = "race_no_socket";
+    const std::string path = tokenSocketPath(name);
+    ::unlink(path.c_str());  // ensure no stale socket
+
+    const int budget_ms = 200;
+    const auto t0 = std::chrono::steady_clock::now();
+    bool ok = SubprocessManager::sendTokenToProcess(name, "tok", budget_ms);
+    const auto elapsed_ms = std::chrono::duration_cast<std::chrono::milliseconds>(
+        std::chrono::steady_clock::now() - t0).count();
+
+    EXPECT_FALSE(ok) << "sendTokenToProcess must fail when no socket appears";
+    EXPECT_GE(elapsed_ms, budget_ms - 50) << "should respect the budget, not bail early";
+    EXPECT_LE(elapsed_ms, budget_ms + 500) << "should not loop past the deadline";
+}
+
+TEST_F(ProcessManagerTest, SendToken_SucceedsAfterDelay) {
+    const std::string name = "race_late_bind";
+    const std::string path = tokenSocketPath(name);
+    ::unlink(path.c_str());
+
+    const int delay_ms = 300;
+    const int budget_ms = 1500;
+
+    std::atomic<bool> received{false};
+    std::string receivedToken;
+    std::thread binder([&]() {
+        std::this_thread::sleep_for(std::chrono::milliseconds(delay_ms));
+        int listener = bindUnixListener(path);
+        if (listener < 0) return;
+        int client = ::accept(listener, nullptr, nullptr);
+        if (client >= 0) {
+            // Drain until EOF (sender's close()). A single ::read()
+            // can return short on stream sockets even when the sender
+            // wrote everything in one ::write() — kernel buffer
+            // fragmentation. Loop reads accumulate the full payload.
+            char buf[256];
+            for (;;) {
+                ssize_t n = ::read(client, buf, sizeof(buf));
+                if (n > 0) {
+                    receivedToken.append(buf, static_cast<std::size_t>(n));
+                    continue;
+                }
+                if (n == 0) break;          // peer closed
+                if (errno == EINTR) continue;
+                break;                       // unrecoverable read error
+            }
+            if (!receivedToken.empty()) received.store(true);
+            ::close(client);
+        }
+        ::close(listener);
+    });
+
+    const auto t0 = std::chrono::steady_clock::now();
+    bool ok = SubprocessManager::sendTokenToProcess(name, "hello-token", budget_ms);
+    const auto elapsed_ms = std::chrono::duration_cast<std::chrono::milliseconds>(
+        std::chrono::steady_clock::now() - t0).count();
+
+    binder.join();
+    ::unlink(path.c_str());
+
+    EXPECT_TRUE(ok) << "should succeed once the socket appears within the budget";
+    EXPECT_GE(elapsed_ms, delay_ms - 50)
+        << "must wait until the listener is bound";
+    EXPECT_LT(elapsed_ms, budget_ms)
+        << "must complete before exhausting the budget";
+    EXPECT_TRUE(received.load());
+    EXPECT_EQ(receivedToken, "hello-token");
 }
