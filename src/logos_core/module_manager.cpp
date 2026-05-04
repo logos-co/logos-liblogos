@@ -13,6 +13,7 @@
 #include <boost/uuid/uuid_io.hpp>
 #include "logos_api.h"
 #include "logos_api_client.h"
+#include "logos_transport_config_json.h"
 #include "token_manager.h"
 #include "instance_persistence.h"
 
@@ -25,6 +26,15 @@ namespace {
     std::mutex& loadMutex() {
         static std::mutex mutex;
         return mutex;
+    }
+
+    // Per-module transport set, keyed by module name. Set by the
+    // daemon before the corresponding module loads (capability_module
+    // before logos_core_start; user modules before loadModule). Empty
+    // = inherit the global default. See module_manager.h for details.
+    std::unordered_map<std::string, std::string>& moduleTransportsMap() {
+        static std::unordered_map<std::string, std::string> m;
+        return m;
     }
 
     std::string& persistenceBasePath() {
@@ -71,7 +81,33 @@ namespace {
         if (!s_coreApi)
             s_coreApi = new LogosAPI(std::string("core"));
 
-        LogosAPIClient* client = s_coreApi->getClient(std::string("capability_module"));
+        // Pick the right transport for dialing capability_module. The
+        // single-arg getClient() defaults to the *global* transport
+        // config (LocalSocket), which is wrong when an operator
+        // configured capability_module for tcp / tcp_ssl only — the
+        // parent's RPC then hangs trying to reach a LocalSocket that
+        // capability_module never bound.
+        //
+        // Resolution order matches the operator's intent: prefer the
+        // first transport the operator named (so a `--module-transport
+        // capability_module=local --module-transport
+        // capability_module=tcp` setup uses LocalSocket, but a tcp-only
+        // setup uses tcp). Empty / unset map → fall back to the global
+        // default, which is correct for the default LocalSocket-only
+        // case (no per-module config registered).
+        LogosAPIClient* client = nullptr;
+        if (auto it = moduleTransportsMap().find("capability_module");
+            it != moduleTransportsMap().end() && !it->second.empty()) {
+            const auto ts = logos::transportSetFromJsonString(it->second);
+            if (!ts.empty()) {
+                client = s_coreApi->getClient(
+                    QStringLiteral("capability_module"), ts.front());
+            }
+        }
+        if (!client) {
+            client = s_coreApi->getClient(std::string("capability_module"));
+        }
+
         if (!client->informModuleToken(capabilityModuleToken, name, token)) {
             spdlog::warn("Failed to register token with capability module for: {}", name);
         }
@@ -104,6 +140,15 @@ namespace {
             auto info = ModuleLib::InstancePersistence::resolveInstance(
                 persistenceBasePath(), name);
             desc.instancePersistencePath = info.persistencePath;
+        }
+
+        // Per-module transport set, if the daemon registered one before
+        // calling load. The runtime threads it through to the child via
+        // a CLI argument so the child's LogosAPIProvider binds the right
+        // listeners. Modules without an entry inherit the global default.
+        if (auto it = moduleTransportsMap().find(name);
+            it != moduleTransportsMap().end()) {
+            desc.transportSetJson = it->second;
         }
 
         auto rt = runtimeRegistry().select(desc);
@@ -194,6 +239,20 @@ namespace ModuleManager {
     void setPersistenceBasePath(const char* path) {
         assert(path != nullptr);
         persistenceBasePath() = std::string(path);
+    }
+
+    void setModuleTransports(const std::string& moduleName,
+                             const std::string& transportSetJson) {
+        // Same mutex as loadModule()'s read of the map (see line ~122
+        // for the lookup). Without this, an operator can race with
+        // an in-flight loadModule and the child gets garbled JSON
+        // (or sees an empty transport set after the operator
+        // overwrote what the child was about to read).
+        std::lock_guard<std::mutex> g(loadMutex());
+        if (transportSetJson.empty())
+            moduleTransportsMap().erase(moduleName);
+        else
+            moduleTransportsMap()[moduleName] = transportSetJson;
     }
 
     void discoverInstalledModules() {
@@ -352,6 +411,12 @@ namespace ModuleManager {
         std::lock_guard lock(loadMutex());
         runtimeRegistry().terminateAll();
         registryInstance().clear();
+        // Per-module transport overrides are part of the manager's
+        // mutable state — without clearing them here, a daemon
+        // restart in the same process (or a unit test that calls
+        // clear() between scenarios) would inherit the previous
+        // run's transport map and bind unexpected ports.
+        moduleTransportsMap().clear();
     }
 
     char** getLoadedModulesCStr() {

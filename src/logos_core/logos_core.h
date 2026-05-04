@@ -92,6 +92,22 @@ LOGOS_CORE_EXPORT char* logos_core_get_module_stats();
 // Must be called before logos_core_start().
 LOGOS_CORE_EXPORT void logos_core_set_persistence_base_path(const char* path);
 
+// Register a per-module transport set for the named module. The runtime
+// passes this through to the module's child subprocess so its
+// LogosAPIProvider binds every transport in the set instead of only
+// the global default (LocalSocket).
+//
+// `transport_set_json` is a JSON array of LogosTransportConfig values
+// (see logos-cpp-sdk/cpp/logos_transport_config_json.h for the shape).
+// NULL or "" clears any previously-registered entry.
+//
+// Must be called BEFORE the module is loaded — for capability_module
+// this means before logos_core_start(); for user modules, before any
+// logos_core_load_module() call. Modules without an entry continue to
+// inherit the global default.
+LOGOS_CORE_EXPORT void logos_core_set_module_transports(const char* module_name,
+                                                         const char* transport_set_json);
+
 // Re-scan all module directories and update known modules.
 // Call after installing new modules so they become discoverable.
 LOGOS_CORE_EXPORT void logos_core_refresh_modules();
