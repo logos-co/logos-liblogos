@@ -7,11 +7,14 @@ pkgs.stdenvNoCC.mkDerivation {
   
   # No source to unpack - we're copying from another derivation
   dontUnpack = true;
-  
-  nativeBuildInputs = 
+
+  # Workaround: remove autoPatchelfHook entirely — pyelftools 0.32
+  # segfaults on the ELF layout logos-liblogos produces.
+  dontStrip = true;
+
+  nativeBuildInputs =
     [ pkgs.qt6.wrapQtAppsNoGuiHook ] ++  # Wrap CLI apps to be immune to LD_LIBRARY_PATH pollution
-    pkgs.lib.optionals pkgs.stdenv.isDarwin [ pkgs.darwin.cctools ] ++
-    pkgs.lib.optionals pkgs.stdenv.isLinux [ pkgs.autoPatchelfHook ];
+    pkgs.lib.optionals pkgs.stdenv.isDarwin [ pkgs.darwin.cctools ];
   
   # Clear LD_LIBRARY_PATH to prevent external Qt installations from interfering
   # Set LOGOS_BUNDLED_MODULES_DIR so the binary can find bundled modules
