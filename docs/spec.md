@@ -75,7 +75,7 @@ Each module runs in its own process for isolation:
 - The core uses a `RuntimeRegistry` to select the appropriate `ModuleRuntime` for each module
 - The default `SubprocessManager` runtime spawns a `logos_host_qt` process per module
 - Modules with `format == "qt-plugin"` or no explicit format are handled by `SubprocessManager`
-- Communication happens via the Logos API (currently uses Qt Remote Objects over local sockets)
+- Communication happens via the Logos API. Each module's transport set is configured per-module by the host: by default modules listen on a LocalSocket only, but the host can register a `LogosTransportSet` (LocalSocket, TCP, TCP+TLS) per module via `logos_core_set_module_transports` and the runtime threads it through to the child
 - Faulty or untrusted modules cannot crash the core or other modules
 - Modules can be written in different languages as long as they implement the RPC protocol
 - Alternative runtimes can be registered for different module formats (e.g. in-process, WASM)
@@ -121,7 +121,7 @@ Every module ships a `metadata.json` referenced by Qt's `Q_PLUGIN_METADATA` macr
 1. Core locates the module file for the requested module name
 2. Core resolves dependencies and loads them first (topological sort with circular dependency detection)
 3. If a persistence base path is configured, core resolves an instance ID and persistence directory for the module (reusing an existing instance or creating a new one)
-4. Core builds a `ModuleDescriptor` (name, path, format, module dirs, persistence path)
+4. Core builds a `ModuleDescriptor` (name, path, format, module dirs, persistence path, transport-set JSON if registered via `logos_core_set_module_transports`)
 5. Core asks the `RuntimeRegistry` to `select()` a runtime for the descriptor (the default `SubprocessManager` handles `"qt-plugin"` format and modules with no explicit format)
 6. The selected runtime's `load()` spawns the appropriate process (e.g. `logos_host_qt` for the Qt subprocess runtime)
 7. Core generates a UUID authentication token
@@ -200,6 +200,7 @@ The platform supports two build variants:
 | `logos_core_get_module_dependencies(name, recursive) → char**` | Return null-terminated array of modules that `name` depends on (forward edges). With `recursive=true`, walks the forward dependency graph transitively via BFS. Unknown names yield an empty array. Caller must free. |
 | `logos_core_get_module_dependents(name, recursive) → char**` | Return null-terminated array of modules that depend on `name` (reverse edges). With `recursive=true`, walks the reverse dependency graph transitively via BFS. Unknown names yield an empty array. Caller must free. |
 | `logos_core_process_module(path) → char*` | Read a module file's metadata and register it as known without loading. Returns the module name or NULL. Caller must free. |
+| `logos_core_set_module_transports(name, json)` | Register a per-module `LogosTransportSet` (JSON, see logos-cpp-sdk shape) for the named module. The runtime forwards it to the child via `--transport-set` so the child's `LogosAPIProvider` binds every transport instead of only the global default LocalSocket. Must be called before the module is loaded. NULL or empty clears any previously-registered entry. |
 
 ### Token and Monitoring
 

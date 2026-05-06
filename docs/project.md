@@ -64,6 +64,7 @@ logos-liblogos/
 | **Qt 6** (Core, RemoteObjects) | Event loop, module system, IPC, meta-object system |
 | **Boost** (Process, Asio, Uuid) | Subprocess management, async I/O, and UUID generation |
 | **nlohmann_json** | JSON parsing/serialization (replaces Qt JSON internally) |
+| **OpenSSL** | Required transitively by the SDK's plain-C++ TCP+TLS transport |
 | **CLI11** | Command-line argument parsing (logos_host) |
 | **zstd** | Compression (build dependency) |
 | **spdlog** | Structured logging |
@@ -100,6 +101,7 @@ logos-liblogos/
 | `setModulesDir(path)` | Set the primary module directory (clears existing) |
 | `addModulesDir(path)` | Add an additional module directory |
 | `setPersistenceBasePath(path)` | Set base directory for module instance persistence |
+| `setModuleTransports(name, json)` | Register a per-module `LogosTransportSet` (serialized JSON). Threaded through to the child subprocess on load so its provider binds every listener instead of only the global default. Empty clears the entry. Read+write protected by `loadMutex()` |
 | `discoverInstalledModules()` | Scan all module directories and register discovered modules |
 | `processModule(path) → std::string` | Extract metadata from a module file, register as known |
 | `processModuleCStr(path) → char*` | C-string variant of processModule |
@@ -165,7 +167,7 @@ logos-liblogos/
 **Purpose:** Abstract interface for module loading strategies. Decouples the core from any specific subprocess or module-loading mechanism (Qt, WASM, in-process, etc.). Each implementation handles a particular module format.
 
 **Supporting types:**
-- `ModuleDescriptor` — describes a module to load: `name`, `path`, `format`, `modulesDirs`, `instancePersistencePath`, `onTerminated` callback
+- `ModuleDescriptor` — describes a module to load: `name`, `path`, `format`, `modulesDirs`, `instancePersistencePath`, `transportSetJson` (per-module `LogosTransportSet` serialized as JSON; empty = inherit the global default LocalSocket), `onTerminated` callback
 - `LoadedModuleHandle` — opaque handle returned by `load()`: `pid` and `runtimeData` (`std::any`)
 
 **API (class `ModuleRuntime`):**
@@ -257,7 +259,7 @@ Takes callback functions (`IsKnownFn`, `GetDependenciesFn`) so it has no couplin
 
 **Files:** `src/runtimes/runtime_qt/logos_host.cpp`, `src/runtimes/runtime_qt/command_line_parser.h/cpp`, `src/runtimes/runtime_qt/module_initializer.h/cpp`, `src/runtimes/runtime_qt/qt/qt_app.h/cpp`, `src/runtimes/runtime_qt/qt/qt_token_receiver.h/cpp`
 
-**Purpose:** Lightweight subprocess (`logos_host_qt`) that loads a single Qt module. Parses `--name`, `--path`, and optional `--instance-persistence-path` arguments, loads the module, authenticates via token from the core, registers the module with the remote object registry, and runs the Qt event loop. A `logos_host` compatibility symlink is installed for backward compatibility with downstream consumers.
+**Purpose:** Lightweight subprocess (`logos_host_qt`) that loads a single Qt module. Parses `--name`, `--path`, optional `--instance-persistence-path`, and optional `--transport-set` (per-module `LogosTransportSet` JSON; empty = global-default LocalSocket only) arguments, loads the module, authenticates via token from the core, constructs the `LogosAPI` with the parsed transport set (explicit-transport ctor when provided, single-arg ctor otherwise), registers the module with the remote object registry, and runs the Qt event loop. A `logos_host` compatibility symlink is installed for backward compatibility with downstream consumers.
 
 ## C API
 
@@ -280,6 +282,7 @@ The public C API (`logos_core.h`) is the only exported interface. All functions 
 | `logos_core_set_modules_dir(dir)` | Set primary module directory |
 | `logos_core_add_modules_dir(dir)` | Add additional module directory |
 | `logos_core_set_persistence_base_path(path)` | Set base directory for module instance persistence |
+| `logos_core_set_module_transports(name, json)` | Register a per-module transport set (JSON, see logos-cpp-sdk shape). Forwarded to the child via `--transport-set` so its `LogosAPIProvider` binds every listener instead of only the global default LocalSocket. Must be called before the module is loaded; empty clears the entry |
 | `logos_core_load_module(name) → int` | Load a module (1 = success, 0 = failure) |
 | `logos_core_load_module_with_dependencies(name) → int` | Load module and dependencies in order |
 | `logos_core_unload_module(name) → int` | Unload a module |
@@ -373,6 +376,7 @@ nix build --override-input logos-cpp-sdk path:../logos-cpp-sdk
 - Qt 6 with Core and RemoteObjects modules
 - Boost (with Process component)
 - nlohmann_json
+- OpenSSL (transitive: SDK's plain-C++ TCP+TLS transport)
 - CLI11
 - Google Test (fetched via FetchContent if not system-installed)
 
@@ -391,7 +395,7 @@ make -j$(nproc)
 ctest --output-on-failure
 ```
 
-**Note:** CMake expects the logos-cpp-sdk and logos-module libraries to be available. It searches for a pre-built SDK first (lib/include), then falls back to source (cpp/CMakeLists.txt).
+**Note:** CMake expects the logos-cpp-sdk and logos-module libraries to be available. For a pre-built SDK it uses `find_package(logos-cpp-sdk)` (the package config carries OpenSSL / Boost / nlohmann_json / Qt as transitive deps); otherwise it falls back to the source tree (`cpp/CMakeLists.txt`).
 
 ### Dev vs Portable Builds
 
