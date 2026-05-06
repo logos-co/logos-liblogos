@@ -21,16 +21,24 @@ logos-liblogos/
 │   │   ├── module_registry.h/cpp        # In-memory registry of discovered/loaded modules
 │   │   ├── dependency_resolver.h/cpp    # Topological sort with circular dependency detection
 │   │   ├── module_runtime.h             # Abstract ModuleRuntime interface (Qt-free)
+│   │   ├── module_container.h           # Abstract ModuleContainer interface (where/how a module runs)
+│   │   ├── module_loader.h              # Abstract ModuleLoader interface (what type of module)
+│   │   ├── composite_runtime.h/cpp      # Pairs a container + loader into a ModuleRuntime
 │   │   └── runtime_registry.h/cpp       # Registry of ModuleRuntime implementations
-│   └── runtimes/                        # Runtime implementations
-│       └── runtime_qt/                  # Qt subprocess runtime + host binary
-│           ├── subprocess_manager.h/cpp     # ModuleRuntime impl + Boost.Process subprocess management
-│           ├── logos_host.cpp               # Host entry point (logos_host_qt binary)
-│           ├── command_line_parser.h/cpp    # CLI argument parsing (--name, --path)
-│           ├── module_initializer.h/cpp     # Module loading and token setup
-│           └── qt/                          # Qt-specific host implementations
-│               ├── qt_app.h/cpp             # Qt application setup for host
-│               └── qt_token_receiver.h/cpp  # Auth token reception via local socket
+│   ├── containers/                      # Container implementations (process isolation strategies)
+│   │   └── subprocess/                  # Subprocess container (Boost.Process v2)
+│   │       ├── subprocess_container.h/cpp   # ModuleContainer impl: process spawn, pipes, kill, token send
+│   │       ├── subprocess_manager.h         # Backward-compat shim for SubprocessManager name
+│   │       └── token_receiver.h/cpp         # Child-side auth token receipt via Unix socket
+│   └── runtimes/                        # Module runtime/loader implementations
+│       └── runtime_qt/                  # Qt plugin runtime
+│           ├── qt_plugin_runtime.h/cpp      # ModuleLoader impl: resolve logos_host_qt, build CLI args
+│           └── host/                        # Child-side code (builds logos_host_qt binary)
+│               ├── logos_host.cpp               # Host entry point (logos_host_qt binary)
+│               ├── command_line_parser.h/cpp    # CLI argument parsing (--name, --path)
+│               ├── module_initializer.h/cpp     # Module loading and LogosAPI init (takes authToken param)
+│               └── qt/
+│                   └── qt_app.h/cpp             # Qt application setup for host
 ├── tests/                               # Google Test suite
 │   ├── CMakeLists.txt                   # Test build configuration
 │   ├── test_app_lifecycle.cpp           # C API lifecycle tests (init, exec, cleanup, processEvents)
@@ -211,22 +219,20 @@ logos-liblogos/
 
 Takes callback functions (`IsKnownFn`, `GetDependenciesFn`) so it has no coupling to the registry implementation.
 
-### SubprocessManager
+### SubprocessContainer
 
-**Files:** `src/runtimes/runtime_qt/subprocess_manager.h`, `src/runtimes/runtime_qt/subprocess_manager.cpp`
+**Files:** `src/containers/subprocess/subprocess_container.h`, `src/containers/subprocess/subprocess_container.cpp`
 
-**Purpose:** Concrete `ModuleRuntime` implementation for the Qt subprocess strategy, and the low-level subprocess management layer using Boost.Process v2 and Boost.Asio. This is the **default runtime** — it handles modules with `format == "qt-plugin"` as well as modules with an empty format field. `id()` returns `"qt-subprocess"`.
+**Purpose:** Concrete `ModuleContainer` implementation for subprocess-based module isolation using Boost.Process v2 and Boost.Asio. Handles process lifecycle (spawn, monitor, kill) and credential delivery via Unix domain sockets. Knows nothing about what type of module runs inside the subprocess.
 
-- Resolves and spawns `logos_host_qt` processes per module
 - Uses `boost::process::v2::process` for subprocess spawning and `boost::asio::io_context` for async I/O
 - Background `io_context` thread with work guard for non-blocking async read and wait callbacks
 - Async read loop for stdout/stderr with line buffering
 - Synchronous kill with graceful SIGTERM → SIGKILL escalation (5s timeout)
-- Unix domain socket for token delivery (matches previous `QLocalSocket` behavior)
+- Unix domain socket for token delivery (scoped by `LOGOS_INSTANCE_ID`)
 - A `std::mutex` (`s_processesMutex`) protects the `s_processes` map against concurrent access
-- Shared pointer-based lifetime management for safe async callback handling
 
-**ModuleRuntime interface:** `id()`, `canHandle()`, `load()`, `sendToken()`, `terminate()`, `terminateAll()`, `hasModule()`, `pid()`, `getAllPids()`
+**ModuleContainer interface:** `id()` → `"subprocess"`, `canHandle()`, `launch()`, `sendToken()`, `terminate()`, `terminateAll()`, `hasModule()`, `pid()`, `getAllPids()`
 
 **Static process management API (used by tests):**
 
@@ -241,6 +247,20 @@ Takes callback functions (`IsKnownFn`, `GetDependenciesFn`) so it has no couplin
 | `getAllProcessIds() → unordered_map` | Map all process names to PIDs |
 | `registerProcess(name)` | Register a placeholder process entry |
 | `clearAll()` | Clear all process entries |
+
+A backward-compat `SubprocessManager` header (`src/containers/subprocess/subprocess_manager.h`) inherits from `CompositeRuntime` and forwards static methods to `SubprocessContainer`, so test code that references the old name keeps compiling.
+
+### QtPluginRuntime
+
+**Files:** `src/runtimes/runtime_qt/qt_plugin_runtime.h`, `src/runtimes/runtime_qt/qt_plugin_runtime.cpp`
+
+**Purpose:** Concrete `ModuleLoader` implementation for the Qt plugin module format. Resolves the `logos_host_qt` binary path and builds the CLI arguments (`--name`, `--path`, `--instance-persistence-path`) the host binary expects. `id()` returns `"qt-plugin"`.
+
+### CompositeRuntime
+
+**Files:** `src/logos_core/composite_runtime.h`, `src/logos_core/composite_runtime.cpp`
+
+**Purpose:** Implements the `ModuleRuntime` interface by pairing a `ModuleContainer` (where/how to run) with a `ModuleLoader` (what to load). The default registration in `ModuleManager` creates `CompositeRuntime(SubprocessContainer, QtPluginRuntime)`. `id()` returns `"qt-plugin+subprocess"`.
 
 ### ProcessStats (external dependency)
 
@@ -257,9 +277,9 @@ Takes callback functions (`IsKnownFn`, `GetDependenciesFn`) so it has no couplin
 
 ### LogosHost
 
-**Files:** `src/runtimes/runtime_qt/logos_host.cpp`, `src/runtimes/runtime_qt/command_line_parser.h/cpp`, `src/runtimes/runtime_qt/module_initializer.h/cpp`, `src/runtimes/runtime_qt/qt/qt_app.h/cpp`, `src/runtimes/runtime_qt/qt/qt_token_receiver.h/cpp`
+**Files:** `src/runtimes/runtime_qt/host/logos_host.cpp`, `src/runtimes/runtime_qt/host/command_line_parser.h/cpp`, `src/runtimes/runtime_qt/host/module_initializer.h/cpp`, `src/runtimes/runtime_qt/host/qt/qt_app.h/cpp`, `src/containers/subprocess/token_receiver.h/cpp`
 
-**Purpose:** Lightweight subprocess (`logos_host_qt`) that loads a single Qt module. Parses `--name`, `--path`, optional `--instance-persistence-path`, and optional `--transport-set` (per-module `LogosTransportSet` JSON; empty = global-default LocalSocket only) arguments, loads the module, authenticates via token from the core, constructs the `LogosAPI` with the parsed transport set (explicit-transport ctor when provided, single-arg ctor otherwise), registers the module with the remote object registry, and runs the Qt event loop. A `logos_host` compatibility symlink is installed for backward compatibility with downstream consumers.
+**Purpose:** Lightweight subprocess (`logos_host_qt`) that loads a single Qt module. Parses `--name`, `--path`, optional `--instance-persistence-path`, and optional `--transport-set` (per-module `LogosTransportSet` JSON; empty = global-default LocalSocket only) arguments. On startup, token receipt (container concern) is separated from module loading (runtime concern): the host first receives its auth token via subprocess container IPC (Unix socket), then loads the Qt plugin and constructs the `LogosAPI` with the parsed transport set (explicit-transport ctor when provided, single-arg ctor otherwise). Registers the module with the remote object registry and runs the Qt event loop. A `logos_host` compatibility symlink is installed for backward compatibility with downstream consumers.
 
 ## C API
 

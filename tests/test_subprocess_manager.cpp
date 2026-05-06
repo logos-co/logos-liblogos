@@ -15,7 +15,7 @@
 // =============================================================================
 #include <gtest/gtest.h>
 #include "logos_core.h"
-#include "subprocess_manager.h"
+#include "containers/subprocess/subprocess_manager.h"
 #include "qt_test_adapter.h"
 #include <atomic>
 #include <chrono>

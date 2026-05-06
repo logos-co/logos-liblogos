@@ -2,7 +2,9 @@
 #include "module_registry.h"
 #include "dependency_resolver.h"
 #include "runtime_registry.h"
-#include "runtimes/runtime_qt/subprocess_manager.h"
+#include "composite_runtime.h"
+#include "containers/subprocess/subprocess_container.h"
+#include "runtimes/runtime_qt/qt_plugin_runtime.h"
 #include <spdlog/spdlog.h>
 #include <mutex>
 #include <cassert>
@@ -42,13 +44,13 @@ namespace {
         return path;
     }
 
-    // Lazily initialised RuntimeRegistry. On first call, registers the default
-    // SubprocessManager. clearForTests() can replace it for unit tests.
     LogosCore::RuntimeRegistry& runtimeRegistry() {
         static LogosCore::RuntimeRegistry reg;
         static std::once_flag initFlag;
         std::call_once(initFlag, []() {
-            reg.registerRuntime(std::make_shared<SubprocessManager>());
+            auto container = std::make_shared<SubprocessContainer>();
+            auto loader    = std::make_shared<QtPluginRuntime>();
+            reg.registerRuntime(std::make_shared<LogosCore::CompositeRuntime>(container, loader));
         });
         return reg;
     }
@@ -201,12 +203,12 @@ namespace {
             rt->terminate(name);
         } else {
             // Fallback: module was loaded via markLoaded(name) directly
-            // (test scenarios or external setup). Use SubprocessManager directly.
-            if (!SubprocessManager::hasProcess(name)) {
+            // (test scenarios or external setup). Use SubprocessContainer directly.
+            if (!SubprocessContainer::hasProcess(name)) {
                 spdlog::warn("No process found for module: {}", name);
                 return false;
             }
-            SubprocessManager::terminateProcess(name);
+            SubprocessContainer::terminateProcess(name);
         }
 
         registryInstance().markUnloaded(name);

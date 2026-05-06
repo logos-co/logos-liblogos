@@ -13,13 +13,16 @@ add_executable(logos_core_tests
     test_process_stats.cpp
     test_dependency_resolver.cpp
     test_subprocess_manager.cpp
+    test_subprocess_container.cpp
+    test_qt_plugin_runtime.cpp
+    test_composite_runtime.cpp
     test_token_exchange.cpp
     test_runtime_registry.cpp
     test_module_runtime_abstraction.cpp
-    # qt_test_adapter.h calls QtTokenReceiver::receiveAuthToken; compile the
+    # qt_test_adapter.h calls SubprocessTokenReceiver::receive; compile the
     # implementation unit directly into the test binary (it lives in logos_host_qt,
     # which is an executable, not a linkable library).
-    ${CMAKE_SOURCE_DIR}/src/runtimes/runtime_qt/qt/qt_token_receiver.cpp
+    ${CMAKE_SOURCE_DIR}/src/containers/subprocess/token_receiver.cpp
 )
 
 target_link_libraries(logos_core_tests PRIVATE
@@ -33,6 +36,8 @@ target_link_libraries(logos_core_tests PRIVATE
 target_include_directories(logos_core_tests PRIVATE
     ${CMAKE_SOURCE_DIR}/src
     ${CMAKE_SOURCE_DIR}/src/logos_core
+    ${CMAKE_SOURCE_DIR}/src/containers
+    ${CMAKE_SOURCE_DIR}/src/containers/subprocess
     ${CMAKE_SOURCE_DIR}/src/runtimes
     ${CMAKE_SOURCE_DIR}/src/runtimes/runtime_qt
 )

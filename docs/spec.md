@@ -2,7 +2,7 @@
 
 ## Overall Description
 
-Logos Core is a modular runtime platform for hosting and orchestrating independently developed modules. It provides a C-API shared library (`liblogos_core`) and a pluggable runtime system that together enable a module-based architecture for decentralised applications. The default runtime (`SubprocessManager`) spawns a `logos_host_qt` process per module, but the architecture allows registering alternative runtimes for different module formats.
+Logos Core is a modular runtime platform for hosting and orchestrating independently developed modules. It provides a C-API shared library (`liblogos_core`) and a pluggable runtime system that together enable a module-based architecture for decentralised applications. The runtime system separates two orthogonal concerns — **containers** (how a module process is launched, managed, and communicates) and **module loaders** (how a specific type of module binary is resolved and loaded). These are composed into a `CompositeRuntime` that implements the `ModuleRuntime` interface. The default configuration pairs a `SubprocessContainer` (Boost.Process v2) with a `QtPluginRuntime` (Qt plugin loader) to spawn a `logos_host_qt` process per module.
 
 The platform is designed to:
 - Load, start, stop, and introspect modules at runtime
@@ -10,6 +10,7 @@ The platform is designed to:
 - Provide transparent inter-module RPC via a remote object registry
 - Support token-based authentication for secure module-to-module communication
 - Expose a C API so that host applications in any language can drive the runtime
+- Support diverse container strategies (subprocess, Docker, in-process) and module formats (Qt plugin, WASM) through composable abstractions
 
 ## Definitions & Acronyms
 
@@ -18,7 +19,10 @@ The platform is designed to:
 | **Module** | An independently developed module that implements `PluginInterface` and is dynamically loaded by the core |
 | **Core Library** | `liblogos_core` — the shared library that provides the C API for module management |
 | **Module Host** | `logos_host_qt` — a lightweight executable that loads a single Qt module in its own process (a `logos_host` symlink exists for backward compatibility) |
-| **Module Runtime** | An abstract interface (`ModuleRuntime`) that encapsulates a strategy for loading and managing modules (e.g. subprocess, in-process, WASM) |
+| **Module Container** | An abstract interface (`ModuleContainer`) that defines how a module's execution environment is managed — process lifecycle, I/O, and credential delivery (e.g. subprocess, Docker, in-process) |
+| **Module Loader** | An abstract interface (`ModuleLoader`) that defines how a specific type of module binary is resolved and prepared for loading — host binary resolution and CLI argument construction (e.g. Qt plugin, WASM) |
+| **Module Runtime** | An abstract interface (`ModuleRuntime`) that encapsulates a complete strategy for loading and managing modules. Implemented by `CompositeRuntime`, which pairs a `ModuleContainer` with a `ModuleLoader` |
+| **Composite Runtime** | A concrete `ModuleRuntime` that composes a `ModuleContainer` and a `ModuleLoader`, delegating process lifecycle to the container and module-type resolution to the loader |
 | **Runtime Registry** | The central registry (`RuntimeRegistry`) that selects the appropriate `ModuleRuntime` for a given module based on its format descriptor |
 | **Core Manager** | A built-in module that exposes core functionality via RPC, allowing modules to manage the core without linking against the C API |
 | **Capability Module** | A built-in module that handles authorization tokens for inter-module communication |
@@ -37,11 +41,15 @@ At a high level, the Logos Core consists of:
 
 **Runtime Registry** — A central registry of `ModuleRuntime` implementations. When a module is loaded, the registry selects the first runtime whose `canHandle()` returns true for the module's descriptor. This decouples the core from any specific loading mechanism.
 
-**Module Runtimes** — Pluggable implementations of the `ModuleRuntime` interface. The default `SubprocessManager` spawns `logos_host_qt` processes, but alternative runtimes (in-process, WASM, etc.) can be registered.
+**Module Containers** — Pluggable implementations of the `ModuleContainer` interface that define the execution environment for modules. The default `SubprocessContainer` spawns a separate process per module using Boost.Process v2, manages I/O pipes, and handles token delivery over Unix sockets. Future containers could include Docker, in-process, or sandboxed environments.
+
+**Module Loaders** — Pluggable implementations of the `ModuleLoader` interface that define how a specific type of module binary is prepared for loading. The default `QtPluginRuntime` resolves the `logos_host_qt` binary and constructs the appropriate CLI arguments. Future loaders could handle WASM (Extism), native shared libraries, or scripting runtimes.
+
+**Composite Runtime** — A `ModuleRuntime` implementation that composes a `ModuleContainer` with a `ModuleLoader`. Its `load()` method first asks the loader to resolve the host binary and build arguments, then delegates process launch to the container. All other operations (sendToken, terminate, hasModule, pid) are forwarded to the container. The default composite runtime pairs `SubprocessContainer` with `QtPluginRuntime`.
 
 **Core Manager** — A built-in module that runs in the core process and exposes core functionality as RPC methods, allowing remote modules to manage the core without linking against the C API directly.
 
-**Module Host** — A lightweight executable (`logos_host_qt`) that loads a single Qt module in its own process. It communicates with the core over a local socket to receive an authentication token and registers the module's object with the remote registry.
+**Module Host** — A lightweight executable (`logos_host`) that loads a single module in its own process. On startup it first receives an authentication token from the container (via Unix socket), then loads the Qt plugin and initializes `LogosAPI` with that token. This separation ensures container concerns (credential delivery) are handled independently from runtime concerns (plugin loading).
 
 **Capability Module** — A built-in module that handles authorization for inter-module communication by issuing tokens and notifying both communicating parties.
 
@@ -57,7 +65,9 @@ Each module runs in its own process for isolation:
 │  ┌────────────────────────────────────────────────┐  │
 │  │  liblogos_core                                 │  │
 │  │  ├─ RuntimeRegistry                            │  │
-│  │  │   └─ SubprocessManager (default runtime)     │  │
+│  │  │   └─ CompositeRuntime (default)              │  │
+│  │  │       ├─ SubprocessContainer (container)     │  │
+│  │  │       └─ QtPluginRuntime (loader)            │  │
 │  │  ├─ Core Manager (built-in module)             │  │
 │  │  ├─ Capability Module (built-in module)        │  │
 │  │  └─ Remote Object Registry                     │  │
@@ -73,18 +83,20 @@ Each module runs in its own process for isolation:
 ```
 
 - The core uses a `RuntimeRegistry` to select the appropriate `ModuleRuntime` for each module
-- The default `SubprocessManager` runtime spawns a `logos_host_qt` process per module
-- Modules with `format == "qt-plugin"` or no explicit format are handled by `SubprocessManager`
-- Communication happens via the Logos API. Each module's transport set is configured per-module by the host: by default modules listen on a LocalSocket only, but the host can register a `LogosTransportSet` (LocalSocket, TCP, TCP+TLS) per module via `logos_core_set_module_transports` and the runtime threads it through to the child
+- The default `CompositeRuntime` pairs a `SubprocessContainer` with a `QtPluginRuntime`
+- `SubprocessContainer` manages process lifecycle (spawn, terminate, token delivery) using Boost.Process v2
+- `QtPluginRuntime` resolves the `logos_host_qt` binary and builds CLI arguments for Qt plugin modules
+- Modules with `format == "qt-plugin"` or no explicit format are handled by the default composite runtime
+- Communication happens via the Logos API. Each module's transport set is configured per-module by the host: by default modules listen on a LocalSocket only, but the host can register a `LogosTransportSet` (LocalSocket, TCP, TCP+TLS) per module via `logos_core_set_module_transports` and the loader threads it through to the child via `--transport-set`
 - Faulty or untrusted modules cannot crash the core or other modules
 - Modules can be written in different languages as long as they implement the RPC protocol
-- Alternative runtimes can be registered for different module formats (e.g. in-process, WASM)
+- Alternative containers (Docker, in-process) and loaders (WASM, Extism) can be composed and registered
 
 ### Token-Based Authentication
 
 Since the remote object registry has no built-in security mechanisms, all RPC calls require an authentication token. This is transparent to module developers when using the SDK:
 
-1. **Core → Module**: When a module is loaded, the core generates a UUID token and sends it to the module process via local socket. The module uses this token to authenticate calls from the core.
+1. **Core → Module**: When a module is loaded, the core generates a UUID token and sends it to the module process via the container's `sendToken()` mechanism (currently a Unix domain socket managed by `SubprocessContainer`). On the child side, `SubprocessTokenReceiver` receives the token before the module loader initializes the plugin. The module uses this token to authenticate calls from the core.
 2. **Module → Module**: When modules need to communicate, they request authorization from the Capability Module, which issues a token and notifies both parties. The modules then use this token for subsequent requests.
 3. **Token Storage**: Each module stores tokens in a thread-safe `TokenManager` (part of the SDK). `ModuleProxy` validates tokens before dispatching method calls.
 
@@ -122,11 +134,13 @@ Every module ships a `metadata.json` referenced by Qt's `Q_PLUGIN_METADATA` macr
 2. Core resolves dependencies and loads them first (topological sort with circular dependency detection)
 3. If a persistence base path is configured, core resolves an instance ID and persistence directory for the module (reusing an existing instance or creating a new one)
 4. Core builds a `ModuleDescriptor` (name, path, format, module dirs, persistence path, transport-set JSON if registered via `logos_core_set_module_transports`)
-5. Core asks the `RuntimeRegistry` to `select()` a runtime for the descriptor (the default `SubprocessManager` handles `"qt-plugin"` format and modules with no explicit format)
-6. The selected runtime's `load()` spawns the appropriate process (e.g. `logos_host_qt` for the Qt subprocess runtime)
+5. Core asks the `RuntimeRegistry` to `select()` a runtime for the descriptor (the default `CompositeRuntime` handles `"qt-plugin"` format and modules with no explicit format)
+6. The selected runtime's `load()` is called:
+   a. The `ModuleLoader` resolves the host binary (e.g. `logos_host_qt`) and builds CLI arguments (including `--transport-set` if configured)
+   b. The `ModuleContainer` launches the process with the resolved binary and arguments
 7. Core generates a UUID authentication token
-8. Core sends the token to the module via the runtime's `sendToken()`
-9. Host process loads the module and calls `initLogos(LogosAPI*)`
+8. Core sends the token to the module via the runtime's `sendToken()` (delegates to the container)
+9. Host process receives the token via `SubprocessTokenReceiver` (container concern), then loads the module plugin and calls `initLogos(LogosAPI*)` (loader/runtime concern)
 10. The `LogosAPI` instance exposes `modulePath`, `instanceId`, and `instancePersistencePath` as properties
 11. Host process registers the module with the remote object registry
 12. Core waits for registration and records the module as loaded (along with the runtime and handle)
@@ -249,6 +263,7 @@ The SDK abstracts away registry lookup, token management, and async invocation.
 ## Future Work
 
 - **Signature support** — Signing and verifying module packages
-- **Additional runtimes** — Register alternative `ModuleRuntime` implementations (e.g. in-process, WASM) alongside the default `SubprocessManager`
+- **Additional containers** — Register alternative `ModuleContainer` implementations (e.g. Docker, in-process, sandboxed) that can be composed with any loader
+- **Additional loaders** — Register alternative `ModuleLoader` implementations (e.g. WASM/Extism, native shared libraries) that can be composed with any container
 - **Cross-language modules** — Modules in languages other than C++
-- **Move away from Qt** — Logos API will move away from Qt. Process management has been migrated from Qt (`QProcess`) to Boost.Process v2, and Qt container/utility types (`QString`, `QStringList`, `QHash`, `QDir`, `QFile`, `QUuid`) have been replaced with standard C++ and Boost equivalents (`std::string`, `std::vector`, `std::unordered_map`, `std::filesystem`, `boost::uuids`). The runtime abstraction (`ModuleRuntime` / `RuntimeRegistry`) decouples the core from any specific loading strategy. Remaining Qt dependencies (event loop, module loading, remote objects) are isolated in `SubprocessManager` and the host binary.
+- **Move away from Qt** — Logos API will move away from Qt. Process management has been migrated from Qt (`QProcess`) to Boost.Process v2, and Qt container/utility types (`QString`, `QStringList`, `QHash`, `QDir`, `QFile`, `QUuid`) have been replaced with standard C++ and Boost equivalents (`std::string`, `std::vector`, `std::unordered_map`, `std::filesystem`, `boost::uuids`). The container/loader separation (`ModuleContainer` / `ModuleLoader` / `CompositeRuntime` / `RuntimeRegistry`) decouples the core from any specific loading or execution strategy. Remaining Qt dependencies (event loop, module loading, remote objects) are isolated in `QtPluginRuntime`, `SubprocessTokenReceiver`, and the `logos_host_qt` binary.
