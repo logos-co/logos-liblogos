@@ -13,15 +13,24 @@
     pkgs.qt6.wrapQtAppsNoGuiHook
   ];
 
-  # Common runtime dependencies
+  # Common runtime dependencies. Boost, OpenSSL, and nlohmann_json
+  # come in transitively via logosSdk's `propagatedBuildInputs`
+  # (declared on the SDK's symlinkJoin in logos-cpp-sdk/flake.nix);
+  # listing them here would be redundant. Qt6 is intentionally NOT
+  # propagated by the SDK (qtbase's setup-hook fires `qtPreHook`
+  # which errors unless `wrapQtAppsHook` was sourced first, and that
+  # ordering can't be guaranteed through propagation), so we list it
+  # explicitly. The SDK's CMake Config re-runs find_dependency(...)
+  # against the propagated non-Qt entries + the Qt entries we list
+  # here at configure time, so logoscore + downstream consumers get
+  # the imported targets wired up automatically.
   buildInputs = [
     pkgs.qt6.qtbase
     pkgs.qt6.qtremoteobjects
+    logosSdk
     pkgs.zstd
     pkgs.gtest
-    pkgs.nlohmann_json
     pkgs.cli11
-    pkgs.boost
     pkgs.spdlog
     logosModule
     processStats

@@ -101,6 +101,17 @@ void logos_core_set_persistence_base_path(const char* path) {
     ModuleManager::setPersistenceBasePath(path);
 }
 
+void logos_core_set_module_transports(const char* module_name,
+                                       const char* transport_set_json) {
+    if (!module_name) {
+        fprintf(stderr, "logos_core_set_module_transports: module_name must not be null\n");
+        std::abort();
+    }
+    ModuleManager::setModuleTransports(
+        std::string(module_name),
+        transport_set_json ? std::string(transport_set_json) : std::string{});
+}
+
 void logos_core_refresh_modules()
 {
     ModuleManager::discoverInstalledModules();

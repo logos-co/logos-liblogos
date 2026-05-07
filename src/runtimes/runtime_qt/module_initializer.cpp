@@ -6,6 +6,8 @@
 #include "interface.h"
 #include "logos_api.h"
 #include "logos_api_provider.h"
+#include "logos_transport_config.h"
+#include "logos_transport_config_json.h"
 #include "token_manager.h"
 #include "module_lib.h"
 
@@ -40,9 +42,25 @@ LogosModule loadModule(const std::string& modulePath, const std::string& expecte
 LogosAPI* initializeLogosAPI(const std::string& moduleName, QObject* module,
                               PluginInterface* basePlugin, const std::string& authToken,
                               const std::string& modulePath,
-                              const std::string& instancePersistencePath)
+                              const std::string& instancePersistencePath,
+                              const std::string& transportSetJson)
 {
-    LogosAPI* logos_api = new LogosAPI(moduleName, module);
+    // If the daemon passed a transport set for this module, deserialize
+    // and use the explicit-transport LogosAPI constructor so the
+    // module's LogosAPIProvider binds every listener (LocalSocket +
+    // any TCP / TCP+SSL endpoints). Otherwise fall back to the
+    // single-arg constructor → global default (LocalSocket only),
+    // matching the long-standing behaviour for modules the daemon
+    // hasn't explicitly configured.
+    LogosAPI* logos_api = nullptr;
+    if (!transportSetJson.empty()) {
+        LogosTransportSet set =
+            logos::transportSetFromJsonString(transportSetJson);
+        logos_api = new LogosAPI(QString::fromStdString(moduleName),
+                                  std::move(set), module);
+    } else {
+        logos_api = new LogosAPI(moduleName, module);
+    }
     logos_api->setProperty("modulePath",
         fs::absolute(fs::path(modulePath)).parent_path().string());
 
@@ -67,7 +85,8 @@ LogosAPI* initializeLogosAPI(const std::string& moduleName, QObject* module,
 }
 
 LogosAPI* setupModule(const std::string& moduleName, const std::string& modulePath,
-                      const std::string& instancePersistencePath)
+                      const std::string& instancePersistencePath,
+                      const std::string& transportSetJson)
 {
     // 1. Receive auth token securely
     std::string authToken = QtTokenReceiver::receiveAuthToken(moduleName);
@@ -85,7 +104,8 @@ LogosAPI* setupModule(const std::string& moduleName, const std::string& modulePa
     PluginInterface* basePlugin = module.as<PluginInterface>();
     LogosAPI* logos_api = initializeLogosAPI(moduleName, module.instance(),
                                               basePlugin, authToken, modulePath,
-                                              instancePersistencePath);
+                                              instancePersistencePath,
+                                              transportSetJson);
 
     // Release module ownership so the module stays loaded
     module.release();

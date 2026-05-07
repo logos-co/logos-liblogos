@@ -9,27 +9,22 @@ get_filename_component(LOGOS_CPP_SDK_ROOT "${LOGOS_CPP_SDK_ROOT}" ABSOLUTE)
 
 # Check if we have a built SDK package (with lib and include directories)
 if(EXISTS "${LOGOS_CPP_SDK_ROOT}/lib" AND EXISTS "${LOGOS_CPP_SDK_ROOT}/include")
-  # Use the built SDK package
+  # Use the built SDK package via its CMake Config file. The SDK ships
+  # logos-cpp-sdkConfig.cmake under lib/cmake/logos-cpp-sdk/ whose
+  # imported target (logos-cpp-sdk::logos_sdk) carries OpenSSL / Boost
+  # / nlohmann_json / Qt on its INTERFACE_LINK_LIBRARIES — no manual
+  # wiring required here.
   message(STATUS "Using built logos-cpp-sdk at ${LOGOS_CPP_SDK_ROOT}")
-  
-  # Find the logos_sdk library
-  find_library(LOGOS_SDK_LIBRARY
-    NAMES logos_sdk
-    PATHS "${LOGOS_CPP_SDK_ROOT}/lib"
-    NO_DEFAULT_PATH
-  )
-  
-  if(NOT LOGOS_SDK_LIBRARY)
-    message(FATAL_ERROR "logos_sdk library not found in ${LOGOS_CPP_SDK_ROOT}/lib")
+  find_package(logos-cpp-sdk REQUIRED
+    PATHS "${LOGOS_CPP_SDK_ROOT}" NO_DEFAULT_PATH)
+  # Provide a `logos_sdk` alias so the rest of this CMakeLists keeps
+  # using the unqualified name (matches the source-layout behaviour
+  # where `logos_sdk` is the target name from add_library).
+  if(NOT TARGET logos_sdk)
+    add_library(logos_sdk INTERFACE IMPORTED)
+    target_link_libraries(logos_sdk INTERFACE logos-cpp-sdk::logos_sdk)
   endif()
-  
-  # Create an imported target for the SDK
-  add_library(logos_sdk STATIC IMPORTED)
-  set_target_properties(logos_sdk PROPERTIES
-    IMPORTED_LOCATION "${LOGOS_SDK_LIBRARY}"
-    INTERFACE_INCLUDE_DIRECTORIES "${LOGOS_CPP_SDK_ROOT}/include"
-  )
-  
+
 elseif(EXISTS "${LOGOS_CPP_SDK_ROOT}/cpp/CMakeLists.txt")
   # Use the source SDK (original behavior)
   message(STATUS "Using logos-cpp-sdk source at ${LOGOS_CPP_SDK_ROOT}")

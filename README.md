@@ -116,6 +116,12 @@ void logos_core_add_modules_dir(const char* dir);
 // Instance persistence
 void logos_core_set_persistence_base_path(const char* path);
 
+// Per-module transport configuration (forwarded to the module's
+// child subprocess so its LogosAPIProvider binds every listener
+// instead of only the global default LocalSocket). Must be called
+// before the module is loaded.
+void logos_core_set_module_transports(const char* name, const char* transport_set_json);
+
 // Module management
 int  logos_core_load_module(const char* name);
 int  logos_core_load_module_with_dependencies(const char* name);

@@ -19,6 +19,22 @@ namespace ModuleManager {
     void addModulesDir(const char* modules_dir);
     void setPersistenceBasePath(const char* path);
 
+    // Register a per-module transport set (serialized JSON, see
+    // logos-cpp-sdk/cpp/logos_transport_config_json.h for the wire
+    // shape). The runtime threads this through to the child subprocess
+    // when the module loads, so the child's LogosAPIProvider binds
+    // every transport in the set instead of only the global default
+    // (LocalSocket).
+    //
+    // Must be called BEFORE the module is loaded — by the daemon, this
+    // means before logos_core_start() for capability_module, or before
+    // any explicit loadModule() call for user modules. Unset modules
+    // continue to use the global default.
+    //
+    // Empty `transportSetJson` clears any previously set entry.
+    void setModuleTransports(const std::string& moduleName,
+                             const std::string& transportSetJson);
+
     void discoverInstalledModules();
 
     std::string processModule(const std::string& modulePath);

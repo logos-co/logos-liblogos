@@ -341,6 +341,18 @@ bool SubprocessManager::load(const LogosCore::ModuleDescriptor& desc,
         arguments.push_back(desc.instancePersistencePath);
     }
 
+    // Per-module transport set: forward the daemon-side serialized JSON
+    // verbatim. The child's command_line_parser deserializes it back
+    // into a LogosTransportSet and passes the result into LogosAPI's
+    // explicit-transport constructor, so its provider binds every
+    // listener instead of only the global default (LocalSocket).
+    // bp2 takes care of escaping; we pass the JSON as a single argv
+    // value, no shell quoting required.
+    if (!desc.transportSetJson.empty()) {
+        arguments.push_back("--transport-set");
+        arguments.push_back(desc.transportSetJson);
+    }
+
     ProcessCallbacks callbacks;
 
     callbacks.onFinished = [onTerminated](const std::string& pName, int exitCode, bool crashed) {
