@@ -4,6 +4,7 @@
 #include "runtime_registry.h"
 #include "composite_runtime.h"
 #include "containers/subprocess/subprocess_container.h"
+#include "containers/sandbox/sandbox_container.h"
 #include "runtimes/runtime_qt/qt_plugin_runtime.h"
 #include <spdlog/spdlog.h>
 #include <mutex>
@@ -51,6 +52,11 @@ namespace {
             auto container = std::make_shared<SubprocessContainer>();
             auto loader    = std::make_shared<QtPluginRuntime>();
             reg.registerRuntime(std::make_shared<LogosCore::CompositeRuntime>(container, loader));
+
+            auto sandboxContainer = std::make_shared<SandboxContainer>();
+            auto sandboxLoader    = std::make_shared<QtPluginRuntime>();
+            reg.registerRuntime(std::make_shared<LogosCore::CompositeRuntime>(
+                sandboxContainer, sandboxLoader, "sandbox"));
         });
         return reg;
     }

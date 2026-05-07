@@ -3,13 +3,17 @@
 namespace LogosCore {
 
 CompositeRuntime::CompositeRuntime(std::shared_ptr<ModuleContainer> container,
-                                   std::shared_ptr<ModuleLoader> loader)
+                                   std::shared_ptr<ModuleLoader> loader,
+                                   std::string idOverride)
     : container_(std::move(container))
     , loader_(std::move(loader))
+    , idOverride_(std::move(idOverride))
 {}
 
 std::string CompositeRuntime::id() const
 {
+    if (!idOverride_.empty())
+        return idOverride_;
     return loader_->id() + "+" + container_->id();
 }
 

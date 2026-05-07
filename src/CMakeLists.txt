@@ -100,6 +100,8 @@ set(LOGOS_CORE_SOURCES
     logos_core/runtime_registry.h
     containers/subprocess/subprocess_container.cpp
     containers/subprocess/subprocess_container.h
+    containers/sandbox/sandbox_container.cpp
+    containers/sandbox/sandbox_container.h
     runtimes/runtime_qt/qt_plugin_runtime.cpp
     runtimes/runtime_qt/qt_plugin_runtime.h
 )

@@ -14,6 +14,7 @@ add_executable(logos_core_tests
     test_dependency_resolver.cpp
     test_subprocess_manager.cpp
     test_subprocess_container.cpp
+    test_sandbox_container.cpp
     test_qt_plugin_runtime.cpp
     test_composite_runtime.cpp
     test_token_exchange.cpp
@@ -38,6 +39,7 @@ target_include_directories(logos_core_tests PRIVATE
     ${CMAKE_SOURCE_DIR}/src/logos_core
     ${CMAKE_SOURCE_DIR}/src/containers
     ${CMAKE_SOURCE_DIR}/src/containers/subprocess
+    ${CMAKE_SOURCE_DIR}/src/containers/sandbox
     ${CMAKE_SOURCE_DIR}/src/runtimes
     ${CMAKE_SOURCE_DIR}/src/runtimes/runtime_qt
 )

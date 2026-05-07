@@ -7,10 +7,11 @@ Logos Core is a modular runtime platform for hosting and orchestrating independe
 The platform is designed to:
 - Load, start, stop, and introspect modules at runtime
 - Isolate each module in its own process for robustness and security
+- Sandbox module processes with configurable network and filesystem restrictions
 - Provide transparent inter-module RPC via a remote object registry
 - Support token-based authentication for secure module-to-module communication
 - Expose a C API so that host applications in any language can drive the runtime
-- Support diverse container strategies (subprocess, Docker, in-process) and module formats (Qt plugin, WASM) through composable abstractions
+- Support diverse container strategies (subprocess, sandbox, Docker, in-process) and module formats (Qt plugin, WASM) through composable abstractions
 
 ## Definitions & Acronyms
 
@@ -41,11 +42,11 @@ At a high level, the Logos Core consists of:
 
 **Runtime Registry** — A central registry of `ModuleRuntime` implementations. When a module is loaded, the registry selects the first runtime whose `canHandle()` returns true for the module's descriptor. This decouples the core from any specific loading mechanism.
 
-**Module Containers** — Pluggable implementations of the `ModuleContainer` interface that define the execution environment for modules. The default `SubprocessContainer` spawns a separate process per module using Boost.Process v2, manages I/O pipes, and handles token delivery over Unix sockets. Future containers could include Docker, in-process, or sandboxed environments.
+**Module Containers** — Pluggable implementations of the `ModuleContainer` interface that define the execution environment for modules. The default `SubprocessContainer` spawns a separate process per module using Boost.Process v2, manages I/O pipes, and handles token delivery over Unix sockets. The `SandboxContainer` (macOS) wraps `SubprocessContainer` and launches the subprocess inside a macOS `sandbox-exec` sandbox with a deny-all-by-default policy and configurable network/filesystem allowlists. Future containers could include Docker or in-process environments.
 
 **Module Loaders** — Pluggable implementations of the `ModuleLoader` interface that define how a specific type of module binary is prepared for loading. The default `QtPluginRuntime` resolves the `logos_host_qt` binary and constructs the appropriate CLI arguments. Future loaders could handle WASM (Extism), native shared libraries, or scripting runtimes.
 
-**Composite Runtime** — A `ModuleRuntime` implementation that composes a `ModuleContainer` with a `ModuleLoader`. Its `load()` method first asks the loader to resolve the host binary and build arguments, then delegates process launch to the container. All other operations (sendToken, terminate, hasModule, pid) are forwarded to the container. The default composite runtime pairs `SubprocessContainer` with `QtPluginRuntime`.
+**Composite Runtime** — A `ModuleRuntime` implementation that composes a `ModuleContainer` with a `ModuleLoader`. Its `load()` method first asks the loader to resolve the host binary and build arguments, then delegates process launch to the container. All other operations (sendToken, terminate, hasModule, pid) are forwarded to the container. An optional `idOverride` constructor parameter allows a composite to be registered under a custom ID (e.g. `"sandbox"`) instead of the default `"{loader}+{container}"` concatenation. The default composite runtime pairs `SubprocessContainer` with `QtPluginRuntime`; a second registration pairs `SandboxContainer` with `QtPluginRuntime` under the ID `"sandbox"`.
 
 **Core Manager** — A built-in module that runs in the core process and exposes core functionality as RPC methods, allowing remote modules to manage the core without linking against the C API directly.
 
@@ -65,8 +66,11 @@ Each module runs in its own process for isolation:
 │  ┌────────────────────────────────────────────────┐  │
 │  │  liblogos_core                                 │  │
 │  │  ├─ RuntimeRegistry                            │  │
-│  │  │   └─ CompositeRuntime (default)              │  │
-│  │  │       ├─ SubprocessContainer (container)     │  │
+│  │  │   ├─ CompositeRuntime (default)              │  │
+│  │  │   │   ├─ SubprocessContainer (container)     │  │
+│  │  │   │   └─ QtPluginRuntime (loader)            │  │
+│  │  │   └─ CompositeRuntime "sandbox"              │  │
+│  │  │       ├─ SandboxContainer (container)        │  │
 │  │  │       └─ QtPluginRuntime (loader)            │  │
 │  │  ├─ Core Manager (built-in module)             │  │
 │  │  ├─ Capability Module (built-in module)        │  │
@@ -75,22 +79,58 @@ Each module runs in its own process for isolation:
 │           │ IPC (local socket)                        │
 │     ┌─────┼─────────┐                                │
 │     ▼     ▼         ▼                                 │
-│  ┌─────┐ ┌─────┐ ┌─────┐                             │
-│  │host │ │host │ │host │  (logos_host_qt processes)   │
-│  │mod A│ │mod B│ │mod C│                               │
-│  └─────┘ └─────┘ └─────┘                             │
+│  ┌─────┐ ┌─────┐ ┌─────────────┐                     │
+│  │host │ │host │ │sandbox-exec │                      │
+│  │mod A│ │mod B│ │  host mod C │  (sandboxed)         │
+│  └─────┘ └─────┘ └─────────────┘                     │
 └──────────────────────────────────────────────────────┘
 ```
 
 - The core uses a `RuntimeRegistry` to select the appropriate `ModuleRuntime` for each module
 - The default `CompositeRuntime` pairs a `SubprocessContainer` with a `QtPluginRuntime`
+- A second `CompositeRuntime` registered as `"sandbox"` pairs a `SandboxContainer` with a `QtPluginRuntime`
 - `SubprocessContainer` manages process lifecycle (spawn, terminate, token delivery) using Boost.Process v2
+- `SandboxContainer` wraps `SubprocessContainer` and launches the process inside macOS `sandbox-exec` with a generated deny-all profile
 - `QtPluginRuntime` resolves the `logos_host_qt` binary and builds CLI arguments for Qt plugin modules
 - Modules with `format == "qt-plugin"` or no explicit format are handled by the default composite runtime
+- Modules with `runtimeConfig["id"] = "sandbox"` are routed to the sandbox composite runtime
 - Communication happens via the Logos API. Each module's transport set is configured per-module by the host: by default modules listen on a LocalSocket only, but the host can register a `LogosTransportSet` (LocalSocket, TCP, TCP+TLS) per module via `logos_core_set_module_transports` and the loader threads it through to the child via `--transport-set`
 - Faulty or untrusted modules cannot crash the core or other modules
 - Modules can be written in different languages as long as they implement the RPC protocol
 - Alternative containers (Docker, in-process) and loaders (WASM, Extism) can be composed and registered
+
+### Sandbox Container (macOS)
+
+The `SandboxContainer` provides process-level sandboxing on macOS using `sandbox-exec`. It wraps `SubprocessContainer`, applying a deny-all-by-default Apple sandbox profile with configurable allowlists. The sandbox is selected by setting `runtimeConfig["id"]` to `"sandbox"` in the module's metadata.
+
+**Default policy:** All filesystem access, network, and process creation are denied. System essentials are always allowed: system libraries (`/usr/lib`, `/System/Library`), the host binary, the module path, sysctl reads, Mach IPC, and the token exchange Unix socket.
+
+**Configuration via `runtimeConfig`:**
+
+```json
+{
+  "runtimeConfig": {
+    "id": "sandbox",
+    "network": {
+      "outbound": true,
+      "inbound": [8080, 3000]
+    },
+    "filesystem": {
+      "read": ["/data/models"],
+      "read-write": ["/data/output"]
+    }
+  }
+}
+```
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `network.outbound` | `bool` or `string[]` | `true` allows all outbound; an array allows specific `"host:port"` destinations only |
+| `network.inbound` | `bool` or `int[]` | `true` allows all inbound; an array allows listening on specific ports only |
+| `filesystem.read` | `string[]` | Additional paths the module may read (as subpath rules) |
+| `filesystem.read-write` | `string[]` | Additional paths the module may read and write (as subpath rules) |
+
+Absent fields remain denied. The `instancePersistencePath` (if configured) is automatically granted read-write access.
 
 ### Token-Based Authentication
 
@@ -134,7 +174,7 @@ Every module ships a `metadata.json` referenced by Qt's `Q_PLUGIN_METADATA` macr
 2. Core resolves dependencies and loads them first (topological sort with circular dependency detection)
 3. If a persistence base path is configured, core resolves an instance ID and persistence directory for the module (reusing an existing instance or creating a new one)
 4. Core builds a `ModuleDescriptor` (name, path, format, module dirs, persistence path, transport-set JSON if registered via `logos_core_set_module_transports`)
-5. Core asks the `RuntimeRegistry` to `select()` a runtime for the descriptor (the default `CompositeRuntime` handles `"qt-plugin"` format and modules with no explicit format)
+5. Core asks the `RuntimeRegistry` to `select()` a runtime for the descriptor. If `runtimeConfig["id"]` is set (e.g. `"sandbox"`), the runtime with that exact ID is selected; otherwise the default `CompositeRuntime` handles `"qt-plugin"` format and modules with no explicit format
 6. The selected runtime's `load()` is called:
    a. The `ModuleLoader` resolves the host binary (e.g. `logos_host_qt`) and builds CLI arguments (including `--transport-set` if configured)
    b. The `ModuleContainer` launches the process with the resolved binary and arguments
@@ -263,7 +303,7 @@ The SDK abstracts away registry lookup, token management, and async invocation.
 ## Future Work
 
 - **Signature support** — Signing and verifying module packages
-- **Additional containers** — Register alternative `ModuleContainer` implementations (e.g. Docker, in-process, sandboxed) that can be composed with any loader
+- **Additional containers** — Register alternative `ModuleContainer` implementations (e.g. Docker, in-process) that can be composed with any loader
 - **Additional loaders** — Register alternative `ModuleLoader` implementations (e.g. WASM/Extism, native shared libraries) that can be composed with any container
 - **Cross-language modules** — Modules in languages other than C++
 - **Move away from Qt** — Logos API will move away from Qt. Process management has been migrated from Qt (`QProcess`) to Boost.Process v2, and Qt container/utility types (`QString`, `QStringList`, `QHash`, `QDir`, `QFile`, `QUuid`) have been replaced with standard C++ and Boost equivalents (`std::string`, `std::vector`, `std::unordered_map`, `std::filesystem`, `boost::uuids`). The container/loader separation (`ModuleContainer` / `ModuleLoader` / `CompositeRuntime` / `RuntimeRegistry`) decouples the core from any specific loading or execution strategy. Remaining Qt dependencies (event loop, module loading, remote objects) are isolated in `QtPluginRuntime`, `SubprocessTokenReceiver`, and the `logos_host_qt` binary.

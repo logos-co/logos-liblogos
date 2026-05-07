@@ -14,7 +14,8 @@ namespace LogosCore {
 class CompositeRuntime : public ModuleRuntime {
 public:
     CompositeRuntime(std::shared_ptr<ModuleContainer> container,
-                     std::shared_ptr<ModuleLoader> loader);
+                     std::shared_ptr<ModuleLoader> loader,
+                     std::string idOverride = "");
 
     std::string id() const override;
     bool canHandle(const ModuleDescriptor& desc) const override;
@@ -36,6 +37,7 @@ public:
 private:
     std::shared_ptr<ModuleContainer> container_;
     std::shared_ptr<ModuleLoader> loader_;
+    std::string idOverride_;
 };
 
 } // namespace LogosCore

@@ -127,6 +127,26 @@ TEST_F(CompositeRuntimeTest, Id_CombinesLoaderAndContainerIds) {
 // canHandle
 // ---------------------------------------------------------------------------
 
+TEST_F(CompositeRuntimeTest, Id_UsesOverrideWhenProvided) {
+    auto rt = std::make_shared<CompositeRuntime>(
+        std::static_pointer_cast<ModuleContainer>(container),
+        std::static_pointer_cast<ModuleLoader>(loader),
+        "my-custom-id");
+    EXPECT_EQ(rt->id(), "my-custom-id");
+}
+
+TEST_F(CompositeRuntimeTest, Id_FallsBackWhenOverrideEmpty) {
+    auto rt = std::make_shared<CompositeRuntime>(
+        std::static_pointer_cast<ModuleContainer>(container),
+        std::static_pointer_cast<ModuleLoader>(loader),
+        "");
+    EXPECT_EQ(rt->id(), "fake-loader+fake-container");
+}
+
+// ---------------------------------------------------------------------------
+// canHandle
+// ---------------------------------------------------------------------------
+
 TEST_F(CompositeRuntimeTest, CanHandle_TrueWhenBothCanHandle) {
     ModuleDescriptor desc;
     EXPECT_TRUE(runtime->canHandle(desc));

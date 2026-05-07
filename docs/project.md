@@ -26,10 +26,12 @@ logos-liblogos/
 │   │   ├── composite_runtime.h/cpp      # Pairs a container + loader into a ModuleRuntime
 │   │   └── runtime_registry.h/cpp       # Registry of ModuleRuntime implementations
 │   ├── containers/                      # Container implementations (process isolation strategies)
-│   │   └── subprocess/                  # Subprocess container (Boost.Process v2)
-│   │       ├── subprocess_container.h/cpp   # ModuleContainer impl: process spawn, pipes, kill, token send
-│   │       ├── subprocess_manager.h         # Backward-compat shim for SubprocessManager name
-│   │       └── token_receiver.h/cpp         # Child-side auth token receipt via Unix socket
+│   │   ├── subprocess/                  # Subprocess container (Boost.Process v2)
+│   │   │   ├── subprocess_container.h/cpp   # ModuleContainer impl: process spawn, pipes, kill, token send
+│   │   │   ├── subprocess_manager.h         # Backward-compat shim for SubprocessManager name
+│   │   │   └── token_receiver.h/cpp         # Child-side auth token receipt via Unix socket
+│   │   └── sandbox/                     # Sandbox container (macOS sandbox-exec)
+│   │       └── sandbox_container.h/cpp      # ModuleContainer impl: deny-all sandbox with configurable allowlists
 │   └── runtimes/                        # Module runtime/loader implementations
 │       └── runtime_qt/                  # Qt plugin runtime
 │           ├── qt_plugin_runtime.h/cpp      # ModuleLoader impl: resolve logos_host_qt, build CLI args
@@ -44,6 +46,7 @@ logos-liblogos/
 │   ├── test_app_lifecycle.cpp           # C API lifecycle tests (init, exec, cleanup, processEvents)
 │   ├── test_module_manager.cpp          # ModuleManager + ModuleRegistry tests
 │   ├── test_subprocess_manager.cpp      # SubprocessManager lifecycle and subprocess tests
+│   ├── test_sandbox_container.cpp       # SandboxContainer profile generation and interface tests
 │   ├── test_runtime_registry.cpp        # RuntimeRegistry selection and fan-out tests
 │   ├── test_module_runtime_abstraction.cpp  # End-to-end runtime abstraction tests (FakeRuntime)
 │   ├── test_dependency_resolver.cpp     # DependencyResolver tests
@@ -250,6 +253,47 @@ Takes callback functions (`IsKnownFn`, `GetDependenciesFn`) so it has no couplin
 
 A backward-compat `SubprocessManager` header (`src/containers/subprocess/subprocess_manager.h`) inherits from `CompositeRuntime` and forwards static methods to `SubprocessContainer`, so test code that references the old name keeps compiling.
 
+### SandboxContainer
+
+**Files:** `src/containers/sandbox/sandbox_container.h`, `src/containers/sandbox/sandbox_container.cpp`
+
+**Purpose:** macOS-only `ModuleContainer` implementation that wraps `SubprocessContainer` to launch module processes inside a macOS `sandbox-exec` sandbox. Applies a deny-all-by-default Apple sandbox profile (`.sb`) with configurable network and filesystem allowlists. Selected via `runtimeConfig["id"] = "sandbox"` in the module descriptor.
+
+- Holds a `SubprocessContainer` instance and delegates all process management to it
+- On `launch()`: generates a sandbox profile from `runtimeConfig`, writes it to a temp file (`{TMPDIR}/logos_sandbox_{name}.sb`), then launches `sandbox-exec -f <profile> <hostBinary> <args...>` through the subprocess container
+- Profile temp files are tracked per module name and cleaned up on `terminate()`, `terminateAll()`, or process exit (via a wrapped `onTerminated` callback)
+- On non-macOS platforms, `launch()` returns `false` with an error log
+- `canHandle()` returns `false` — the sandbox container is only reached via explicit ID routing in `RuntimeRegistry`, never via format-based fallthrough
+
+**Default sandbox policy (always allowed):**
+
+| Category | What is allowed |
+|----------|-----------------|
+| System libraries | `/usr/lib`, `/System/Library`, `/Library/Frameworks`, `/usr/share`, dyld shared cache |
+| Devices | `/dev/null`, `/dev/urandom`, `/dev/random` |
+| Host binary | Read + exec for the resolved `logos_host_qt` path |
+| Module path | Read access to the module binary/bundle and configured `modulesDirs` |
+| System queries | `sysctl-read`, `mach-lookup` |
+| Token exchange | `network-unix`, read/write on the token socket path and `TMPDIR` |
+| Persistence | Read/write on `instancePersistencePath` (if configured) |
+
+**Configurable permissions (via `runtimeConfig`):**
+
+| Field | Type | Effect |
+|-------|------|--------|
+| `network.outbound` | `bool` or `string[]` | `true` allows all outbound; array allows specific `"host:port"` destinations |
+| `network.inbound` | `bool` or `int[]` | `true` allows all inbound; array allows listening on specific ports |
+| `filesystem.read` | `string[]` | Grants `file-read*` on each path (subpath rule) |
+| `filesystem.read-write` | `string[]` | Grants `file-read* file-write*` on each path (subpath rule) |
+
+**Thread safety:** The `profilePaths_` map is protected by its own `std::mutex`. No cross-lock ordering issues with `SubprocessContainer`'s internal `s_processesMutex` since `SandboxContainer` never holds its own lock while calling into `subprocess_`.
+
+**Public static API:**
+
+| Method | Description |
+|--------|-------------|
+| `generateProfile(desc, hostBinary) → std::string` | Generate the `.sb` profile content from a module descriptor. Public for unit testing |
+
 ### QtPluginRuntime
 
 **Files:** `src/runtimes/runtime_qt/qt_plugin_runtime.h`, `src/runtimes/runtime_qt/qt_plugin_runtime.cpp`
@@ -260,7 +304,10 @@ A backward-compat `SubprocessManager` header (`src/containers/subprocess/subproc
 
 **Files:** `src/logos_core/composite_runtime.h`, `src/logos_core/composite_runtime.cpp`
 
-**Purpose:** Implements the `ModuleRuntime` interface by pairing a `ModuleContainer` (where/how to run) with a `ModuleLoader` (what to load). The default registration in `ModuleManager` creates `CompositeRuntime(SubprocessContainer, QtPluginRuntime)`. `id()` returns `"qt-plugin+subprocess"`.
+**Purpose:** Implements the `ModuleRuntime` interface by pairing a `ModuleContainer` (where/how to run) with a `ModuleLoader` (what to load). An optional `idOverride` constructor parameter allows registration under a custom ID instead of the default `"{loader}+{container}"` concatenation. Two registrations exist in `ModuleManager`:
+
+- `CompositeRuntime(SubprocessContainer, QtPluginRuntime)` — default, `id()` returns `"qt-plugin+subprocess"`
+- `CompositeRuntime(SandboxContainer, QtPluginRuntime, "sandbox")` — `id()` returns `"sandbox"`
 
 ### ProcessStats (external dependency)
 
