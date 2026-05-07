@@ -108,30 +108,11 @@ struct IoRuntime {
         , thread([this]() { ctx.run(); })
     {}
 
-    ~IoRuntime() {
-        guard.reset();
-        ctx.stop();
-        if (thread.joinable()) {
-            // Common case: destructor fires from the main thread at process
-            // exit, ctx.run() returned cleanly, just join.
-            //
-            // Pathological case: destructor fires from *this very thread*.
-            // Happens when an asio handler running on `thread` calls
-            // exit() (e.g. the onFinished callback below crash-aborts the
-            // process). exit() triggers static destruction in the calling
-            // thread; that's us. join() on yourself is EDEADLK and would
-            // throw a std::system_error → uncaught → terminate() → SIGABRT,
-            // masking the real crash that triggered the exit() in the first
-            // place. Detach instead: the OS reaps the thread on process
-            // exit, no observable difference vs join in this single-process
-            // scenario.
-            if (thread.get_id() == std::this_thread::get_id()) {
-                thread.detach();
-            } else {
-                thread.join();
-            }
-        }
-    }
+    // Out-of-line — defined after s_processes so it can drop the live
+    // ProcessEntries (which hold asio handles tied to ctx) before
+    // letting ctx itself be destroyed. See the comment on s_processes
+    // below for the static-destruction-order rationale.
+    ~IoRuntime();
 };
 
 IoRuntime& ioRuntime() {
@@ -170,10 +151,59 @@ struct ProcessEntry {
 
 // ---------------------------------------------------------------------------
 // Global process registry
+//
+// Declared at namespace scope (constructed before main), while the
+// IoRuntime singleton above is a function-local static (constructed
+// lazily on first use, from main). C++ destroys statics in reverse
+// order of construction, so at exit ~IoRuntime fires first — tearing
+// down the asio::io_context (and its epoll_reactor) — and *then*
+// s_processes is destroyed, dropping its shared_ptr<ProcessEntry>s,
+// each of which closes asio handles (process / pipes) tied to the
+// already-freed reactor. Use-after-free → heap corruption → SIGABRT.
+// ~IoRuntime (defined below, out-of-line) handles this by clearing
+// s_processes itself while ctx is still alive.
 // ---------------------------------------------------------------------------
 
 std::unordered_map<std::string, std::shared_ptr<ProcessEntry>> s_processes;
 std::mutex s_processesMutex;
+
+// ---------------------------------------------------------------------------
+
+IoRuntime::~IoRuntime() {
+    guard.reset();
+    ctx.stop();
+    if (thread.joinable()) {
+        // Common case: destructor fires from the main thread at process
+        // exit, ctx.run() returned cleanly, just join.
+        //
+        // Pathological case: destructor fires from *this very thread*.
+        // Happens when an asio handler running on `thread` calls
+        // exit() (e.g. the onFinished callback below crash-aborts the
+        // process). exit() triggers static destruction in the calling
+        // thread; that's us. join() on yourself is EDEADLK and would
+        // throw a std::system_error → uncaught → terminate() → SIGABRT,
+        // masking the real crash that triggered the exit() in the first
+        // place. Detach instead: the OS reaps the thread on process
+        // exit, no observable difference vs join in this single-process
+        // scenario.
+        if (thread.get_id() == std::this_thread::get_id()) {
+            thread.detach();
+        } else {
+            thread.join();
+        }
+    }
+
+    // Tear down ProcessEntries while ctx (and its epoll_reactor) is
+    // still alive. See the static-destruction-order note on s_processes
+    // above. Doing this from ~IoRuntime instead of relying on the
+    // implicit reverse order of static destruction guarantees that
+    // every io_object_impl::~io_object_impl() (which calls
+    // reactor.deregister_descriptor) runs against a live reactor.
+    {
+        std::lock_guard<std::mutex> lock(s_processesMutex);
+        s_processes.clear();
+    }
+}
 
 // ---------------------------------------------------------------------------
 // Unix domain socket path
