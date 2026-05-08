@@ -204,7 +204,7 @@ TEST_F(ModuleManagerTest, GetKnownModulesCStr_ReturnsCorrectArray) {
 // =============================================================================
 
 TEST_F(ModuleManagerTest, LoadModule_ReturnsFalseForUnknownModule) {
-    int result = logos_core_load_module("nonexistent_module");
+    int result = logos_core_load_module("nonexistent_module", false);
     EXPECT_EQ(result, 0);
 }
 
@@ -213,7 +213,7 @@ TEST_F(ModuleManagerTest, LoadModule_ReturnsFalseForUnknownModule) {
 // =============================================================================
 
 TEST_F(ModuleManagerTest, UnloadModule_ReturnsFalseForNotLoaded) {
-    int result = logos_core_unload_module("nonexistent_module");
+    int result = logos_core_unload_module("nonexistent_module", false);
     EXPECT_EQ(result, 0);
 }
 
@@ -288,15 +288,15 @@ TEST_F(ModuleManagerTest, ResolveDependencies_HandlesTransitiveDeps) {
 }
 
 // =============================================================================
-// C API: logos_core_load_module_with_dependencies Tests
+// C API: logos_core_load_module with_dependencies=true Tests
 // =============================================================================
 
-TEST_F(ModuleManagerTest, LoadModuleWithDependencies_AbortsForNull) {
-    EXPECT_DEATH(logos_core_load_module_with_dependencies(nullptr), "");
+TEST_F(ModuleManagerTest, LoadModuleWithDeps_AbortsForNull) {
+    EXPECT_DEATH(logos_core_load_module(nullptr, true), "");
 }
 
-TEST_F(ModuleManagerTest, LoadModuleWithDependencies_ReturnsZeroForUnknown) {
-    int result = logos_core_load_module_with_dependencies("unknown_module");
+TEST_F(ModuleManagerTest, LoadModuleWithDeps_ReturnsZeroForUnknown) {
+    int result = logos_core_load_module("unknown_module", true);
     EXPECT_EQ(result, 0);
 }
 
@@ -304,8 +304,8 @@ TEST_F(ModuleManagerTest, LoadModuleWithDependencies_ReturnsZeroForUnknown) {
 // Module Directory Management Tests
 // =============================================================================
 
-TEST_F(ModuleManagerTest, SetModulesDir_SetsFirstDirectory) {
-    logos_core_set_modules_dir("/tmp/test_modules");
+TEST_F(ModuleManagerTest, AddModulesDir_SetsFirstDirectory) {
+    logos_core_add_modules_dir("/tmp/test_modules");
     ASSERT_EQ(logos_core_get_modules_dirs_count(), 1);
     char* dir = logos_core_get_modules_dir_at(0);
     ASSERT_NE(dir, nullptr);
@@ -314,7 +314,7 @@ TEST_F(ModuleManagerTest, SetModulesDir_SetsFirstDirectory) {
 }
 
 TEST_F(ModuleManagerTest, AddModulesDir_AppendsDirectory) {
-    logos_core_set_modules_dir("/tmp/dir1");
+    logos_core_add_modules_dir("/tmp/dir1");
     logos_core_add_modules_dir("/tmp/dir2");
     logos_core_add_modules_dir("/tmp/dir3");
 
@@ -335,7 +335,7 @@ TEST_F(ModuleManagerTest, AddModulesDir_AppendsDirectory) {
 }
 
 TEST_F(ModuleManagerTest, GetModulesDirs_ReturnsEmptyAfterClear) {
-    logos_core_set_modules_dir("/tmp/dir1");
+    logos_core_add_modules_dir("/tmp/dir1");
     clearModuleState();
     EXPECT_EQ(logos_core_get_modules_dirs_count(), 0);
 }
@@ -348,7 +348,7 @@ TEST_F(ModuleManagerTest, DiscoverInstalledModules_DoesNotCrashWithEmptyDir) {
     TmpDir tmpDir;
     ASSERT_TRUE(tmpDir.isValid());
 
-    logos_core_set_modules_dir(tmpDir.str().c_str());
+    logos_core_add_modules_dir(tmpDir.str().c_str());
     logos_core_refresh_modules();
 
     char** known = logos_core_get_known_modules();
@@ -358,7 +358,7 @@ TEST_F(ModuleManagerTest, DiscoverInstalledModules_DoesNotCrashWithEmptyDir) {
 }
 
 TEST_F(ModuleManagerTest, DiscoverInstalledModules_DoesNotCrashWithNonexistentDir) {
-    logos_core_set_modules_dir("/tmp/nonexistent_dir_12345");
+    logos_core_add_modules_dir("/tmp/nonexistent_dir_12345");
     logos_core_refresh_modules();
 
     char** known = logos_core_get_known_modules();
@@ -374,7 +374,7 @@ TEST_F(ModuleManagerTest, DiscoverInstalledModules_FindsFakeModulesWithoutCrash)
     createFakeModule(tmpDir.path, "fake_module_a", "fake_module_a_plugin.so");
     createFakeModule(tmpDir.path, "fake_module_b", "fake_module_b_plugin.so");
 
-    logos_core_set_modules_dir(tmpDir.str().c_str());
+    logos_core_add_modules_dir(tmpDir.str().c_str());
     logos_core_refresh_modules();
 
     char** known = logos_core_get_known_modules();
@@ -393,7 +393,7 @@ TEST_F(ModuleManagerTest, DiscoverInstalledModules_IgnoresModulesWithoutManifest
     bf << "fake";
     bf.close();
 
-    logos_core_set_modules_dir(tmpDir.str().c_str());
+    logos_core_add_modules_dir(tmpDir.str().c_str());
     logos_core_refresh_modules();
 
     char** known = logos_core_get_known_modules();
@@ -408,7 +408,7 @@ TEST_F(ModuleManagerTest, DiscoverInstalledModules_IgnoresUiTypeModules) {
 
     createFakeModule(tmpDir.path, "ui_module", "ui_module_plugin.so", "ui");
 
-    logos_core_set_modules_dir(tmpDir.str().c_str());
+    logos_core_add_modules_dir(tmpDir.str().c_str());
     logos_core_refresh_modules();
 
     char** known = logos_core_get_known_modules();
@@ -426,7 +426,7 @@ TEST_F(ModuleManagerTest, DiscoverInstalledModules_MultipleDirectories) {
     createFakeModule(tmpDir1.path, "module_in_dir1", "module_in_dir1_plugin.so");
     createFakeModule(tmpDir2.path, "module_in_dir2", "module_in_dir2_plugin.so");
 
-    logos_core_set_modules_dir(tmpDir1.str().c_str());
+    logos_core_add_modules_dir(tmpDir1.str().c_str());
     logos_core_add_modules_dir(tmpDir2.str().c_str());
 
     ASSERT_EQ(logos_core_get_modules_dirs_count(), 2);
@@ -449,7 +449,7 @@ TEST_F(ModuleManagerTest, DiscoverInstalledModules_InvalidManifestJson) {
     mf << "{ this is not valid json }}}";
     mf.close();
 
-    logos_core_set_modules_dir(tmpDir.str().c_str());
+    logos_core_add_modules_dir(tmpDir.str().c_str());
     logos_core_refresh_modules();
 
     char** known = logos_core_get_known_modules();
@@ -528,7 +528,7 @@ TEST_F(RealModuleRegistryTest, ProcessModule_RegistersRealModule) {
 }
 
 // =============================================================================
-// Cascading unload: logos_core_unload_module_with_dependents
+// Cascading unload: logos_core_unload_module(name, true)
 //
 // The cascade is exercised without real Qt modules. We:
 //   1. Set up fake manifests on disk (PackageManagerLib scan sees the
@@ -578,19 +578,19 @@ protected:
         for (const auto& [name, deps] : modules) {
             createFakeModule(tmpDir.path, name, name + "_plugin.so", "core", deps);
         }
-        logos_core_set_modules_dir(tmpDir.str().c_str());
+        logos_core_add_modules_dir(tmpDir.str().c_str());
         logos_core_refresh_modules();
     }
 };
 
-TEST_F(CascadeUnloadTest, UnloadModuleWithDependents_ReturnsZeroWhenTargetNotLoaded) {
+TEST_F(CascadeUnloadTest, UnloadWithDependents_ReturnsZeroWhenTargetNotLoaded) {
     // Module is known but not loaded.
     logos_core_register_module("foo", "/foo");
-    int result = logos_core_unload_module_with_dependents("foo");
+    int result = logos_core_unload_module("foo", true);
     EXPECT_EQ(result, 0);
 }
 
-TEST_F(CascadeUnloadTest, UnloadModuleWithDependents_NoDependents_UnloadsTargetOnly) {
+TEST_F(CascadeUnloadTest, UnloadWithDependents_NoDependents_UnloadsTargetOnly) {
     // Single loaded module with no dependents on disk → cascade is just the
     // target.
     writeManifestsAndScan({ {"solo", {}} });
@@ -598,13 +598,13 @@ TEST_F(CascadeUnloadTest, UnloadModuleWithDependents_NoDependents_UnloadsTargetO
 
     ASSERT_EQ(logos_core_is_module_loaded("solo"), 1);
 
-    int result = logos_core_unload_module_with_dependents("solo");
+    int result = logos_core_unload_module("solo", true);
     EXPECT_EQ(result, 1);
     EXPECT_EQ(logos_core_is_module_loaded("solo"), 0);
     EXPECT_EQ(logos_core_has_process("solo"), 0);
 }
 
-TEST_F(CascadeUnloadTest, UnloadModuleWithDependents_RecursiveDependentsLeavesFirst) {
+TEST_F(CascadeUnloadTest, UnloadWithDependents_RecursiveDependentsLeavesFirst) {
     // Graph: a -> b -> c (a depends on b, b depends on c).
     // Unloading c should also bring down b and a, in the order a, b, c.
     writeManifestsAndScan({
@@ -620,7 +620,7 @@ TEST_F(CascadeUnloadTest, UnloadModuleWithDependents_RecursiveDependentsLeavesFi
     ASSERT_EQ(logos_core_is_module_loaded("b"), 1);
     ASSERT_EQ(logos_core_is_module_loaded("c"), 1);
 
-    int result = logos_core_unload_module_with_dependents("c");
+    int result = logos_core_unload_module("c", true);
     EXPECT_EQ(result, 1);
 
     EXPECT_EQ(logos_core_is_module_loaded("a"), 0);
@@ -632,7 +632,7 @@ TEST_F(CascadeUnloadTest, UnloadModuleWithDependents_RecursiveDependentsLeavesFi
     EXPECT_EQ(logos_core_has_process("c"), 0);
 }
 
-TEST_F(CascadeUnloadTest, UnloadModuleWithDependents_UnloadedDependentsIgnored) {
+TEST_F(CascadeUnloadTest, UnloadWithDependents_UnloadedDependentsIgnored) {
     // b depends on c. Only c is loaded; b is known but not loaded. Cascade
     // should only touch c. b stays unloaded (not "failed to unload").
     writeManifestsAndScan({
@@ -645,14 +645,14 @@ TEST_F(CascadeUnloadTest, UnloadModuleWithDependents_UnloadedDependentsIgnored) 
     const char* depsB[] = {"c"};
     logos_core_register_module_dependencies("b", depsB, 1);
 
-    int result = logos_core_unload_module_with_dependents("c");
+    int result = logos_core_unload_module("c", true);
     EXPECT_EQ(result, 1);
 
     EXPECT_EQ(logos_core_is_module_loaded("c"), 0);
     EXPECT_EQ(logos_core_is_module_loaded("b"), 0);
 }
 
-TEST_F(CascadeUnloadTest, UnloadModuleWithDependents_DiamondDependents) {
+TEST_F(CascadeUnloadTest, UnloadWithDependents_DiamondDependents) {
     // Diamond: a -> b -> d ; a -> c -> d. Unloading d should bring down
     // a, b, c in some valid order (a before b and c; b and c before d).
     writeManifestsAndScan({
@@ -666,7 +666,7 @@ TEST_F(CascadeUnloadTest, UnloadModuleWithDependents_DiamondDependents) {
     setupLoaded("c", {"d"});
     setupLoaded("a", {"b", "c"});
 
-    int result = logos_core_unload_module_with_dependents("d");
+    int result = logos_core_unload_module("d", true);
     EXPECT_EQ(result, 1);
 
     EXPECT_EQ(logos_core_is_module_loaded("a"), 0);
@@ -675,8 +675,8 @@ TEST_F(CascadeUnloadTest, UnloadModuleWithDependents_DiamondDependents) {
     EXPECT_EQ(logos_core_is_module_loaded("d"), 0);
 }
 
-TEST_F(CascadeUnloadTest, UnloadModuleWithDependents_AbortsForNull) {
-    EXPECT_DEATH(logos_core_unload_module_with_dependents(nullptr), "");
+TEST_F(CascadeUnloadTest, UnloadWithDependents_AbortsForNull) {
+    EXPECT_DEATH(logos_core_unload_module(nullptr, true), "");
 }
 
 TEST_F(RealModuleRegistryTest, ProcessModule_PreservesLoadedFlagOnReprocess) {
