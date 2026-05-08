@@ -16,10 +16,6 @@ void logos_core_init(int argc, char *argv[]) {
     (void)argv;
 }
 
-void logos_core_set_modules_dir(const char* modules_dir) {
-    ModuleManager::setModulesDir(modules_dir);
-}
-
 void logos_core_add_modules_dir(const char* modules_dir) {
     ModuleManager::addModulesDir(modules_dir);
 }
@@ -28,10 +24,6 @@ void logos_core_start() {
     LogosInstance::id();
     ModuleManager::discoverInstalledModules();
     ModuleManager::initializeCapabilityModule();
-}
-
-int logos_core_exec() {
-    return 0;
 }
 
 void logos_core_cleanup() {
@@ -46,24 +38,18 @@ char** logos_core_get_known_modules() {
     return ModuleManager::getKnownModulesCStr();
 }
 
-int logos_core_load_module(const char* module_name) {
+int logos_core_load_module(const char* module_name, bool with_dependencies) {
     if (!module_name) { fprintf(stderr, "logos_core_load_module: module_name must not be null\n"); std::abort(); }
+    if (with_dependencies)
+        return ModuleManager::loadModuleWithDependencies(module_name) ? 1 : 0;
     return ModuleManager::loadModule(module_name) ? 1 : 0;
 }
 
-int logos_core_load_module_with_dependencies(const char* module_name) {
-    if (!module_name) { fprintf(stderr, "logos_core_load_module_with_dependencies: module_name must not be null\n"); std::abort(); }
-    return ModuleManager::loadModuleWithDependencies(module_name) ? 1 : 0;
-}
-
-int logos_core_unload_module(const char* module_name) {
+int logos_core_unload_module(const char* module_name, bool with_dependents) {
     if (!module_name) { fprintf(stderr, "logos_core_unload_module: module_name must not be null\n"); std::abort(); }
+    if (with_dependents)
+        return ModuleManager::unloadModuleWithDependents(module_name) ? 1 : 0;
     return ModuleManager::unloadModule(module_name) ? 1 : 0;
-}
-
-int logos_core_unload_module_with_dependents(const char* module_name) {
-    if (!module_name) { fprintf(stderr, "logos_core_unload_module_with_dependents: module_name must not be null\n"); std::abort(); }
-    return ModuleManager::unloadModuleWithDependents(module_name) ? 1 : 0;
 }
 
 char** logos_core_get_module_dependencies(const char* module_name, bool recursive) {
@@ -117,17 +103,49 @@ void logos_core_refresh_modules()
     ModuleManager::discoverInstalledModules();
 }
 
+// =========================================================================
+// DEPRECATED wrappers — forward to the current API.
+// =========================================================================
+
+void logos_core_set_modules_dir(const char* modules_dir) {
+    fprintf(stderr, "DEPRECATED: logos_core_set_modules_dir — use logos_core_add_modules_dir\n");
+    ModuleManager::setModulesDir(modules_dir);
+}
+
+int logos_core_load_module_v1(const char* module_name) {
+    fprintf(stderr, "DEPRECATED: logos_core_load_module_v1 — use logos_core_load_module(name, false)\n");
+    return logos_core_load_module(module_name, false);
+}
+
+int logos_core_load_module_with_dependencies(const char* module_name) {
+    fprintf(stderr, "DEPRECATED: logos_core_load_module_with_dependencies — use logos_core_load_module(name, true)\n");
+    return logos_core_load_module(module_name, true);
+}
+
+int logos_core_unload_module_v1(const char* module_name) {
+    fprintf(stderr, "DEPRECATED: logos_core_unload_module_v1 — use logos_core_unload_module(name, false)\n");
+    return logos_core_unload_module(module_name, false);
+}
+
+int logos_core_unload_module_with_dependents(const char* module_name) {
+    fprintf(stderr, "DEPRECATED: logos_core_unload_module_with_dependents — use logos_core_unload_module(name, true)\n");
+    return logos_core_unload_module(module_name, true);
+}
+
+int logos_core_exec() {
+    fprintf(stderr, "DEPRECATED: logos_core_exec — will be removed in a future release\n");
+    return 0;
+}
 
 void logos_core_process_events()
 {
+    fprintf(stderr, "DEPRECATED: logos_core_process_events — will be removed in a future release\n");
 }
 
-// =========================================================================
-// DEPRECATED wrappers — forward to the new logos_core_*_module* functions.
-// =========================================================================
+// Old "plugin" names — forward to current API.
 
 void logos_core_set_plugins_dir(const char* plugins_dir) {
-    fprintf(stderr, "DEPRECATED: logos_core_set_plugins_dir — use logos_core_set_modules_dir\n");
+    fprintf(stderr, "DEPRECATED: logos_core_set_plugins_dir — use logos_core_add_modules_dir\n");
     logos_core_set_modules_dir(plugins_dir);
 }
 
@@ -148,22 +166,22 @@ char** logos_core_get_known_plugins() {
 
 int logos_core_load_plugin(const char* plugin_name) {
     fprintf(stderr, "DEPRECATED: logos_core_load_plugin — use logos_core_load_module\n");
-    return logos_core_load_module(plugin_name);
+    return logos_core_load_module(plugin_name, false);
 }
 
 int logos_core_load_plugin_with_dependencies(const char* plugin_name) {
-    fprintf(stderr, "DEPRECATED: logos_core_load_plugin_with_dependencies — use logos_core_load_module_with_dependencies\n");
-    return logos_core_load_module_with_dependencies(plugin_name);
+    fprintf(stderr, "DEPRECATED: logos_core_load_plugin_with_dependencies — use logos_core_load_module(name, true)\n");
+    return logos_core_load_module(plugin_name, true);
 }
 
 int logos_core_unload_plugin(const char* plugin_name) {
     fprintf(stderr, "DEPRECATED: logos_core_unload_plugin — use logos_core_unload_module\n");
-    return logos_core_unload_module(plugin_name);
+    return logos_core_unload_module(plugin_name, false);
 }
 
 int logos_core_unload_plugin_with_dependents(const char* plugin_name) {
-    fprintf(stderr, "DEPRECATED: logos_core_unload_plugin_with_dependents — use logos_core_unload_module_with_dependents\n");
-    return logos_core_unload_module_with_dependents(plugin_name);
+    fprintf(stderr, "DEPRECATED: logos_core_unload_plugin_with_dependents — use logos_core_unload_module(name, true)\n");
+    return logos_core_unload_module(plugin_name, true);
 }
 
 char* logos_core_process_plugin(const char* plugin_path) {

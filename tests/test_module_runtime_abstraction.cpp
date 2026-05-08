@@ -130,7 +130,7 @@ protected:
 TEST_F(ModuleRuntimeAbstractionTest, LoadModule_CallsFakeRuntimeLoad) {
     registerModule("foo");
 
-    int result = logos_core_load_module("foo");
+    int result = logos_core_load_module("foo", false);
     ASSERT_EQ(result, 1);
 
     ASSERT_EQ(fake->loadCalls.size(), 1u);
@@ -140,7 +140,7 @@ TEST_F(ModuleRuntimeAbstractionTest, LoadModule_CallsFakeRuntimeLoad) {
 TEST_F(ModuleRuntimeAbstractionTest, LoadModule_CallsSendTokenAfterLoad) {
     registerModule("foo");
 
-    logos_core_load_module("foo");
+    logos_core_load_module("foo", false);
 
     ASSERT_EQ(fake->sendTokenCalls.size(), 1u);
     EXPECT_EQ(fake->sendTokenCalls[0].first, "foo");
@@ -150,14 +150,14 @@ TEST_F(ModuleRuntimeAbstractionTest, LoadModule_CallsSendTokenAfterLoad) {
 TEST_F(ModuleRuntimeAbstractionTest, LoadModule_MarksModuleAsLoaded) {
     registerModule("foo");
 
-    logos_core_load_module("foo");
+    logos_core_load_module("foo", false);
 
     EXPECT_EQ(logos_core_is_module_loaded("foo"), 1);
 }
 
 TEST_F(ModuleRuntimeAbstractionTest, LoadModule_StoresRuntimeInRegistry) {
     registerModule("foo");
-    logos_core_load_module("foo");
+    logos_core_load_module("foo", false);
 
     auto rt = ModuleManager::registry().runtimeFor("foo");
     EXPECT_EQ(rt.get(), fake.get());
@@ -165,9 +165,9 @@ TEST_F(ModuleRuntimeAbstractionTest, LoadModule_StoresRuntimeInRegistry) {
 
 TEST_F(ModuleRuntimeAbstractionTest, UnloadModule_CallsFakeRuntimeTerminate) {
     registerModule("foo");
-    logos_core_load_module("foo");
+    logos_core_load_module("foo", false);
 
-    int result = logos_core_unload_module("foo");
+    int result = logos_core_unload_module("foo", false);
     ASSERT_EQ(result, 1);
 
     ASSERT_EQ(fake->terminateCalls.size(), 1u);
@@ -176,8 +176,8 @@ TEST_F(ModuleRuntimeAbstractionTest, UnloadModule_CallsFakeRuntimeTerminate) {
 
 TEST_F(ModuleRuntimeAbstractionTest, UnloadModule_MarksModuleAsUnloaded) {
     registerModule("foo");
-    logos_core_load_module("foo");
-    logos_core_unload_module("foo");
+    logos_core_load_module("foo", false);
+    logos_core_unload_module("foo", false);
 
     EXPECT_EQ(logos_core_is_module_loaded("foo"), 0);
 }
@@ -193,7 +193,7 @@ TEST_F(ModuleRuntimeAbstractionTest, LoadWithDeps_LoadsInTopologicalOrder) {
     registerModule("b", {"a"});
     registerModule("c", {"b"});
 
-    int result = logos_core_load_module_with_dependencies("c");
+    int result = logos_core_load_module("c", true);
     ASSERT_EQ(result, 1);
 
     ASSERT_EQ(fake->loadCalls.size(), 3u);
@@ -206,10 +206,10 @@ TEST_F(ModuleRuntimeAbstractionTest, LoadWithDeps_SkipsAlreadyLoadedModules) {
     registerModule("a");
     registerModule("b", {"a"});
 
-    logos_core_load_module("a");
+    logos_core_load_module("a", false);
     fake->loadCalls.clear();
 
-    logos_core_load_module_with_dependencies("b");
+    logos_core_load_module("b", true);
 
     ASSERT_EQ(fake->loadCalls.size(), 1u);
     EXPECT_EQ(fake->loadCalls[0], "b");
@@ -221,7 +221,7 @@ TEST_F(ModuleRuntimeAbstractionTest, LoadWithDeps_SkipsAlreadyLoadedModules) {
 
 TEST_F(ModuleRuntimeAbstractionTest, TerminateAll_CallsFakeTerminateAll) {
     registerModule("foo");
-    logos_core_load_module("foo");
+    logos_core_load_module("foo", false);
 
     logos_core_terminate_all();
 
@@ -237,7 +237,7 @@ TEST_F(ModuleRuntimeAbstractionTest, LoadModule_ReturnsFalseWhenRuntimeLoadFails
     registerModule("bad");
     fake->failOn.insert("bad");
 
-    int result = logos_core_load_module("bad");
+    int result = logos_core_load_module("bad", false);
     EXPECT_EQ(result, 0);
 }
 
@@ -245,7 +245,7 @@ TEST_F(ModuleRuntimeAbstractionTest, LoadModule_DoesNotCallSendTokenOnLoadFailur
     registerModule("bad");
     fake->failOn.insert("bad");
 
-    logos_core_load_module("bad");
+    logos_core_load_module("bad", false);
 
     EXPECT_TRUE(fake->sendTokenCalls.empty());
 }
@@ -254,13 +254,13 @@ TEST_F(ModuleRuntimeAbstractionTest, LoadModule_DoesNotMarkAsLoadedOnFailure) {
     registerModule("bad");
     fake->failOn.insert("bad");
 
-    logos_core_load_module("bad");
+    logos_core_load_module("bad", false);
 
     EXPECT_EQ(logos_core_is_module_loaded("bad"), 0);
 }
 
 TEST_F(ModuleRuntimeAbstractionTest, LoadModule_ReturnsFalseForUnknownModule) {
-    int result = logos_core_load_module("not_registered");
+    int result = logos_core_load_module("not_registered", false);
     EXPECT_EQ(result, 0);
     EXPECT_TRUE(fake->loadCalls.empty());
 }

@@ -291,22 +291,17 @@ The public C API (`logos_core.h`) is the only exported interface. All functions 
 |----------|-------------|
 | `logos_core_init(argc, argv)` | Initialize the library |
 | `logos_core_start()` | Discover modules and initialize capability module |
-| `logos_core_exec() → int` | Run the Qt event loop |
 | `logos_core_cleanup()` | Terminate all modules and clean up |
-| `logos_core_process_events()` | Process Qt events without blocking |
 
 **Module Management:**
 
 | Function | Description |
 |----------|-------------|
-| `logos_core_set_modules_dir(dir)` | Set primary module directory |
-| `logos_core_add_modules_dir(dir)` | Add additional module directory |
+| `logos_core_add_modules_dir(dir)` | Add a module directory to scan (duplicates ignored) |
 | `logos_core_set_persistence_base_path(path)` | Set base directory for module instance persistence |
 | `logos_core_set_module_transports(name, json)` | Register a per-module transport set (JSON, see logos-cpp-sdk shape). Forwarded to the child via `--transport-set` so its `LogosAPIProvider` binds every listener instead of only the global default LocalSocket. Must be called before the module is loaded; empty clears the entry |
-| `logos_core_load_module(name) → int` | Load a module (1 = success, 0 = failure) |
-| `logos_core_load_module_with_dependencies(name) → int` | Load module and dependencies in order |
-| `logos_core_unload_module(name) → int` | Unload a module |
-| `logos_core_unload_module_with_dependents(name) → int` | Cascade unload: terminate the module together with every loaded transitive dependent, leaves-first. Returns 1 only if every step succeeded |
+| `logos_core_load_module(name, with_dependencies) → int` | Load a module (1 = success, 0 = failure). When `with_dependencies` is true, resolves the dependency tree and loads in topological order |
+| `logos_core_unload_module(name, with_dependents) → int` | Unload a module. When `with_dependents` is true, cascade unloads every loaded transitive dependent leaves-first. Returns 1 only if every step succeeded |
 | `logos_core_get_module_dependencies(name, recursive) → char**` | Modules that `name` depends on (forward edges). `recursive=true` walks the forward graph transitively. Unknown names yield an empty array. Caller frees |
 | `logos_core_get_module_dependents(name, recursive) → char**` | Modules that depend on `name` (reverse edges). `recursive=true` walks transitively. Unknown names yield an empty array. Caller frees |
 | `logos_core_process_module(path) → char*` | Process module file, return name (caller frees) |
@@ -325,10 +320,23 @@ The public C API (`logos_core.h`) is the only exported interface. All functions 
 
 | Category | Guarantee |
 |----------|-----------|
-| `logos_core_load_module`, `logos_core_load_module_with_dependencies`, `logos_core_unload_module`, `logos_core_unload_module_with_dependents` | Serialised by a single internal mutex — safe to call concurrently from multiple threads. The cascade variant holds the lock for the entire leaves-first teardown so a late-arriving load can't interleave between tearing down the dependents and the target |
+| `logos_core_load_module`, `logos_core_unload_module` | Serialised by a single internal mutex — safe to call concurrently from multiple threads. The cascade variant (`with_dependents=true`) holds the lock for the entire leaves-first teardown so a late-arriving load can't interleave between tearing down the dependents and the target |
 | `logos_core_get_known_modules`, `logos_core_get_loaded_modules` | Protected by a shared reader-writer lock — safe to call concurrently with each other and with the mutating functions above |
 | `logos_core_refresh_modules` | Protected by `ModuleRegistry`'s reader-writer lock (write side) — safe for concurrent registry access but not serialised against load/unload |
 | `logos_core_init`, `logos_core_start`, `logos_core_cleanup` | Not thread-safe — must be called from a single thread during startup/shutdown |
+
+### Deprecated Functions
+
+The following functions are kept for backward compatibility but emit a deprecation warning to stderr. New code should use the current API above.
+
+| Deprecated Function | Replacement |
+|---------------------|-------------|
+| `logos_core_set_modules_dir(dir)` | `logos_core_add_modules_dir(dir)` (first call on empty list is equivalent) |
+| `logos_core_exec()` | Removed (was a no-op stub) |
+| `logos_core_process_events()` | Removed (was a no-op stub) |
+| `logos_core_load_module_with_dependencies(name)` | `logos_core_load_module(name, true)` |
+| `logos_core_unload_module_with_dependents(name)` | `logos_core_unload_module(name, true)` |
+| `logos_core_*_plugin*` variants | Corresponding `logos_core_*_module*` functions |
 
 ## Build Artifacts
 
@@ -442,10 +450,10 @@ Build portable with Nix: `nix build '.#portable'`
 
 int main(int argc, char *argv[]) {
     logos_core_init(argc, argv);
-    logos_core_set_modules_dir("/path/to/modules");
+    logos_core_add_modules_dir("/path/to/modules");
 
     logos_core_start();
-    logos_core_load_module("chat");
+    logos_core_load_module("chat", false);
 
     char** loaded = logos_core_get_loaded_modules();
     for (int i = 0; loaded[i] != NULL; i++) {
@@ -453,9 +461,8 @@ int main(int argc, char *argv[]) {
     }
     free(loaded);
 
-    int result = logos_core_exec();
     logos_core_cleanup();
-    return result;
+    return 0;
 }
 ```
 
@@ -463,7 +470,7 @@ int main(int argc, char *argv[]) {
 
 ```c
 // Resolves the dependency tree and loads in correct order
-logos_core_load_module_with_dependencies("my_module");
+logos_core_load_module("my_module", true);
 ```
 
 ## Continuous Integration
