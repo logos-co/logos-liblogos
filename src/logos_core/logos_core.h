@@ -18,17 +18,12 @@ extern "C" {
 // Initialize the logos core library
 LOGOS_CORE_EXPORT void logos_core_init(int argc, char *argv[]);
 
-// Set a custom modules directory
-LOGOS_CORE_EXPORT void logos_core_set_modules_dir(const char* modules_dir);
-
-// Add an additional modules directory to scan (allows multiple directories)
+// Add a modules directory to scan (allows multiple directories).
+// Duplicate paths are silently ignored.
 LOGOS_CORE_EXPORT void logos_core_add_modules_dir(const char* modules_dir);
 
 // Start the logos core functionality
 LOGOS_CORE_EXPORT void logos_core_start();
-
-// Run the event loop
-LOGOS_CORE_EXPORT int logos_core_exec();
 
 // Clean up resources
 LOGOS_CORE_EXPORT void logos_core_cleanup();
@@ -41,24 +36,18 @@ LOGOS_CORE_EXPORT char** logos_core_get_loaded_modules();
 // Returns a null-terminated array of module names that must be freed by the caller
 LOGOS_CORE_EXPORT char** logos_core_get_known_modules();
 
-// Load a specific module by name
+// Load a specific module by name.
+// When with_dependencies is true, resolves the dependency tree and loads
+// modules in correct topological order before loading the target.
 // Returns 1 if successful, 0 if failed
-LOGOS_CORE_EXPORT int logos_core_load_module(const char* module_name);
+LOGOS_CORE_EXPORT int logos_core_load_module(const char* module_name, bool with_dependencies);
 
-// Load a module and all its dependencies automatically
-// Resolves the dependency tree and loads modules in correct order
-// Returns 1 if all modules loaded successfully, 0 if any failed
-LOGOS_CORE_EXPORT int logos_core_load_module_with_dependencies(const char* module_name);
-
-// Unload a specific module by name
+// Unload a specific module by name.
+// When with_dependents is true, also unloads every loaded module that
+// (transitively) depends on it. Dependents come down first (leaves-first)
+// so no process is briefly pointing at a terminated parent.
 // Returns 1 if successful, 0 if failed
-LOGOS_CORE_EXPORT int logos_core_unload_module(const char* module_name);
-
-// Unload a module together with every loaded module that (transitively)
-// depends on it. Dependents come down first (leaves-first) so no process is
-// briefly pointing at a terminated parent. Returns 1 only if every step
-// succeeded.
-LOGOS_CORE_EXPORT int logos_core_unload_module_with_dependents(const char* module_name);
+LOGOS_CORE_EXPORT int logos_core_unload_module(const char* module_name, bool with_dependents);
 
 // Return the modules that `module_name` depends on (forward edges).
 // If `recursive` is true, returns the full transitive dependency closure
@@ -112,15 +101,33 @@ LOGOS_CORE_EXPORT void logos_core_set_module_transports(const char* module_name,
 // Call after installing new modules so they become discoverable.
 LOGOS_CORE_EXPORT void logos_core_refresh_modules();
 
+// =========================================================================
+// DEPRECATED — kept for backward compatibility.
+// Each forwards to the corresponding current function above.
+// =========================================================================
 
-// Process Qt events without blocking (for integration with other event loops)
+// Replaced by logos_core_add_modules_dir (first call on empty list is equivalent)
+LOGOS_CORE_EXPORT void logos_core_set_modules_dir(const char* modules_dir);
+
+// Replaced by logos_core_load_module(name, false)
+LOGOS_CORE_EXPORT int logos_core_load_module_v1(const char* module_name);
+
+// Replaced by logos_core_load_module(name, true)
+LOGOS_CORE_EXPORT int logos_core_load_module_with_dependencies(const char* module_name);
+
+// Replaced by logos_core_unload_module(name, false)
+LOGOS_CORE_EXPORT int logos_core_unload_module_v1(const char* module_name);
+
+// Replaced by logos_core_unload_module(name, true)
+LOGOS_CORE_EXPORT int logos_core_unload_module_with_dependents(const char* module_name);
+
+// No-op stub, will be removed in a future release
+LOGOS_CORE_EXPORT int logos_core_exec();
+
+// No-op stub, will be removed in a future release
 LOGOS_CORE_EXPORT void logos_core_process_events();
 
-// =========================================================================
-// DEPRECATED — old "plugin" names kept for backward compatibility.
-// Each forwards to the corresponding logos_core_*_module* function above.
-// =========================================================================
-
+// Old "plugin" names — forward to the corresponding logos_core_*_module* function
 LOGOS_CORE_EXPORT void logos_core_set_plugins_dir(const char* plugins_dir);
 LOGOS_CORE_EXPORT void logos_core_add_plugins_dir(const char* plugins_dir);
 LOGOS_CORE_EXPORT char** logos_core_get_loaded_plugins();
