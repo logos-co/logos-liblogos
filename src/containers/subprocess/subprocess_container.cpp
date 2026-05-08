@@ -16,6 +16,8 @@
 #include <sys/un.h>
 #include <unistd.h>
 
+#include "unix_socket_path.h"
+
 #include <array>
 #include <atomic>
 #include <chrono>
@@ -152,17 +154,11 @@ IoRuntime::~IoRuntime() {
 // Unix domain socket path
 // ---------------------------------------------------------------------------
 
-std::string unixSocketPath(const std::string& name) {
-    const char* tmp = getenv("TMPDIR");
-    std::string dir;
-    if (tmp && tmp[0]) {
-        dir = tmp;
-        while (!dir.empty() && dir.back() == '/') dir.pop_back();
-    } else {
-        dir = "/tmp";
-    }
-    return dir + "/" + name;
-}
+// Resolve the socket path via the shared Qt-free helper. The child
+// (qt_token_receiver) computes the same path with the same helper and
+// passes it to QLocalServer::listen() as an absolute path, so Qt's
+// QDir::tempPath() resolution is bypassed on both sides.
+using ::logos::unixSocketPath;
 
 // ---------------------------------------------------------------------------
 // Async read loop

@@ -1,26 +1,47 @@
 #include "token_receiver.h"
+#include "unix_socket_path.h"
 #include <QByteArray>
 #include <QLocalServer>
 #include <QLocalSocket>
 #include <QString>
 #include <spdlog/spdlog.h>
 
+#include <cstdlib>
+#include <string>
+
 namespace SubprocessTokenReceiver {
 
 std::string receive(const std::string& moduleName)
 {
-    const QByteArray instanceId = qgetenv("LOGOS_INSTANCE_ID");
-    QString socketName = instanceId.isEmpty()
-        ? QString("logos_token_%1").arg(QString::fromStdString(moduleName))
-        : QString("logos_token_%1_%2")
-              .arg(QString::fromStdString(moduleName))
-              .arg(QString::fromUtf8(instanceId));
+    // Scope the socket name by LOGOS_INSTANCE_ID so parallel Logos instances
+    // (multiple daemons or Basecamp profiles) loading the same module don't
+    // race on a shared socket. SubprocessContainer (parent) uses the same
+    // scheme; both read the instance ID from the inherited env var.
+    const char* instanceIdEnv = std::getenv("LOGOS_INSTANCE_ID");
+    std::string socketName = "logos_token_" + moduleName;
+    if (instanceIdEnv && instanceIdEnv[0]) {
+        socketName += '_';
+        socketName += instanceIdEnv;
+    }
+
+    // Resolve the full absolute path using the shared Qt-free helper
+    // (see unix_socket_path.h). The parent in SubprocessContainer uses
+    // the same helper for connect(); passing the absolute path to
+    // QLocalServer::listen() bypasses Qt's QDir::tempPath() resolution
+    // so the two sides cannot disagree under environments like
+    // `nix run`, where $TMPDIR is unset on macOS and naive
+    // getenv("TMPDIR") falls back to /tmp/<name> while Qt resolves
+    // /var/folders/.../T/<name> via confstr(_CS_DARWIN_USER_TEMP_DIR).
+    const std::string socketPath = ::logos::unixSocketPath(socketName);
+    const QString socketPathQ = QString::fromStdString(socketPath);
+
     QLocalServer* tokenServer = new QLocalServer();
 
-    QLocalServer::removeServer(socketName);
+    QLocalServer::removeServer(socketPathQ);
 
-    if (!tokenServer->listen(socketName)) {
-        spdlog::critical("Failed to start token server: {}", tokenServer->errorString().toStdString());
+    if (!tokenServer->listen(socketPathQ)) {
+        spdlog::critical("Failed to start token server at {}: {}", socketPath,
+                         tokenServer->errorString().toStdString());
         return {};
     }
 
