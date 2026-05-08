@@ -1,4 +1,4 @@
-#include "subprocess_manager.h"
+#include "subprocess_container.h"
 
 #include <boost/asio/connect_pipe.hpp>
 #include <boost/asio/executor_work_guard.hpp>
@@ -8,7 +8,6 @@
 #include <boost/asio/writable_pipe.hpp>
 #include <boost/process/v2/process.hpp>
 #include <boost/process/v2/stdio.hpp>
-#include <boost/dll/runtime_symbol_info.hpp>
 
 #include <spdlog/spdlog.h>
 #include <spdlog/sinks/stdout_color_sinks.h>
@@ -23,7 +22,6 @@
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
-#include <filesystem>
 #include <memory>
 #include <mutex>
 #include <string>
@@ -32,13 +30,9 @@
 
 namespace bp2  = boost::process::v2;
 namespace asio = boost::asio;
-namespace fs   = std::filesystem;
 
 namespace {
 
-// Dedicated logger for child stdout — uses a pattern that prints a
-// fictional "[out]" level, so stdout lines visually align with spdlog
-// output but are clearly distinguished from stderr-classified lines.
 std::shared_ptr<spdlog::logger>& moduleStdoutLogger() {
     static std::shared_ptr<spdlog::logger> logger = []() {
         auto l = spdlog::stdout_color_mt("logos_module_stdout");
@@ -46,52 +40,6 @@ std::shared_ptr<spdlog::logger>& moduleStdoutLogger() {
         return l;
     }();
     return logger;
-}
-
-// ---------------------------------------------------------------------------
-// logos_host_qt resolution (moved from qt_subprocess_runtime.cpp)
-// ---------------------------------------------------------------------------
-
-fs::path findInDir(const fs::path& dir) {
-    for (const auto& name : {"logos_host_qt", "logos_host"}) {
-        auto candidate = (dir / name).lexically_normal();
-        if (fs::exists(candidate))
-            return candidate;
-    }
-    return {};
-}
-
-std::string resolveLogosHostPath(const std::vector<std::string>& modulesDirs) {
-    std::string logosHostPath;
-
-    const char* envPath = std::getenv("LOGOS_HOST_PATH");
-    if (envPath)
-        logosHostPath = envPath;
-
-    if (logosHostPath.empty()) {
-        auto found = findInDir(fs::path(boost::dll::program_location().parent_path().string()));
-        if (!found.empty())
-            logosHostPath = found.string();
-    }
-
-    if (logosHostPath.empty() || !fs::exists(logosHostPath)) {
-        if (!modulesDirs.empty()) {
-            auto binDir = fs::absolute(
-                fs::path(modulesDirs.front()) / ".." / "bin"
-            ).lexically_normal();
-            auto found = findInDir(binDir);
-            if (!found.empty())
-                logosHostPath = found.string();
-        }
-    }
-
-    if (logosHostPath.empty() || !fs::exists(logosHostPath)) {
-        spdlog::critical("logos_host_qt (or logos_host) not found - set LOGOS_HOST_PATH or place it next to the executable (last tried: {})",
-                         logosHostPath);
-        return {};
-    }
-
-    return logosHostPath;
 }
 
 // ---------------------------------------------------------------------------
@@ -108,10 +56,6 @@ struct IoRuntime {
         , thread([this]() { ctx.run(); })
     {}
 
-    // Out-of-line — defined after s_processes so it can drop the live
-    // ProcessEntries (which hold asio handles tied to ctx) before
-    // letting ctx itself be destroyed. See the comment on s_processes
-    // below for the static-destruction-order rationale.
     ~IoRuntime();
 };
 
@@ -125,22 +69,21 @@ IoRuntime& ioRuntime() {
 // ---------------------------------------------------------------------------
 
 struct ProcessEntry {
-    bp2::process                           process;
-    asio::readable_pipe                    out_pipe;
-    asio::readable_pipe                    err_pipe;
-    SubprocessManager::ProcessCallbacks    callbacks;
-    std::string                            name;
-    std::array<char, 4096>                 out_read_buf{};
-    std::array<char, 4096>                 err_read_buf{};
-    std::string                            out_line_buf;
-    std::string                            err_line_buf;
-    // Set by async_wait callback; used by syncKill to avoid double-waitpid.
-    std::atomic<bool>                exited{false};
-    std::atomic<bool>                cancelled{false};
+    bp2::process                              process;
+    asio::readable_pipe                       out_pipe;
+    asio::readable_pipe                       err_pipe;
+    SubprocessContainer::ProcessCallbacks     callbacks;
+    std::string                               name;
+    std::array<char, 4096>                    out_read_buf{};
+    std::array<char, 4096>                    err_read_buf{};
+    std::string                               out_line_buf;
+    std::string                               err_line_buf;
+    std::atomic<bool>                         exited{false};
+    std::atomic<bool>                         cancelled{false};
 
     ProcessEntry(bp2::process proc,
                  asio::readable_pipe out_rp, asio::readable_pipe err_rp,
-                 const std::string& n, const SubprocessManager::ProcessCallbacks& cb)
+                 const std::string& n, const SubprocessContainer::ProcessCallbacks& cb)
         : process(std::move(proc))
         , out_pipe(std::move(out_rp))
         , err_pipe(std::move(err_rp))
@@ -222,9 +165,7 @@ std::string unixSocketPath(const std::string& name) {
 }
 
 // ---------------------------------------------------------------------------
-// Async read loop: reads stdout and stderr separately from child, fires
-// onOutput per line with the correct isStderr flag.
-// Called from the io_context thread.
+// Async read loop
 // ---------------------------------------------------------------------------
 
 void scheduleRead(std::shared_ptr<ProcessEntry> entry, bool isStderr);
@@ -251,8 +192,6 @@ void handleRead(std::shared_ptr<ProcessEntry> entry, bool isStderr,
     if (!ec) {
         scheduleRead(std::move(entry), isStderr);
     } else {
-        // Pipe closed — flush any remaining partial line (stripping a
-        // trailing CR, same as the newline loop above).
         if (!line_buf.empty() && entry->callbacks.onOutput) {
             if (line_buf.back() == '\r') line_buf.pop_back();
             if (!line_buf.empty())
@@ -317,8 +256,8 @@ void syncKill(std::shared_ptr<ProcessEntry> entry) {
     entry->cancelled.store(true);
 
     boost::system::error_code ec;
-    entry->out_pipe.close(ec); // cancel pending async_read on stdout
-    entry->err_pipe.close(ec); // cancel pending async_read on stderr
+    entry->out_pipe.close(ec);
+    entry->err_pipe.close(ec);
 
     entry->process.request_exit(ec);
 
@@ -332,11 +271,11 @@ void syncKill(std::shared_ptr<ProcessEntry> entry) {
     };
 
     if (!wait(std::chrono::seconds(5))) {
-        fprintf(stderr, "[SubprocessManager] Process did not terminate gracefully, killing: %s\n",
+        fprintf(stderr, "[SubprocessContainer] Process did not terminate gracefully, killing: %s\n",
                 entry->name.c_str());
         entry->process.terminate(ec);
         if (!wait(std::chrono::seconds(2))) {
-            fprintf(stderr, "[SubprocessManager] Process did not respond to SIGKILL: %s\n",
+            fprintf(stderr, "[SubprocessContainer] Process did not respond to SIGKILL: %s\n",
                     entry->name.c_str());
         }
     }
@@ -345,44 +284,20 @@ void syncKill(std::shared_ptr<ProcessEntry> entry) {
 } // anonymous namespace
 
 // ===========================================================================
-// ModuleRuntime interface
+// ModuleContainer interface
 // ===========================================================================
 
-bool SubprocessManager::canHandle(const LogosCore::ModuleDescriptor& desc) const
+bool SubprocessContainer::canHandle(const LogosCore::ModuleDescriptor& /*desc*/) const
 {
-    return desc.format == "qt-plugin" || desc.format.empty();
+    return true;
 }
 
-bool SubprocessManager::load(const LogosCore::ModuleDescriptor& desc,
-                              std::function<void(const std::string&)> onTerminated,
-                              LogosCore::LoadedModuleHandle& out)
+bool SubprocessContainer::launch(const LogosCore::ModuleDescriptor& desc,
+                                  const std::string& hostBinary,
+                                  const std::vector<std::string>& args,
+                                  std::function<void(const std::string&)> onTerminated,
+                                  LogosCore::LoadedModuleHandle& out)
 {
-    std::string logosHostPath = resolveLogosHostPath(desc.modulesDirs);
-    if (logosHostPath.empty())
-        return false;
-
-    std::vector<std::string> arguments = {
-        "--name", desc.name,
-        "--path", desc.path
-    };
-
-    if (!desc.instancePersistencePath.empty()) {
-        arguments.push_back("--instance-persistence-path");
-        arguments.push_back(desc.instancePersistencePath);
-    }
-
-    // Per-module transport set: forward the daemon-side serialized JSON
-    // verbatim. The child's command_line_parser deserializes it back
-    // into a LogosTransportSet and passes the result into LogosAPI's
-    // explicit-transport constructor, so its provider binds every
-    // listener instead of only the global default (LocalSocket).
-    // bp2 takes care of escaping; we pass the JSON as a single argv
-    // value, no shell quoting required.
-    if (!desc.transportSetJson.empty()) {
-        arguments.push_back("--transport-set");
-        arguments.push_back(desc.transportSetJson);
-    }
-
     ProcessCallbacks callbacks;
 
     callbacks.onFinished = [onTerminated](const std::string& pName, int exitCode, bool crashed) {
@@ -412,9 +327,6 @@ bool SubprocessManager::load(const LogosCore::ModuleDescriptor& desc,
                 if (line.find(k) != std::string::npos) return true;
             return false;
         };
-        // stderr: map common level prefixes (Qt's default message handler,
-        // test/assertion frameworks, spdlog-style output from children)
-        // onto spdlog levels. Default to info when no prefix is recognised.
         if (contains({"Critical:", "CRITICAL:", "Fatal:", "FATAL:"}))
             spdlog::critical("[{}] {}", pName, line);
         else if (contains({"Error:", "ERROR:", "FAILED:"}))
@@ -429,7 +341,7 @@ bool SubprocessManager::load(const LogosCore::ModuleDescriptor& desc,
             spdlog::info("[{}] {}", pName, line);
     };
 
-    if (!startProcess(desc.name, logosHostPath, arguments, callbacks))
+    if (!startProcess(desc.name, hostBinary, args, callbacks))
         return false;
 
     out.name = desc.name;
@@ -437,34 +349,34 @@ bool SubprocessManager::load(const LogosCore::ModuleDescriptor& desc,
     return true;
 }
 
-bool SubprocessManager::sendToken(const std::string& name, const std::string& token)
+bool SubprocessContainer::sendToken(const std::string& name, const std::string& token)
 {
     return sendTokenToProcess(name, token);
 }
 
-void SubprocessManager::terminate(const std::string& name)
+void SubprocessContainer::terminate(const std::string& name)
 {
     terminateProcess(name);
 }
 
-void SubprocessManager::terminateAll()
+void SubprocessContainer::terminateAll()
 {
     terminateAllProcesses();
 }
 
-bool SubprocessManager::hasModule(const std::string& name) const
+bool SubprocessContainer::hasModule(const std::string& name) const
 {
     return hasProcess(name);
 }
 
-std::optional<int64_t> SubprocessManager::pid(const std::string& name) const
+std::optional<int64_t> SubprocessContainer::pid(const std::string& name) const
 {
     int64_t p = getProcessId(name);
     if (p < 0) return std::nullopt;
     return p;
 }
 
-std::unordered_map<std::string, int64_t> SubprocessManager::getAllPids() const
+std::unordered_map<std::string, int64_t> SubprocessContainer::getAllPids() const
 {
     return getAllProcessIds();
 }
@@ -473,28 +385,26 @@ std::unordered_map<std::string, int64_t> SubprocessManager::getAllPids() const
 // Static process management API
 // ===========================================================================
 
-bool SubprocessManager::startProcess(const std::string& name, const std::string& executable,
-                                      const std::vector<std::string>& arguments,
-                                      const ProcessCallbacks& callbacks)
+bool SubprocessContainer::startProcess(const std::string& name, const std::string& executable,
+                                        const std::vector<std::string>& arguments,
+                                        const ProcessCallbacks& callbacks)
 {
     IoRuntime& rt = ioRuntime();
 
     boost::system::error_code ec;
 
-    // Separate pipes for stdout and stderr so the reader can distinguish
-    // them (child's stdout → out_rpipe, child's stderr → err_rpipe).
     asio::readable_pipe out_rpipe(rt.ctx), err_rpipe(rt.ctx);
     asio::writable_pipe out_wpipe(rt.ctx), err_wpipe(rt.ctx);
 
     asio::connect_pipe(out_rpipe, out_wpipe, ec);
     if (ec) {
-        fprintf(stderr, "[SubprocessManager] Failed to create stdout pipe for %s: %s\n",
+        fprintf(stderr, "[SubprocessContainer] Failed to create stdout pipe for %s: %s\n",
                 name.c_str(), ec.message().c_str());
         return false;
     }
     asio::connect_pipe(err_rpipe, err_wpipe, ec);
     if (ec) {
-        fprintf(stderr, "[SubprocessManager] Failed to create stderr pipe for %s: %s\n",
+        fprintf(stderr, "[SubprocessContainer] Failed to create stderr pipe for %s: %s\n",
                 name.c_str(), ec.message().c_str());
         return false;
     }
@@ -505,12 +415,11 @@ bool SubprocessManager::startProcess(const std::string& name, const std::string&
 
     bp2::process proc = bp2::default_process_launcher()(rt.ctx, ec, executable, arguments, pstdio);
 
-    // Close write ends in parent once child has inherited them
     out_wpipe.close();
     err_wpipe.close();
 
     if (ec) {
-        fprintf(stderr, "[SubprocessManager] Failed to start process for %s: %s\n",
+        fprintf(stderr, "[SubprocessContainer] Failed to start process for %s: %s\n",
                 name.c_str(), ec.message().c_str());
         return false;
     }
@@ -532,13 +441,10 @@ bool SubprocessManager::startProcess(const std::string& name, const std::string&
     return true;
 }
 
-bool SubprocessManager::sendTokenToProcess(const std::string& name,
-                                            const std::string& token,
-                                            int max_wait_ms)
+bool SubprocessContainer::sendTokenToProcess(const std::string& name,
+                                              const std::string& token,
+                                              int max_wait_ms)
 {
-    // Socket name is scoped by LOGOS_INSTANCE_ID so parallel Logos instances
-    // (multiple daemons or Basecamp profiles) don't clash when loading the same
-    // module. Matches the scheme in QtTokenReceiver on the receiver side.
     const char* instanceId = std::getenv("LOGOS_INSTANCE_ID");
     std::string socketName = "logos_token_" + name;
     if (instanceId && *instanceId) {
@@ -547,18 +453,11 @@ bool SubprocessManager::sendTokenToProcess(const std::string& name,
     }
     std::string path = unixSocketPath(socketName);
 
-    // Validate up front: sockaddr_un::sun_path is fixed-size
-    // (~104 bytes on macOS, ~108 on Linux). A long TMPDIR + module
-    // name + LOGOS_INSTANCE_ID combination overflows that buffer,
-    // and `strncpy(...sizeof(...) - 1)` below would silently
-    // truncate — leaving us connecting to a *different* (or
-    // nonexistent) socket while the child is bound to the full
-    // path. Fail loudly instead.
     {
         struct sockaddr_un sample{};
         if (path.size() >= sizeof(sample.sun_path)) {
             fprintf(stderr,
-                "[SubprocessManager] Unix socket path too long (%zu >= %zu): %s\n",
+                "[SubprocessContainer] Unix socket path too long (%zu >= %zu): %s\n",
                 path.size(), sizeof(sample.sun_path), path.c_str());
             std::shared_ptr<ProcessEntry> entry;
             {
@@ -574,15 +473,6 @@ bool SubprocessManager::sendTokenToProcess(const std::string& name,
         }
     }
 
-    // Deadline-driven retry loop. Sleep 50ms between attempts — fine
-    // grained enough that a hot child (socket up before we finish our
-    // own setup) returns within a couple of polls, but the total
-    // budget is generous: previously a hard-coded 900ms (10 × 100ms),
-    // which was tight enough that we'd lose to cold-start child Qt
-    // initialisation under load and end up with "Failed to connect to
-    // token socket" + a half-loaded module. The 5s default covers
-    // realistic worst case (cold dylib load + Qt platform bring-up
-    // + plugin parse) with margin.
     using clock = std::chrono::steady_clock;
     const auto deadline = clock::now() + std::chrono::milliseconds(max_wait_ms);
 
@@ -590,13 +480,12 @@ bool SubprocessManager::sendTokenToProcess(const std::string& name,
     for (;;) {
         sock = ::socket(AF_UNIX, SOCK_STREAM, 0);
         if (sock < 0) {
-            fprintf(stderr, "[SubprocessManager] socket() failed: %s\n", strerror(errno));
+            fprintf(stderr, "[SubprocessContainer] socket() failed: %s\n", strerror(errno));
             break;
         }
 
         struct sockaddr_un addr{};
         addr.sun_family = AF_UNIX;
-        // Length already validated above — strncpy is safe here.
         strncpy(addr.sun_path, path.c_str(), sizeof(addr.sun_path) - 1);
 
         if (::connect(sock, reinterpret_cast<struct sockaddr*>(&addr), sizeof(addr)) == 0)
@@ -609,7 +498,7 @@ bool SubprocessManager::sendTokenToProcess(const std::string& name,
     }
 
     if (sock < 0) {
-        fprintf(stderr, "[SubprocessManager] Failed to connect to token socket for: %s\n",
+        fprintf(stderr, "[SubprocessContainer] Failed to connect to token socket for: %s\n",
                 name.c_str());
 
         std::shared_ptr<ProcessEntry> entry;
@@ -638,7 +527,7 @@ bool SubprocessManager::sendTokenToProcess(const std::string& name,
     return written == total;
 }
 
-void SubprocessManager::terminateProcess(const std::string& name)
+void SubprocessContainer::terminateProcess(const std::string& name)
 {
     std::shared_ptr<ProcessEntry> entry;
     {
@@ -651,7 +540,7 @@ void SubprocessManager::terminateProcess(const std::string& name)
     syncKill(entry);
 }
 
-void SubprocessManager::terminateAllProcesses()
+void SubprocessContainer::terminateAllProcesses()
 {
     std::unordered_map<std::string, std::shared_ptr<ProcessEntry>> snapshot;
     {
@@ -663,13 +552,13 @@ void SubprocessManager::terminateAllProcesses()
         syncKill(entry);
 }
 
-bool SubprocessManager::hasProcess(const std::string& name)
+bool SubprocessContainer::hasProcess(const std::string& name)
 {
     std::lock_guard<std::mutex> lock(s_processesMutex);
     return s_processes.count(name) > 0;
 }
 
-int64_t SubprocessManager::getProcessId(const std::string& name)
+int64_t SubprocessContainer::getProcessId(const std::string& name)
 {
     std::lock_guard<std::mutex> lock(s_processesMutex);
     auto it = s_processes.find(name);
@@ -678,7 +567,7 @@ int64_t SubprocessManager::getProcessId(const std::string& name)
     return static_cast<int64_t>(it->second->process.id());
 }
 
-std::unordered_map<std::string, int64_t> SubprocessManager::getAllProcessIds()
+std::unordered_map<std::string, int64_t> SubprocessContainer::getAllProcessIds()
 {
     std::lock_guard<std::mutex> lock(s_processesMutex);
     std::unordered_map<std::string, int64_t> result;
@@ -688,7 +577,7 @@ std::unordered_map<std::string, int64_t> SubprocessManager::getAllProcessIds()
     return result;
 }
 
-void SubprocessManager::clearAll()
+void SubprocessContainer::clearAll()
 {
     std::unordered_map<std::string, std::shared_ptr<ProcessEntry>> snapshot;
     {
@@ -699,7 +588,7 @@ void SubprocessManager::clearAll()
         syncKill(entry);
 }
 
-void SubprocessManager::registerProcess(const std::string& name)
+void SubprocessContainer::registerProcess(const std::string& name)
 {
     std::lock_guard<std::mutex> lock(s_processesMutex);
     if (!s_processes.count(name))

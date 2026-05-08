@@ -1,5 +1,4 @@
 #include "module_initializer.h"
-#include "qt/qt_token_receiver.h"
 #include <QObject>
 #include <spdlog/spdlog.h>
 #include <filesystem>
@@ -80,35 +79,6 @@ LogosAPI* initializeLogosAPI(const std::string& moduleName, QObject* module,
         delete logos_api;
         return nullptr;
     }
-
-    return logos_api;
-}
-
-LogosAPI* setupModule(const std::string& moduleName, const std::string& modulePath,
-                      const std::string& instancePersistencePath,
-                      const std::string& transportSetJson)
-{
-    // 1. Receive auth token securely
-    std::string authToken = QtTokenReceiver::receiveAuthToken(moduleName);
-    if (authToken.empty()) {
-        return nullptr;
-    }
-
-    // 2. Load and validate module
-    LogosModule module = loadModule(modulePath, moduleName);
-    if (!module.isValid()) {
-        return nullptr;
-    }
-
-    // 3. Initialize LogosAPI and register module
-    PluginInterface* basePlugin = module.as<PluginInterface>();
-    LogosAPI* logos_api = initializeLogosAPI(moduleName, module.instance(),
-                                              basePlugin, authToken, modulePath,
-                                              instancePersistencePath,
-                                              transportSetJson);
-
-    // Release module ownership so the module stays loaded
-    module.release();
 
     return logos_api;
 }

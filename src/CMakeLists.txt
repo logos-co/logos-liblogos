@@ -92,23 +92,29 @@ set(LOGOS_CORE_SOURCES
     logos_core/module_manager.cpp
     logos_core/module_manager.h
     logos_core/module_runtime.h
+    logos_core/module_container.h
+    logos_core/module_loader.h
+    logos_core/composite_runtime.cpp
+    logos_core/composite_runtime.h
     logos_core/runtime_registry.cpp
     logos_core/runtime_registry.h
-    runtimes/runtime_qt/subprocess_manager.cpp
-    runtimes/runtime_qt/subprocess_manager.h
+    containers/subprocess/subprocess_container.cpp
+    containers/subprocess/subprocess_container.h
+    runtimes/runtime_qt/qt_plugin_runtime.cpp
+    runtimes/runtime_qt/qt_plugin_runtime.h
 )
 
 # Define the logos host sources
 set(LOGOS_HOST_SOURCES
-    runtimes/runtime_qt/logos_host.cpp
-    runtimes/runtime_qt/command_line_parser.cpp
-    runtimes/runtime_qt/command_line_parser.h
-    runtimes/runtime_qt/module_initializer.cpp
-    runtimes/runtime_qt/module_initializer.h
-    runtimes/runtime_qt/qt/qt_app.cpp
-    runtimes/runtime_qt/qt/qt_app.h
-    runtimes/runtime_qt/qt/qt_token_receiver.cpp
-    runtimes/runtime_qt/qt/qt_token_receiver.h
+    runtimes/runtime_qt/host/logos_host.cpp
+    runtimes/runtime_qt/host/command_line_parser.cpp
+    runtimes/runtime_qt/host/command_line_parser.h
+    runtimes/runtime_qt/host/module_initializer.cpp
+    runtimes/runtime_qt/host/module_initializer.h
+    runtimes/runtime_qt/host/qt/qt_app.cpp
+    runtimes/runtime_qt/host/qt/qt_app.h
+    containers/subprocess/token_receiver.cpp
+    containers/subprocess/token_receiver.h
 )
 
 # Create the logos core library
@@ -166,6 +172,7 @@ target_link_libraries(logos_core PUBLIC
 target_include_directories(logos_core PRIVATE
     ${CMAKE_CURRENT_SOURCE_DIR}
     ${CMAKE_CURRENT_SOURCE_DIR}/logos_core
+    ${CMAKE_CURRENT_SOURCE_DIR}/containers
     ${CMAKE_CURRENT_SOURCE_DIR}/runtimes
     ${Qt${QT_VERSION_MAJOR}_INCLUDE_DIRS}
 )
@@ -221,6 +228,7 @@ add_executable(logos_host_qt ${LOGOS_HOST_SOURCES})
 # Link the logos host with Qt libraries and module library
 target_link_libraries(logos_host_qt PRIVATE
     Qt${QT_VERSION_MAJOR}::Core
+    Qt${QT_VERSION_MAJOR}::Network
     Qt${QT_VERSION_MAJOR}::RemoteObjects
     logos_sdk
     logos_module
@@ -231,7 +239,8 @@ target_link_libraries(logos_host_qt PRIVATE
 # Include directories for the logos host application
 target_include_directories(logos_host_qt PRIVATE
     ${CMAKE_CURRENT_SOURCE_DIR}
-    ${CMAKE_CURRENT_SOURCE_DIR}/runtimes/runtime_qt
+    ${CMAKE_CURRENT_SOURCE_DIR}/runtimes/runtime_qt/host
+    ${CMAKE_CURRENT_SOURCE_DIR}/containers/subprocess
     ${Qt${QT_VERSION_MAJOR}_INCLUDE_DIRS}
 )
 
