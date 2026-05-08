@@ -257,13 +257,13 @@ A backward-compat `SubprocessManager` header (`src/containers/subprocess/subproc
 
 **Files:** `src/containers/sandbox/sandbox_container.h`, `src/containers/sandbox/sandbox_container.cpp`
 
-**Purpose:** macOS-only `ModuleContainer` implementation that wraps `SubprocessContainer` to launch module processes inside a macOS `sandbox-exec` sandbox. Applies a deny-all-by-default Apple sandbox profile (`.sb`) with configurable network and filesystem allowlists. Selected via `runtimeConfig["id"] = "sandbox"` in the module descriptor.
+**Purpose:** macOS-only `ModuleContainer` implementation that wraps `SubprocessContainer` to launch module processes inside a macOS `sandbox-exec` sandbox. Applies a deny-all-by-default Apple sandbox profile (`.sb`) with configurable network and filesystem allowlists. On macOS, this is the **default container** for all modules — `canHandle()` returns `true`, and the sandbox composite is registered before the subprocess composite. On other platforms, `canHandle()` returns `false` so the subprocess composite is used instead.
 
 - Holds a `SubprocessContainer` instance and delegates all process management to it
 - On `launch()`: generates a sandbox profile from `runtimeConfig`, writes it to a temp file (`{TMPDIR}/logos_sandbox_{name}.sb`), then launches `sandbox-exec -f <profile> <hostBinary> <args...>` through the subprocess container
 - Profile temp files are tracked per module name and cleaned up on `terminate()`, `terminateAll()`, or process exit (via a wrapped `onTerminated` callback)
 - On non-macOS platforms, `launch()` returns `false` with an error log
-- `canHandle()` returns `false` — the sandbox container is only reached via explicit ID routing in `RuntimeRegistry`, never via format-based fallthrough
+- `canHandle()` returns `true` on macOS (making sandbox the default), `false` on other platforms (falls through to subprocess)
 
 **Default sandbox policy (always allowed):**
 
@@ -274,7 +274,7 @@ A backward-compat `SubprocessManager` header (`src/containers/subprocess/subproc
 | Host binary | Read + exec for the resolved `logos_host_qt` path |
 | Module path | Read access to the module binary/bundle and configured `modulesDirs` |
 | System queries | `sysctl-read`, `mach-lookup` |
-| Token exchange | `network-unix`, read/write on the token socket path and `TMPDIR` |
+| Token exchange | `network*` for unix-socket (local + remote), read/write on the token socket path and `TMPDIR` |
 | Persistence | Read/write on `instancePersistencePath` (if configured) |
 
 **Configurable permissions (via `runtimeConfig`):**
@@ -306,8 +306,8 @@ A backward-compat `SubprocessManager` header (`src/containers/subprocess/subproc
 
 **Purpose:** Implements the `ModuleRuntime` interface by pairing a `ModuleContainer` (where/how to run) with a `ModuleLoader` (what to load). An optional `idOverride` constructor parameter allows registration under a custom ID instead of the default `"{loader}+{container}"` concatenation. Two registrations exist in `ModuleManager`:
 
-- `CompositeRuntime(SubprocessContainer, QtPluginRuntime)` — default, `id()` returns `"qt-plugin+subprocess"`
-- `CompositeRuntime(SandboxContainer, QtPluginRuntime, "sandbox")` — `id()` returns `"sandbox"`
+- `CompositeRuntime(SandboxContainer, QtPluginRuntime, "sandbox")` — registered first, `id()` returns `"sandbox"`. Default on macOS (`canHandle()` returns true); skipped on other platforms
+- `CompositeRuntime(SubprocessContainer, QtPluginRuntime)` — fallback, `id()` returns `"qt-plugin+subprocess"`. Default on non-macOS platforms
 
 ### ProcessStats (external dependency)
 

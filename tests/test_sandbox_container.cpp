@@ -15,15 +15,21 @@ TEST_F(SandboxContainerTest, Id_ReturnsSandbox) {
     EXPECT_EQ(container.id(), "sandbox");
 }
 
-TEST_F(SandboxContainerTest, CanHandle_ReturnsFalseForPlainDescriptor) {
+TEST_F(SandboxContainerTest, CanHandle_ReturnsTrue_OnMacOS) {
+#if !defined(__APPLE__)
+    GTEST_SKIP() << "macOS-only test";
+#endif
     LogosCore::ModuleDescriptor desc;
     desc.format = "qt-plugin";
-    EXPECT_FALSE(container.canHandle(desc));
+    EXPECT_TRUE(container.canHandle(desc));
 }
 
-TEST_F(SandboxContainerTest, CanHandle_ReturnsFalseAlways) {
+TEST_F(SandboxContainerTest, CanHandle_ReturnsFalse_OnNonMacOS) {
+#if defined(__APPLE__)
+    GTEST_SKIP() << "non-macOS test";
+#endif
     LogosCore::ModuleDescriptor desc;
-    desc.runtimeConfig["id"] = "sandbox";
+    desc.format = "qt-plugin";
     EXPECT_FALSE(container.canHandle(desc));
 }
 
@@ -70,7 +76,7 @@ TEST_F(SandboxContainerTest, GenerateProfile_AllowsTokenSocket) {
     LogosCore::ModuleDescriptor desc;
     desc.name = "test_mod";
     std::string profile = SandboxContainer::generateProfile(desc, "/usr/bin/host");
-    EXPECT_NE(profile.find("(allow network-unix)"), std::string::npos);
+    EXPECT_NE(profile.find("(allow network* (local unix-socket) (remote unix-socket))"), std::string::npos);
     EXPECT_NE(profile.find("logos_token_test_mod"), std::string::npos);
 }
 

@@ -49,14 +49,17 @@ namespace {
         static LogosCore::RuntimeRegistry reg;
         static std::once_flag initFlag;
         std::call_once(initFlag, []() {
-            auto container = std::make_shared<SubprocessContainer>();
-            auto loader    = std::make_shared<QtPluginRuntime>();
-            reg.registerRuntime(std::make_shared<LogosCore::CompositeRuntime>(container, loader));
-
+            // Sandbox first: default on macOS (canHandle returns true),
+            // skipped on other platforms (canHandle returns false).
             auto sandboxContainer = std::make_shared<SandboxContainer>();
             auto sandboxLoader    = std::make_shared<QtPluginRuntime>();
             reg.registerRuntime(std::make_shared<LogosCore::CompositeRuntime>(
                 sandboxContainer, sandboxLoader, "sandbox"));
+
+            // Subprocess: fallback on macOS, default on other platforms.
+            auto container = std::make_shared<SubprocessContainer>();
+            auto loader    = std::make_shared<QtPluginRuntime>();
+            reg.registerRuntime(std::make_shared<LogosCore::CompositeRuntime>(container, loader));
         });
         return reg;
     }

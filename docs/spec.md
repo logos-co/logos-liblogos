@@ -92,8 +92,9 @@ Each module runs in its own process for isolation:
 - `SubprocessContainer` manages process lifecycle (spawn, terminate, token delivery) using Boost.Process v2
 - `SandboxContainer` wraps `SubprocessContainer` and launches the process inside macOS `sandbox-exec` with a generated deny-all profile
 - `QtPluginRuntime` resolves the `logos_host_qt` binary and builds CLI arguments for Qt plugin modules
-- Modules with `format == "qt-plugin"` or no explicit format are handled by the default composite runtime
-- Modules with `runtimeConfig["id"] = "sandbox"` are routed to the sandbox composite runtime
+- On macOS, all modules are sandboxed by default (the sandbox composite is registered first and its `canHandle()` returns true)
+- On other platforms, modules use the subprocess composite (sandbox `canHandle()` returns false, falls through)
+- Modules can explicitly select a runtime via `runtimeConfig["id"]` (e.g. `"qt-plugin+subprocess"` to bypass sandbox)
 - Communication happens via the Logos API. Each module's transport set is configured per-module by the host: by default modules listen on a LocalSocket only, but the host can register a `LogosTransportSet` (LocalSocket, TCP, TCP+TLS) per module via `logos_core_set_module_transports` and the loader threads it through to the child via `--transport-set`
 - Faulty or untrusted modules cannot crash the core or other modules
 - Modules can be written in different languages as long as they implement the RPC protocol
@@ -101,7 +102,7 @@ Each module runs in its own process for isolation:
 
 ### Sandbox Container (macOS)
 
-The `SandboxContainer` provides process-level sandboxing on macOS using `sandbox-exec`. It wraps `SubprocessContainer`, applying a deny-all-by-default Apple sandbox profile with configurable allowlists. The sandbox is selected by setting `runtimeConfig["id"]` to `"sandbox"` in the module's metadata.
+The `SandboxContainer` provides process-level sandboxing on macOS using `sandbox-exec`. It wraps `SubprocessContainer`, applying a deny-all-by-default Apple sandbox profile with configurable allowlists. On macOS, the sandbox container is the **default** — all modules are sandboxed unless they explicitly opt out via `runtimeConfig["id"]`. On other platforms, `SubprocessContainer` remains the default.
 
 **Default policy:** All filesystem access, network, and process creation are denied. System essentials are always allowed: system libraries (`/usr/lib`, `/System/Library`), the host binary, the module path, sysctl reads, Mach IPC, and the token exchange Unix socket.
 

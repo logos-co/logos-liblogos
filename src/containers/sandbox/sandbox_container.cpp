@@ -5,6 +5,7 @@
 
 #include <cstdio>
 #include <cstdlib>
+#include <filesystem>
 #include <fstream>
 #include <sstream>
 #include <string>
@@ -38,7 +39,11 @@ std::string SandboxContainer::id() const { return "sandbox"; }
 
 bool SandboxContainer::canHandle(const LogosCore::ModuleDescriptor& /*desc*/) const
 {
+#if defined(__APPLE__)
+    return true;
+#else
     return false;
+#endif
 }
 
 bool SandboxContainer::launch(const LogosCore::ModuleDescriptor& desc,
@@ -52,11 +57,15 @@ bool SandboxContainer::launch(const LogosCore::ModuleDescriptor& desc,
     spdlog::error("SandboxContainer is only supported on macOS");
     return false;
 #else
+    spdlog::info("[SandboxContainer] Launching module '{}' inside sandbox", desc.name);
+
     std::string profile = generateProfile(desc, hostBinary);
 
     std::string profilePath = writeProfileFile(desc.name, profile);
     if (profilePath.empty())
         return false;
+
+    spdlog::info("[SandboxContainer] Profile written to {}", profilePath);
 
     {
         std::lock_guard<std::mutex> lock(profilesMutex_);
@@ -68,13 +77,21 @@ bool SandboxContainer::launch(const LogosCore::ModuleDescriptor& desc,
     sandboxArgs.insert(sandboxArgs.end(), args.begin(), args.end());
 
     auto wrappedOnTerminated = [this, onTerminated](const std::string& name) {
+        spdlog::info("[SandboxContainer] Module '{}' terminated, cleaning up profile", name);
         cleanupProfile(name);
         if (onTerminated)
             onTerminated(name);
     };
 
-    return subprocess_.launch(desc, sandboxExec, sandboxArgs,
-                              std::move(wrappedOnTerminated), out);
+    bool ok = subprocess_.launch(desc, sandboxExec, sandboxArgs,
+                                 std::move(wrappedOnTerminated), out);
+    if (ok)
+        spdlog::info("[SandboxContainer] Module '{}' running sandboxed (pid {})",
+                     desc.name, out.pid);
+    else
+        spdlog::error("[SandboxContainer] Failed to launch sandboxed module '{}'", desc.name);
+
+    return ok;
 #endif
 }
 
@@ -140,9 +157,23 @@ std::string SandboxContainer::generateProfile(const LogosCore::ModuleDescriptor&
        << "  (literal \"/dev/random\")\n"
        << ")\n\n";
 
-    // Host binary
-    sb << "(allow file-read* (literal \"" << hostBinary << "\"))\n";
-    sb << "(allow process-exec (literal \"" << hostBinary << "\"))\n";
+    // Host binary — use subpath on the directory to handle symlink chains
+    // (e.g. Nix store paths where result/bin/logos_host is a multi-level symlink)
+    auto binDir = std::filesystem::path(hostBinary).parent_path();
+    if (!binDir.empty()) {
+        sb << "(allow file-read* (subpath \"" << binDir.string() << "\"))\n";
+        sb << "(allow process-exec (subpath \"" << binDir.string() << "\"))\n";
+    }
+    // Also resolve symlinks to allow the real binary and its Nix store directory
+    std::error_code ec;
+    auto realHost = std::filesystem::canonical(hostBinary, ec);
+    if (!ec) {
+        auto realDir = realHost.parent_path();
+        if (realDir.string() != binDir.string()) {
+            sb << "(allow file-read* (subpath \"" << realDir.string() << "\"))\n";
+            sb << "(allow process-exec (subpath \"" << realDir.string() << "\"))\n";
+        }
+    }
 
     // Module path
     if (!desc.path.empty())
@@ -163,7 +194,7 @@ std::string SandboxContainer::generateProfile(const LogosCore::ModuleDescriptor&
     std::string socketPath = tokenSocketPath(desc.name);
     std::string tmp = tmpDir();
 
-    sb << "(allow network-unix)\n";
+    sb << "(allow network* (local unix-socket) (remote unix-socket))\n";
     sb << "(allow file-read* file-write* (literal \"" << socketPath << "\"))\n";
     sb << "(allow file-read* file-write* (subpath \"" << tmp << "\"))\n\n";
 
