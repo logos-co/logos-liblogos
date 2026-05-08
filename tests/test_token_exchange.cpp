@@ -16,6 +16,7 @@
 #include <gtest/gtest.h>
 #include "logos_core.h"
 #include "qt_test_adapter.h"
+#include "unix_socket_path.h"
 #include <atomic>
 #include <chrono>
 #include <cstdlib>
@@ -289,11 +290,13 @@ TEST_F(TokenExchangeTest, ConcurrentDistinctModules_EachRoundTripsCorrectly) {
 
 namespace {
 
+// Use the shared helper that the production code uses, so tests that
+// reason about the socket file path stay correct when $TMPDIR is unset
+// (e.g. on macOS under `nix run`, where Qt resolves
+// confstr(_CS_DARWIN_USER_TEMP_DIR) and naive getenv("TMPDIR") would
+// fall back to /tmp/ — a path the receiver never actually binds at).
 std::string tmpDir() {
-    const char* tmp = std::getenv("TMPDIR");
-    std::string dir = (tmp && tmp[0]) ? tmp : "/tmp";
-    while (!dir.empty() && dir.back() == '/') dir.pop_back();
-    return dir;
+    return ::logos::qtCompatibleTempDir();
 }
 
 struct ScopedEnv {
@@ -371,6 +374,56 @@ TEST_F(TokenExchangeTest, InstanceIdScoping_StaleUnscopedSocketDoesNotBlockScope
     std::this_thread::sleep_for(Ms(100));
 
     ASSERT_EQ(logos_core_send_token(pluginName.c_str(), token.c_str()), 1);
+    ASSERT_TRUE(waitUntil([&]() { return receiver.finished.load(); }, 5000));
+    receiver.join();
+
+    EXPECT_EQ(receiver.token, token);
+}
+
+// =============================================================================
+// $TMPDIR unset — sender and receiver must agree on the socket path even
+// when the env var is missing.
+//
+// This pins the regression behind PR #129: under `nix run` on macOS the
+// parent inherited an empty TMPDIR, naive getenv-based code fell back to
+// "/tmp/<name>" while Qt's QLocalServer::listen resolved
+// "/var/folders/.../T/<name>" via confstr(_CS_DARWIN_USER_TEMP_DIR), and
+// every module's token-handoff timed out. Both sides now route through
+// `::logos::unixSocketPath`, so this round-trip succeeds whether
+// TMPDIR is set, unset, or empty.
+// =============================================================================
+
+TEST_F(TokenExchangeTest, RoundTrip_SucceedsWithTmpdirUnset) {
+    const std::string moduleName = "rt_no_tmpdir";
+    const std::string token = "33333333-4444-5555-6666-777777777777";
+
+    // Unset both env vars for the duration of the test:
+    //   - TMPDIR is the regression we're pinning.
+    //   - LOGOS_INSTANCE_ID may have been set by earlier tests via
+    //     LogosInstance::id() (qputenv); when set, it suffixes the
+    //     socket name. Unsetting both keeps the expected path simple.
+    ScopedEnv tmpdirEnv("TMPDIR", nullptr);
+    ScopedEnv instanceEnv("LOGOS_INSTANCE_ID", nullptr);
+
+    // Both sides must agree on a non-/tmp path on macOS, where
+    // confstr(_CS_DARWIN_USER_TEMP_DIR) returns the per-user temp dir
+    // even with no TMPDIR set. On Linux the helper falls back to /tmp,
+    // which is also fine — the only thing the test cares about is that
+    // sender and receiver land on the same path.
+    const std::string expectedSocket =
+        ::logos::unixSocketPath("logos_token_" + moduleName);
+
+    ReceiverHandle receiver;
+    receiver.start(moduleName);
+
+    logos_core_register_process(moduleName.c_str());
+
+    ASSERT_TRUE(waitUntil(
+        [&]() { return std::filesystem::exists(expectedSocket); }, 5000))
+        << "receiver must bind at the helper-resolved path: "
+        << expectedSocket;
+
+    ASSERT_EQ(logos_core_send_token(moduleName.c_str(), token.c_str()), 1);
     ASSERT_TRUE(waitUntil([&]() { return receiver.finished.load(); }, 5000));
     receiver.join();
 

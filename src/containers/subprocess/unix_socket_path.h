@@ -22,10 +22,10 @@
 //      always set on Apple platforms even when env is empty
 //   3. /tmp fallback
 
-#include <climits>
 #include <cstdlib>
 #include <string>
 #include <unistd.h>
+#include <vector>
 
 namespace logos {
 
@@ -37,11 +37,22 @@ inline std::string qtCompatibleTempDir() {
     } else {
 #ifdef __APPLE__
         // confstr returns the buffer length INCLUDING the null
-        // terminator on success; 0 on error.
-        char buf[PATH_MAX];
-        size_t n = ::confstr(_CS_DARWIN_USER_TEMP_DIR, buf, sizeof(buf));
-        if (n > 0 && n <= sizeof(buf)) {
-            dir.assign(buf, n - 1);  // drop trailing NUL
+        // terminator on success; 0 on error. Probe with a zero-sized
+        // buffer first to learn the exact size — Apple's per-user
+        // temp dir lives under /var/folders/<2>/<28>/T/ and can
+        // exceed PATH_MAX on some configurations, so a fixed-size
+        // stack buffer is unsafe (would silently fall back to /tmp
+        // and reintroduce the parent/child path mismatch this
+        // helper is meant to prevent).
+        size_t n = ::confstr(_CS_DARWIN_USER_TEMP_DIR, nullptr, 0);
+        if (n > 0) {
+            std::vector<char> buf(n);
+            size_t copied = ::confstr(_CS_DARWIN_USER_TEMP_DIR, buf.data(), buf.size());
+            if (copied > 0 && copied <= buf.size()) {
+                dir.assign(buf.data(), copied - 1);  // drop trailing NUL
+            } else {
+                dir = "/tmp";
+            }
         } else {
             dir = "/tmp";
         }

@@ -35,31 +35,32 @@ std::string receive(const std::string& moduleName)
     const std::string socketPath = ::logos::unixSocketPath(socketName);
     const QString socketPathQ = QString::fromStdString(socketPath);
 
-    QLocalServer* tokenServer = new QLocalServer();
+    // Stack-allocated: the Qt event loop is not guaranteed to be
+    // running when this function exits, so deleteLater() is unsafe.
+    // RAII makes every exit path (incl. listen() failure) clean up.
+    QLocalServer tokenServer;
 
     QLocalServer::removeServer(socketPathQ);
 
-    if (!tokenServer->listen(socketPathQ)) {
+    if (!tokenServer.listen(socketPathQ)) {
         spdlog::critical("Failed to start token server at {}: {}", socketPath,
-                         tokenServer->errorString().toStdString());
+                         tokenServer.errorString().toStdString());
         return {};
     }
 
     std::string authToken;
-    if (tokenServer->waitForNewConnection(10000)) {
-        QLocalSocket* clientSocket = tokenServer->nextPendingConnection();
+    if (tokenServer.waitForNewConnection(10000)) {
+        QLocalSocket* clientSocket = tokenServer.nextPendingConnection();
         if (clientSocket->waitForReadyRead(5000)) {
             QByteArray tokenData = clientSocket->readAll();
             authToken = QString::fromUtf8(tokenData).toStdString();
         }
-        clientSocket->deleteLater();
+        // The socket is parented to tokenServer and dies with it.
+        clientSocket->disconnectFromServer();
     } else {
         spdlog::critical("Timeout waiting for auth token");
-        tokenServer->deleteLater();
         return {};
     }
-
-    tokenServer->deleteLater();
 
     if (authToken.empty()) {
         spdlog::critical("No auth token received");
