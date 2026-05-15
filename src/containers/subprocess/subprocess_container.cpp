@@ -296,21 +296,27 @@ bool SubprocessContainer::launch(const LogosCore::ModuleDescriptor& desc,
 {
     ProcessCallbacks callbacks;
 
+    // A crashing module must NOT take down the host: process isolation exists
+    // precisely so a module fault is contained. Treat a crash the same as a
+    // normal exit — log it and notify so the registry marks the module
+    // unloaded and the UI can react. (Calling exit() here also ran C++ static
+    // destructors / Qt plugin unload / GUI teardown from this boost::asio
+    // worker thread, racing the main thread and segfaulting.)
+    // `onTerminated` is documented as safe to invoke from a background thread
+    // (see ModuleRuntime::load); ModuleRegistry::markUnloaded is mutex-guarded.
     callbacks.onFinished = [onTerminated](const std::string& pName, int exitCode, bool crashed) {
         (void)exitCode;
-        if (crashed) {
+        if (crashed)
             spdlog::critical("Module process crashed: {}", pName);
-            exit(1);
-        }
         if (onTerminated)
             onTerminated(pName);
     };
 
-    callbacks.onError = [](const std::string& pName, bool crashed) {
-        if (crashed) {
+    callbacks.onError = [onTerminated](const std::string& pName, bool crashed) {
+        if (crashed)
             spdlog::critical("Module process crashed: {}", pName);
-            exit(1);
-        }
+        if (onTerminated)
+            onTerminated(pName);
     };
 
     callbacks.onOutput = [](const std::string& pName, const std::string& line, bool isStderr) {
