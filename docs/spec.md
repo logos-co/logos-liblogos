@@ -153,12 +153,12 @@ Every module ships a `metadata.json` referenced by Qt's `Q_PLUGIN_METADATA` macr
 
 #### Cascade Unloading
 
-`logos_core_unload_module_with_dependents()` unloads the named module together with every currently loaded module that transitively depends on it. Teardown order is leaves-first (dependents before dependencies) so no process is left briefly pointing at a terminated parent. The call is serialised with ordinary load/unload operations under a single lock span — a late-arriving load cannot interleave between tearing down the dependents and the target.
+`logos_core_unload_module(name, true)` unloads the named module together with every currently loaded module that transitively depends on it. Teardown order is leaves-first (dependents before dependencies) so no process is left briefly pointing at a terminated parent. The call is serialised with ordinary load/unload operations under a single lock span — a late-arriving load cannot interleave between tearing down the dependents and the target.
 
 ### Dependency Resolution
 
 - Dependencies are declared in each module's `metadata.json`
-- `logos_core_load_module_with_dependencies()` performs topological sort
+- `logos_core_load_module(name, true)` performs topological sort
 - Circular dependencies are detected and reported as errors
 - Missing dependencies produce warnings
 - Dependencies are loaded in correct order before the requesting module
@@ -175,7 +175,7 @@ Every module ships a `metadata.json` referenced by Qt's `Q_PLUGIN_METADATA` macr
 
 The C API is designed to be safe for use from multi-threaded host applications:
 
-- **Load/unload operations** (`load_module`, `load_module_with_dependencies`, `unload_module`, `unload_module_with_dependents`) are serialised — only one runs at a time, so rapid concurrent load/unload cycles on the same or different modules do not produce data races. The cascade variant holds the lock for its full leaves-first teardown.
+- **Load/unload operations** (`load_module`, `unload_module`) are serialised — only one runs at a time, so rapid concurrent load/unload cycles on the same or different modules do not produce data races. The cascade variant (`with_dependents=true`) holds the lock for its full leaves-first teardown.
 - **Read-only queries** (`get_known_modules`, `get_loaded_modules`) use a shared reader-writer lock and may execute concurrently with each other and with load/unload operations.
 - **Module discovery** (`refresh_modules`) is protected by the registry's own write lock.
 - **Lifecycle functions** (`init`, `start`, `cleanup`) are not thread-safe and must be called from a single thread.
@@ -194,12 +194,9 @@ The platform supports two build variants:
 | Function | Purpose |
 |----------|---------|
 | `logos_core_init(argc, argv)` | Initialize global state, optionally set module directory. Creates a QCoreApplication if one does not exist. |
-| `logos_core_set_modules_dir(path)` | Set the module directory. Must be called before starting. |
-| `logos_core_add_modules_dir(path)` | Add an additional module directory to scan. |
+| `logos_core_add_modules_dir(path)` | Add a module directory to scan (duplicates ignored). |
 | `logos_core_start()` | Scan module directories, process metadata, create Core Manager, load built-in modules, start remote object registry. |
-| `logos_core_exec()` | Run the Qt event loop. Returns when the application exits. |
 | `logos_core_cleanup()` | Unload all modules, stop processes, clean up global state. |
-| `logos_core_process_events()` | Process Qt events without blocking, for integration with external event loops. |
 
 ### Module Management
 
@@ -207,10 +204,8 @@ The platform supports two build variants:
 |----------|---------|
 | `logos_core_get_loaded_modules() → char**` | Return null-terminated array of loaded module names. Caller must free. |
 | `logos_core_get_known_modules() → char**` | Return null-terminated array of all discovered modules. Caller must free. |
-| `logos_core_load_module(name) → int` | Load a module by name. Returns 1 on success, 0 on failure. |
-| `logos_core_load_module_with_dependencies(name) → int` | Load a module and all its dependencies in correct order. Returns 1 if all succeed. |
-| `logos_core_unload_module(name) → int` | Terminate the module's process and remove it. Returns 1 on success. |
-| `logos_core_unload_module_with_dependents(name) → int` | Cascade unload: terminate the module together with every currently loaded transitive dependent, leaves-first. Returns 1 only if every step succeeded. |
+| `logos_core_load_module(name, with_dependencies) → int` | Load a module by name. When `with_dependencies` is true, resolves the dependency tree and loads in topological order. Returns 1 on success, 0 on failure. |
+| `logos_core_unload_module(name, with_dependents) → int` | Terminate the module's process and remove it. When `with_dependents` is true, cascade unloads every loaded transitive dependent leaves-first. Returns 1 only if every step succeeded. |
 | `logos_core_get_module_dependencies(name, recursive) → char**` | Return null-terminated array of modules that `name` depends on (forward edges). With `recursive=true`, walks the forward dependency graph transitively via BFS. Unknown names yield an empty array. Caller must free. |
 | `logos_core_get_module_dependents(name, recursive) → char**` | Return null-terminated array of modules that depend on `name` (reverse edges). With `recursive=true`, walks the reverse dependency graph transitively via BFS. Unknown names yield an empty array. Caller must free. |
 | `logos_core_process_module(path) → char*` | Read a module file's metadata and register it as known without loading. Returns the module name or NULL. Caller must free. |

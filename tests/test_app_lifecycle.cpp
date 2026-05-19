@@ -33,8 +33,6 @@ protected:
 // =============================================================================
 
 TEST_F(AppLifecycleTest, Init_LibraryIsUsableAfterInit) {
-    // After init, basic library operations should not crash.
-    logos_core_process_events();
     EXPECT_EQ(logos_core_get_modules_dirs_count(), 0);
 }
 
@@ -42,29 +40,15 @@ TEST_F(AppLifecycleTest, Init_LibraryIsUsableAfterInit) {
 // Module Directory Tests
 // =============================================================================
 
-TEST_F(AppLifecycleTest, SetModulesDir_SetsDirectory) {
+TEST_F(AppLifecycleTest, AddModulesDir_SetsDirectory) {
     const char* testDir = "/test/modules";
 
-    logos_core_set_modules_dir(testDir);
+    logos_core_add_modules_dir(testDir);
 
     ASSERT_EQ(logos_core_get_modules_dirs_count(), 1);
     char* dir = logos_core_get_modules_dir_at(0);
     ASSERT_NE(dir, nullptr);
     EXPECT_EQ(std::string(dir), std::string(testDir));
-    delete[] dir;
-}
-
-TEST_F(AppLifecycleTest, SetModulesDir_ClearsExisting) {
-    logos_core_add_modules_dir("/dir1");
-    logos_core_add_modules_dir("/dir2");
-    ASSERT_EQ(logos_core_get_modules_dirs_count(), 2);
-
-    logos_core_set_modules_dir("/new_dir");
-
-    ASSERT_EQ(logos_core_get_modules_dirs_count(), 1);
-    char* dir = logos_core_get_modules_dir_at(0);
-    ASSERT_NE(dir, nullptr);
-    EXPECT_EQ(std::string(dir), "/new_dir");
     delete[] dir;
 }
 
@@ -117,30 +101,11 @@ TEST_F(AppLifecycleTest, Cleanup_ClearsState) {
 }
 
 // =============================================================================
-// ProcessEvents Tests
-// =============================================================================
-
-TEST_F(AppLifecycleTest, ProcessEvents_DoesNotCrash) {
-    EXPECT_NO_THROW(logos_core_process_events());
-}
-
-TEST_F(AppLifecycleTest, ProcessEvents_AfterCleanupDoesNotCrash) {
-    logos_core_cleanup();
-
-    // processEvents with no app should not crash
-    EXPECT_NO_THROW(logos_core_process_events());
-
-    // Re-init for TearDown
-    char* argv[] = {(char*)"test"};
-    logos_core_init(1, argv);
-}
-
-// =============================================================================
 // Start Function Tests
 // =============================================================================
 
 TEST_F(AppLifecycleTest, Start_UsesCustomModulesDirs) {
-    logos_core_set_modules_dir("/custom/modules");
+    logos_core_add_modules_dir("/custom/modules");
 
     logos_core_start();
 
@@ -149,20 +114,4 @@ TEST_F(AppLifecycleTest, Start_UsesCustomModulesDirs) {
     ASSERT_NE(dir, nullptr);
     EXPECT_EQ(std::string(dir), "/custom/modules");
     delete[] dir;
-}
-
-// =============================================================================
-// Exec Test
-// =============================================================================
-
-TEST_F(AppLifecycleTest, Exec_ReturnsZero) {
-    logos_core_cleanup();
-
-    int result = logos_core_exec();
-
-    EXPECT_EQ(result, 0);
-
-    // Re-init for TearDown
-    char* argv[] = {(char*)"test"};
-    logos_core_init(1, argv);
 }

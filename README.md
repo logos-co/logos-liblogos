@@ -106,11 +106,9 @@ nix build --override-input logos-cpp-sdk path:../logos-cpp-sdk
 // Lifecycle
 void logos_core_init(int argc, char *argv[]);
 void logos_core_start();
-int  logos_core_exec();
 void logos_core_cleanup();
 
 // Module directory management
-void logos_core_set_modules_dir(const char* dir);
 void logos_core_add_modules_dir(const char* dir);
 
 // Instance persistence
@@ -123,10 +121,8 @@ void logos_core_set_persistence_base_path(const char* path);
 void logos_core_set_module_transports(const char* name, const char* transport_set_json);
 
 // Module management
-int  logos_core_load_module(const char* name);
-int  logos_core_load_module_with_dependencies(const char* name);
-int  logos_core_unload_module(const char* name);
-int  logos_core_unload_module_with_dependents(const char* name);
+int  logos_core_load_module(const char* name, bool with_dependencies);
+int  logos_core_unload_module(const char* name, bool with_dependents);
 char* logos_core_process_module(const char* path);
 void logos_core_refresh_modules();
 
@@ -141,16 +137,13 @@ char** logos_core_get_known_modules();
 // Module stats and tokens
 char* logos_core_get_module_stats();
 char* logos_core_get_token(const char* key);
-
-// Event loop integration
-void logos_core_process_events();
 ```
 
 See `src/logos_core/logos_core.h` for the full API.
 
 ### Thread safety
 
-Module load/unload operations (`logos_core_load_module`, `logos_core_load_module_with_dependencies`, `logos_core_unload_module`, `logos_core_unload_module_with_dependents`) are serialised internally by a single mutex. It is safe to call them concurrently from multiple threads, including rapid and repeated load/unload cycles on the same module — each call waits for its turn and the process management layer handles teardown cleanly before the next launch. `logos_core_unload_module_with_dependents` in particular holds the lock for its entire leaves-first teardown so a late-arriving load can't interleave between tearing down a dependent and its parent.
+Module load/unload operations (`logos_core_load_module`, `logos_core_unload_module`) are serialised internally by a single mutex. It is safe to call them concurrently from multiple threads, including rapid and repeated load/unload cycles on the same module — each call waits for its turn and the process management layer handles teardown cleanly before the next launch. `logos_core_unload_module` with `with_dependents=true` in particular holds the lock for its entire leaves-first teardown so a late-arriving load can't interleave between tearing down a dependent and its parent.
 
 `logos_core_refresh_modules` is synchronised through the module registry's reader-writer lock — it is safe to call concurrently with other registry accesses, but it is **not** serialised against load/unload by the same mutex as above.
 
