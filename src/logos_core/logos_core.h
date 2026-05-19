@@ -101,44 +101,6 @@ LOGOS_CORE_EXPORT void logos_core_set_module_transports(const char* module_name,
 // Call after installing new modules so they become discoverable.
 LOGOS_CORE_EXPORT void logos_core_refresh_modules();
 
-// =========================================================================
-// DEPRECATED — kept for backward compatibility.
-// Each forwards to the corresponding current function above.
-// =========================================================================
-
-// Replaced by logos_core_add_modules_dir (first call on empty list is equivalent)
-LOGOS_CORE_EXPORT void logos_core_set_modules_dir(const char* modules_dir);
-
-// Replaced by logos_core_load_module(name, false)
-LOGOS_CORE_EXPORT int logos_core_load_module_v1(const char* module_name);
-
-// Replaced by logos_core_load_module(name, true)
-LOGOS_CORE_EXPORT int logos_core_load_module_with_dependencies(const char* module_name);
-
-// Replaced by logos_core_unload_module(name, false)
-LOGOS_CORE_EXPORT int logos_core_unload_module_v1(const char* module_name);
-
-// Replaced by logos_core_unload_module(name, true)
-LOGOS_CORE_EXPORT int logos_core_unload_module_with_dependents(const char* module_name);
-
-// No-op stub, will be removed in a future release
-LOGOS_CORE_EXPORT int logos_core_exec();
-
-// No-op stub, will be removed in a future release
-LOGOS_CORE_EXPORT void logos_core_process_events();
-
-// Old "plugin" names — forward to the corresponding logos_core_*_module* function
-LOGOS_CORE_EXPORT void logos_core_set_plugins_dir(const char* plugins_dir);
-LOGOS_CORE_EXPORT void logos_core_add_plugins_dir(const char* plugins_dir);
-LOGOS_CORE_EXPORT char** logos_core_get_loaded_plugins();
-LOGOS_CORE_EXPORT char** logos_core_get_known_plugins();
-LOGOS_CORE_EXPORT int logos_core_load_plugin(const char* plugin_name);
-LOGOS_CORE_EXPORT int logos_core_load_plugin_with_dependencies(const char* plugin_name);
-LOGOS_CORE_EXPORT int logos_core_unload_plugin(const char* plugin_name);
-LOGOS_CORE_EXPORT int logos_core_unload_plugin_with_dependents(const char* plugin_name);
-LOGOS_CORE_EXPORT char* logos_core_process_plugin(const char* plugin_path);
-LOGOS_CORE_EXPORT void logos_core_refresh_plugins();
-
 #ifdef __cplusplus
 }
 #endif

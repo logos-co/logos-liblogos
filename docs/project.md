@@ -325,19 +325,6 @@ The public C API (`logos_core.h`) is the only exported interface. All functions 
 | `logos_core_refresh_modules` | Protected by `ModuleRegistry`'s reader-writer lock (write side) — safe for concurrent registry access but not serialised against load/unload |
 | `logos_core_init`, `logos_core_start`, `logos_core_cleanup` | Not thread-safe — must be called from a single thread during startup/shutdown |
 
-### Deprecated Functions
-
-The following functions are kept for backward compatibility but emit a deprecation warning to stderr. New code should use the current API above.
-
-| Deprecated Function | Replacement |
-|---------------------|-------------|
-| `logos_core_set_modules_dir(dir)` | `logos_core_add_modules_dir(dir)` (first call on empty list is equivalent) |
-| `logos_core_exec()` | Deprecated no-op stub; scheduled for removal |
-| `logos_core_process_events()` | Deprecated no-op stub; scheduled for removal |
-| `logos_core_load_module_with_dependencies(name)` | `logos_core_load_module(name, true)` |
-| `logos_core_unload_module_with_dependents(name)` | `logos_core_unload_module(name, true)` |
-| `logos_core_*_plugin*` variants | Corresponding `logos_core_*_module*` functions |
-
 ## Build Artifacts
 
 | Artifact | Description |
