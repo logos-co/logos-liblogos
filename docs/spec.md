@@ -159,8 +159,9 @@ Every module ships a `metadata.json` referenced by Qt's `Q_PLUGIN_METADATA` macr
 
 - Dependencies are declared in each module's `metadata.json`
 - `logos_core_load_module(name, true)` performs topological sort
-- Circular dependencies are detected and reported as errors
-- Missing dependencies produce warnings
+- Circular dependencies are detected and cause the load to fail (returns 0)
+- Missing/unknown dependencies cause the load to fail (returns 0)
+- The resolver itself (`DependencyResolver::resolve`) returns a `ResolveResult` containing the partial topological order, a list of missing dependency names, and a cycle flag. The load path treats any resolution error as a hard failure; the teardown path (`unloadModuleWithDependents`) uses the partial order best-effort
 - Dependencies are loaded in correct order before the requesting module
 - The core maintains an in-process dependency graph with both forward and reverse edges. The reverse edges are re-derived from the forward edges at the tail of every discovery or metadata-processing pass, so cascade unload and dependent queries answer from memory without re-reading manifests from disk.
 

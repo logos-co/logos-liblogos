@@ -301,6 +301,104 @@ TEST_F(ModuleManagerTest, LoadModuleWithDeps_ReturnsZeroForUnknown) {
 }
 
 // =============================================================================
+// Idempotent-load contract: "already loaded ⇒ success"
+//
+// logos_core_load_module is an "ensure loaded" guard, not a "load fresh"
+// command. Pinning this in tests so the contract documented in
+// logos_core.h doesn't quietly regress — basecamp's PluginLoader and
+// logoscore-cli's load-module both rely on calling it against modules
+// the runtime may have already brought up at startup, and we don't want
+// a future refactor to start returning 0 in that case (which previously
+// caused UI-plugin loads to abort when a core dep was pre-loaded).
+//
+// We exercise this without a runtime: register fake modules, mark them
+// loaded via the registry adapter, then call the C entry point. The
+// short-circuit at the top of ModuleManager::loadModuleInternal never
+// reaches the descriptor / runtime path, so no subprocess is spawned.
+// =============================================================================
+
+TEST_F(ModuleManagerTest, LoadModule_ReturnsTrueWhenAlreadyLoaded) {
+    logos_core_register_module("preloaded", "/fake/path");
+    logos_core_mark_module_loaded("preloaded");
+    ASSERT_EQ(logos_core_is_module_loaded("preloaded"), 1);
+
+    // First call: module is already loaded ⇒ no-op success.
+    EXPECT_EQ(logos_core_load_module("preloaded", false), 1)
+        << "loading an already-loaded module must return 1 (no-op success)";
+
+    // Repeating the call must stay idempotent — still success, still loaded.
+    EXPECT_EQ(logos_core_load_module("preloaded", false), 1);
+    EXPECT_EQ(logos_core_is_module_loaded("preloaded"), 1);
+}
+
+TEST_F(ModuleManagerTest, LoadModuleWithDeps_ReturnsTrueWhenAllAlreadyLoaded) {
+    // Build a tiny dep graph: parent → child. Both pre-marked loaded.
+    logos_core_register_module("parent", "/fake/parent");
+    logos_core_register_module("child",  "/fake/child");
+    const char* deps[] = {"child"};
+    logos_core_register_module_dependencies("parent", deps, 1);
+    logos_core_mark_module_loaded("child");
+    logos_core_mark_module_loaded("parent");
+
+    // with_dependencies=true walks the resolved order and calls
+    // loadModuleInternal for each; every step short-circuits on
+    // isLoaded() and returns true, so the overall call returns 1.
+    EXPECT_EQ(logos_core_load_module("parent", true), 1)
+        << "with_dependencies=true must return 1 when the target and "
+           "all of its deps were already loaded before the call";
+    EXPECT_EQ(logos_core_is_module_loaded("parent"), 1);
+    EXPECT_EQ(logos_core_is_module_loaded("child"),  1);
+}
+
+// =============================================================================
+// Dependency resolution failure: logos_core_load_module(name, true) must
+// return 0 when the dependency graph cannot be fully resolved.
+//
+// The resolver silently drops unknown modules and detects cycles. Before
+// this fix, loadModuleWithDependencies only checked whether the *target*
+// appeared in the (possibly partial) resolved order — it didn't verify
+// the resolution was clean. A module whose transitive dependency was
+// unknown would load successfully, violating the contract in logos_core.h
+// ("returns 0 when dependency resolution fails").
+// =============================================================================
+
+TEST_F(ModuleManagerTest, LoadModuleWithDeps_FailsWhenDirectDependencyUnknown) {
+    logos_core_register_module("parent", "/fake/parent");
+    const char* deps[] = {"unknown_dep"};
+    logos_core_register_module_dependencies("parent", deps, 1);
+
+    // "unknown_dep" is not registered → resolution has missing deps → fail.
+    EXPECT_EQ(logos_core_load_module("parent", true), 0)
+        << "must return 0 when a direct dependency is unknown";
+}
+
+TEST_F(ModuleManagerTest, LoadModuleWithDeps_FailsWhenTransitiveDependencyUnknown) {
+    logos_core_register_module("top", "/fake/top");
+    logos_core_register_module("mid", "/fake/mid");
+    const char* depsTop[] = {"mid"};
+    const char* depsMid[] = {"bottom_unknown"};
+    logos_core_register_module_dependencies("top", depsTop, 1);
+    logos_core_register_module_dependencies("mid", depsMid, 1);
+
+    // "bottom_unknown" not registered → transitive resolution fails.
+    EXPECT_EQ(logos_core_load_module("top", true), 0)
+        << "must return 0 when a transitive dependency is unknown";
+}
+
+TEST_F(ModuleManagerTest, LoadModuleWithDeps_FailsOnCircularDependency) {
+    logos_core_register_module("cyc_a", "/fake/cyc_a");
+    logos_core_register_module("cyc_b", "/fake/cyc_b");
+    const char* depsA[] = {"cyc_b"};
+    const char* depsB[] = {"cyc_a"};
+    logos_core_register_module_dependencies("cyc_a", depsA, 1);
+    logos_core_register_module_dependencies("cyc_b", depsB, 1);
+
+    // Cycle detected → must return 0.
+    EXPECT_EQ(logos_core_load_module("cyc_a", true), 0)
+        << "must return 0 when a circular dependency is detected";
+}
+
+// =============================================================================
 // Module Directory Management Tests
 // =============================================================================
 

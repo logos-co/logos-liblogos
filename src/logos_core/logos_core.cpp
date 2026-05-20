@@ -40,6 +40,10 @@ char** logos_core_get_known_modules() {
 
 int logos_core_load_module(const char* module_name, bool with_dependencies) {
     if (!module_name) { fprintf(stderr, "logos_core_load_module: module_name must not be null\n"); std::abort(); }
+    // "Already loaded ⇒ success" is implemented in
+    // ModuleManager::loadModuleInternal (see the block at the top there
+    // for the rationale and the dep-tree fast path). The header doc
+    // documents this as part of the public contract — keep both in sync.
     if (with_dependencies)
         return ModuleManager::loadModuleWithDependencies(module_name) ? 1 : 0;
     return ModuleManager::loadModule(module_name) ? 1 : 0;

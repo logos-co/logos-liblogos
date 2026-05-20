@@ -8,12 +8,13 @@
 
 namespace DependencyResolver {
 
-    std::vector<std::string> resolve(const std::vector<std::string>& requested,
-                                     IsKnownFn isKnown,
-                                     GetDependenciesFn getDependencies) {
+    ResolveResult resolve(const std::vector<std::string>& requested,
+                          IsKnownFn isKnown,
+                          GetDependenciesFn getDependencies) {
+        ResolveResult out;
+
         std::unordered_set<std::string> modulesToLoad;
         std::deque<std::string> queue(requested.begin(), requested.end());
-        std::vector<std::string> missingDependencies;
 
         while (!queue.empty()) {
             std::string moduleName = queue.front();
@@ -24,7 +25,7 @@ namespace DependencyResolver {
 
             if (!isKnown(moduleName)) {
                 spdlog::warn("Module not found in known modules: {}", moduleName);
-                missingDependencies.push_back(moduleName);
+                out.missing.push_back(moduleName);
                 continue;
             }
 
@@ -37,11 +38,11 @@ namespace DependencyResolver {
             }
         }
 
-        if (!missingDependencies.empty()) {
+        if (!out.missing.empty()) {
             std::string joined;
-            for (std::size_t i = 0; i < missingDependencies.size(); ++i) {
+            for (std::size_t i = 0; i < out.missing.size(); ++i) {
                 if (i > 0) joined += ", ";
-                joined += missingDependencies[i];
+                joined += out.missing[i];
             }
             spdlog::warn("Missing dependencies detected: {}", joined);
         }
@@ -63,7 +64,6 @@ namespace DependencyResolver {
             }
         }
 
-        std::vector<std::string> result;
         std::deque<std::string> zeroInDegree;
 
         for (const std::string& moduleName : modulesToLoad) {
@@ -75,7 +75,7 @@ namespace DependencyResolver {
         while (!zeroInDegree.empty()) {
             std::string moduleName = zeroInDegree.front();
             zeroInDegree.pop_front();
-            result.push_back(moduleName);
+            out.order.push_back(moduleName);
 
             auto it = dependents.find(moduleName);
             if (it != dependents.end()) {
@@ -88,12 +88,13 @@ namespace DependencyResolver {
             }
         }
 
-        if (result.size() < modulesToLoad.size()) {
+        if (out.order.size() < modulesToLoad.size()) {
+            out.hasCycle = true;
             std::string cycleJoined;
             bool first = true;
             for (const std::string& moduleName : modulesToLoad) {
                 bool inResult = false;
-                for (const auto& r : result) {
+                for (const auto& r : out.order) {
                     if (r == moduleName) { inResult = true; break; }
                 }
                 if (!inResult) {
@@ -105,7 +106,7 @@ namespace DependencyResolver {
             spdlog::critical("Circular dependency detected involving modules: {}", cycleJoined);
         }
 
-        return result;
+        return out;
     }
 
 }
