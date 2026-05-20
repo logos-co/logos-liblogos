@@ -123,9 +123,16 @@ namespace {
             return false;
         }
 
+        // "Already loaded" is a successful no-op, not a failure.
+        // Callers (basecamp's PluginLoader::loadCoreDependencies,
+        // logoscore-cli, etc.) use loadModule as "ensure loaded";
+        // returning false here aborted UI-plugin loads whose core
+        // dependency had been pre-loaded at startup (e.g. clicking
+        // the package-manager launcher after basecamp pre-loaded
+        // `package_manager`).
         if (registryInstance().isLoaded(name)) {
-            spdlog::warn("Module already loaded: {}", name);
-            return false;
+            spdlog::debug("Module already loaded (no-op): {}", name);
+            return true;
         }
 
         std::string modPath = registryInstance().modulePath(name);
@@ -310,8 +317,6 @@ namespace ModuleManager {
 
         bool allSucceeded = true;
         for (const std::string& moduleName : resolved) {
-            if (registryInstance().isLoaded(moduleName))
-                continue;
             if (!loadModuleInternal(moduleName.c_str())) {
                 spdlog::warn("Failed to load module: {}", moduleName);
                 allSucceeded = false;

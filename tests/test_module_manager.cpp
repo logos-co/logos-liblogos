@@ -301,6 +301,56 @@ TEST_F(ModuleManagerTest, LoadModuleWithDeps_ReturnsZeroForUnknown) {
 }
 
 // =============================================================================
+// Idempotent-load contract: "already loaded ⇒ success"
+//
+// logos_core_load_module is an "ensure loaded" guard, not a "load fresh"
+// command. Pinning this in tests so the contract documented in
+// logos_core.h doesn't quietly regress — basecamp's PluginLoader and
+// logoscore-cli's load-module both rely on calling it against modules
+// the runtime may have already brought up at startup, and we don't want
+// a future refactor to start returning 0 in that case (which previously
+// caused UI-plugin loads to abort when a core dep was pre-loaded).
+//
+// We exercise this without a runtime: register fake modules, mark them
+// loaded via the registry adapter, then call the C entry point. The
+// short-circuit at the top of ModuleManager::loadModuleInternal never
+// reaches the descriptor / runtime path, so no subprocess is spawned.
+// =============================================================================
+
+TEST_F(ModuleManagerTest, LoadModule_ReturnsTrueWhenAlreadyLoaded) {
+    logos_core_register_module("preloaded", "/fake/path");
+    logos_core_mark_module_loaded("preloaded");
+    ASSERT_EQ(logos_core_is_module_loaded("preloaded"), 1);
+
+    // First call: module is already loaded ⇒ no-op success.
+    EXPECT_EQ(logos_core_load_module("preloaded", false), 1)
+        << "loading an already-loaded module must return 1 (no-op success)";
+
+    // Repeating the call must stay idempotent — still success, still loaded.
+    EXPECT_EQ(logos_core_load_module("preloaded", false), 1);
+    EXPECT_EQ(logos_core_is_module_loaded("preloaded"), 1);
+}
+
+TEST_F(ModuleManagerTest, LoadModuleWithDeps_ReturnsTrueWhenAllAlreadyLoaded) {
+    // Build a tiny dep graph: parent → child. Both pre-marked loaded.
+    logos_core_register_module("parent", "/fake/parent");
+    logos_core_register_module("child",  "/fake/child");
+    const char* deps[] = {"child"};
+    logos_core_register_module_dependencies("parent", deps, 1);
+    logos_core_mark_module_loaded("child");
+    logos_core_mark_module_loaded("parent");
+
+    // with_dependencies=true walks the resolved order and calls
+    // loadModuleInternal for each; every step short-circuits on
+    // isLoaded() and returns true, so the overall call returns 1.
+    EXPECT_EQ(logos_core_load_module("parent", true), 1)
+        << "with_dependencies=true must return 1 when the target and "
+           "all of its deps were already loaded before the call";
+    EXPECT_EQ(logos_core_is_module_loaded("parent"), 1);
+    EXPECT_EQ(logos_core_is_module_loaded("child"),  1);
+}
+
+// =============================================================================
 // Module Directory Management Tests
 // =============================================================================
 

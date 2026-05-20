@@ -39,7 +39,15 @@ LOGOS_CORE_EXPORT char** logos_core_get_known_modules();
 // Load a specific module by name.
 // When with_dependencies is true, resolves the dependency tree and loads
 // modules in correct topological order before loading the target.
-// Returns 1 if successful, 0 if failed
+//
+// Semantics: "ensure loaded", not "load fresh". Returns 1 when all
+// required modules end up loaded — including the case where the target
+// (or, with with_dependencies=true, any of its deps) was already loaded
+// before the call. This idempotency is load-bearing for callers that
+// use it as a guard ("make sure X is up before I use it").
+// Returns 0 only when the module is unknown, dependency resolution
+// fails, or an actual load step (not an already-loaded no-op) fails.
+// Aborts the process if `module_name` is NULL.
 LOGOS_CORE_EXPORT int logos_core_load_module(const char* module_name, bool with_dependencies);
 
 // Unload a specific module by name.
