@@ -5,8 +5,10 @@
 #include "logos_api.h"
 #include "interface.h"
 
+#include <cerrno>
 #include <csignal>
-#include <cstring>
+#include <cstddef>
+#include <cstdint>
 
 #include <execinfo.h>
 #include <unistd.h>
@@ -25,16 +27,58 @@ const char* g_crashModuleName = "unknown";
 // run the handler instead of immediately re-faulting.
 char g_altStack[64 * 1024];
 
-// async-signal-safe: only write(2).
+// async-signal-safe: write(2) only. Inlines NUL scan and the EINTR /
+// partial-write loop so the handler never touches libc symbols whose
+// async-signal-safety POSIX does not guarantee — std::strlen, strerror,
+// stdio. Best-effort: on persistent write failure we just return; we
+// are already in a fatal signal handler about to re-raise.
 void safeWrite(const char* s)
 {
     if (!s) return;
-    const ssize_t n = ::write(STDERR_FILENO, s, std::strlen(s));
-    (void)n;
+    std::size_t n = 0;
+    while (s[n] != '\0') ++n;
+    while (n > 0) {
+        const ssize_t w = ::write(STDERR_FILENO, s, n);
+        if (w <= 0) {
+            if (w < 0 && errno == EINTR) continue;
+            return;
+        }
+        s += w;
+        n -= static_cast<std::size_t>(w);
+    }
 }
 
-// Everything here is async-signal-safe: write(2), backtrace(3),
-// backtrace_symbols_fd(3), signal(2)/raise(3). No malloc, no strsignal.
+// async-signal-safe hex emit of a pointer value. Avoids snprintf (not on
+// the POSIX async-signal-safe list) and any libc string formatting.
+void safeWriteHex(const void* p)
+{
+    char hex[2 + 16 + 1];  // "0x" + 16 hex digits + NUL
+    hex[sizeof(hex) - 1] = '\0';
+    int idx = static_cast<int>(sizeof(hex)) - 1;
+    std::uintptr_t v = reinterpret_cast<std::uintptr_t>(p);
+    if (v == 0) {
+        hex[--idx] = '0';
+    } else {
+        while (v > 0 && idx > 2) {
+            const int d = static_cast<int>(v & 0xF);
+            hex[--idx] = static_cast<char>(d < 10 ? '0' + d : 'a' + d - 10);
+            v >>= 4;
+        }
+    }
+    hex[--idx] = 'x';
+    hex[--idx] = '0';
+    safeWrite(&hex[idx]);
+}
+
+// Everything here is async-signal-safe: write(2), backtrace(3) (writes
+// only into our own stack array — no libc string allocation), signal(2)
+// / raise(3). Deliberately NOT calling backtrace_symbols_fd: it invokes
+// dladdr() to resolve symbols, which takes the loader lock. A crash that
+// happens while the crashing thread already holds that lock (e.g. inside
+// dlopen) would deadlock the handler here. Frames are emitted as raw
+// addresses instead — decode after the fact with `atos -p <pid> <addr>`
+// (macOS) or `addr2line -e <bin> <addr>` (Linux). Same trade-off
+// Chromium / Firefox / Breakpad make for the same reason.
 extern "C" void fatalSignalHandler(int sig)
 {
     // "FATAL:" makes SubprocessContainer's onOutput classifier log this as
@@ -53,11 +97,15 @@ extern "C" void fatalSignalHandler(int sig)
         while (v > 0 && idx > 0) { numbuf[--idx] = static_cast<char>('0' + v % 10); v /= 10; }
     }
     safeWrite(&numbuf[idx]);
-    safeWrite("). Backtrace:\n");
+    safeWrite("). Backtrace (raw addresses; decode with atos/addr2line):\n");
 
     void* frames[64];
     const int n = ::backtrace(frames, 64);
-    ::backtrace_symbols_fd(frames, n, STDERR_FILENO);
+    for (int i = 0; i < n; ++i) {
+        safeWrite("  ");
+        safeWriteHex(frames[i]);
+        safeWrite("\n");
+    }
     safeWrite("FATAL: end backtrace\n");
 
     // Re-raise with the default disposition so the process still dies from the
