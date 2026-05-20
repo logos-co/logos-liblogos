@@ -10,6 +10,7 @@
 #include <atomic>
 #include <chrono>
 #include <condition_variable>
+#include <csignal>
 #include <cstdint>
 #include <mutex>
 #include <string>
@@ -211,6 +212,65 @@ TEST_F(SubprocessContainerTest, Launch_OutputCallbackReceivesStdoutAndStderr) {
     }
     EXPECT_TRUE(saw_stdout);
     EXPECT_TRUE(saw_stderr);
+}
+
+// ---------------------------------------------------------------------------
+// Crash detection — the kernel of crash isolation
+// ---------------------------------------------------------------------------
+//
+// When a child dies on a signal, the container must surface it via
+// onFinished(name, exit_code, crashed=true) and tear down its own
+// bookkeeping. Every observer above (composite_runtime → module_manager's
+// onTerminated → registry.markUnloaded → daemon → CLI) hangs off this
+// callback — if it stops firing with crashed=true, isolation breaks
+// silently. The end-to-end test in logos-logoscore-cli covers the full
+// stack at ~13s; this one pins the mechanism at its source in ~50ms.
+
+TEST_F(SubprocessContainerTest, Launch_OnFinishedReportsCrashedOnSignal) {
+    std::mutex mtx;
+    std::condition_variable cv;
+    std::atomic<bool> fired{false};
+    std::string gotName;
+    int gotExitCode = -1;
+    bool gotCrashed = false;
+
+    SubprocessContainer::ProcessCallbacks cb;
+    cb.onFinished = [&](const std::string& n, int code, bool crashed) {
+        {
+            std::lock_guard<std::mutex> lock(mtx);
+            gotName = n;
+            gotExitCode = code;
+            gotCrashed = crashed;
+        }
+        fired.store(true);
+        cv.notify_all();
+    };
+
+    // `kill -SEGV $$` makes the shell signal itself — a portable way to
+    // exercise WIFSIGNALED without depending on /bin/kill -s SEGV syntax
+    // or shipping a custom helper binary.
+    ASSERT_TRUE(SubprocessContainer::startProcess(
+        "crash_test", "/bin/sh", {"-c", "kill -SEGV $$"}, cb));
+
+    std::unique_lock<std::mutex> lock(mtx);
+    ASSERT_TRUE(cv.wait_for(lock, std::chrono::seconds(5),
+                            [&]() { return fired.load(); }))
+        << "onFinished never fired for a signaled child";
+
+    EXPECT_EQ(gotName, "crash_test");
+    EXPECT_TRUE(gotCrashed)
+        << "container must report crashed=true on signal-exit (WIFSIGNALED). "
+           "Without this, the markUnloaded propagation up the stack stalls "
+           "and a crashed module looks 'loaded' forever.";
+    EXPECT_EQ(gotExitCode, SIGSEGV)
+        << "exit_code must carry the signal number (WTERMSIG), not the "
+           "raw waitpid status. Got " << gotExitCode << ".";
+
+    // Bookkeeping side of the contract: once onFinished has fired the
+    // container must no longer claim the module exists. This is what
+    // feeds upstream observers via their own ProcessEntry cleanup.
+    EXPECT_FALSE(container.hasModule("crash_test"));
+    EXPECT_FALSE(container.pid("crash_test").has_value());
 }
 
 // ---------------------------------------------------------------------------
