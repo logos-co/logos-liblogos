@@ -114,7 +114,7 @@ logos-liblogos/
 | `processModule(path) → std::string` | Extract metadata from a module file, register as known |
 | `processModuleCStr(path) → char*` | C-string variant of processModule |
 | `loadModule(name) → bool` | Load a module (selects a runtime via RuntimeRegistry, spawns subprocess, sends auth token) |
-| `loadModuleWithDependencies(name) → bool` | Resolve dependency tree, load in topological order |
+| `loadModuleWithDependencies(name) → bool` | Resolve dependency tree, load in topological order. Returns false if any dependency is unknown or a cycle is detected (hard failure on `!ResolveResult::ok()`) |
 | `initializeCapabilityModule() → bool` | Load the built-in capability module if available |
 | `unloadModule(name) → bool` | Terminate module process and update registry |
 | `unloadModuleWithDependents(name) → bool` | Cascade unload: terminate the named module together with every currently loaded module that transitively depends on it, leaves-first |
@@ -213,9 +213,12 @@ logos-liblogos/
 
 **API (namespace `DependencyResolver`):**
 
-| Method | Description |
-|--------|-------------|
-| `resolve(requested, isKnown, getDependencies) → std::vector<std::string>` | Returns modules in load order (dependencies first) |
+**API (namespace `DependencyResolver`):**
+
+| Type / Method | Description |
+|---------------|-------------|
+| `ResolveResult` | Result struct: `order` (topological load order), `missing` (unknown dependency names), `hasCycle` (cycle detected). `ok()` returns true when `missing` is empty and `hasCycle` is false |
+| `resolve(requested, isKnown, getDependencies) → ResolveResult` | Resolves dependencies via Kahn's algorithm. Returns the reachable, known modules in load order plus diagnostic info about missing deps and cycles. Callers decide policy: load paths treat `!ok()` as a hard failure; teardown paths use `.order` only |
 
 Takes callback functions (`IsKnownFn`, `GetDependenciesFn`) so it has no coupling to the registry implementation.
 

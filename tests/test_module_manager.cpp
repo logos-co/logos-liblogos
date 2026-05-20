@@ -351,6 +351,54 @@ TEST_F(ModuleManagerTest, LoadModuleWithDeps_ReturnsTrueWhenAllAlreadyLoaded) {
 }
 
 // =============================================================================
+// Dependency resolution failure: logos_core_load_module(name, true) must
+// return 0 when the dependency graph cannot be fully resolved.
+//
+// The resolver silently drops unknown modules and detects cycles. Before
+// this fix, loadModuleWithDependencies only checked whether the *target*
+// appeared in the (possibly partial) resolved order — it didn't verify
+// the resolution was clean. A module whose transitive dependency was
+// unknown would load successfully, violating the contract in logos_core.h
+// ("returns 0 when dependency resolution fails").
+// =============================================================================
+
+TEST_F(ModuleManagerTest, LoadModuleWithDeps_FailsWhenDirectDependencyUnknown) {
+    logos_core_register_module("parent", "/fake/parent");
+    const char* deps[] = {"unknown_dep"};
+    logos_core_register_module_dependencies("parent", deps, 1);
+
+    // "unknown_dep" is not registered → resolution has missing deps → fail.
+    EXPECT_EQ(logos_core_load_module("parent", true), 0)
+        << "must return 0 when a direct dependency is unknown";
+}
+
+TEST_F(ModuleManagerTest, LoadModuleWithDeps_FailsWhenTransitiveDependencyUnknown) {
+    logos_core_register_module("top", "/fake/top");
+    logos_core_register_module("mid", "/fake/mid");
+    const char* depsTop[] = {"mid"};
+    const char* depsMid[] = {"bottom_unknown"};
+    logos_core_register_module_dependencies("top", depsTop, 1);
+    logos_core_register_module_dependencies("mid", depsMid, 1);
+
+    // "bottom_unknown" not registered → transitive resolution fails.
+    EXPECT_EQ(logos_core_load_module("top", true), 0)
+        << "must return 0 when a transitive dependency is unknown";
+}
+
+TEST_F(ModuleManagerTest, LoadModuleWithDeps_FailsOnCircularDependency) {
+    logos_core_register_module("cyc_a", "/fake/cyc_a");
+    logos_core_register_module("cyc_b", "/fake/cyc_b");
+    const char* depsA[] = {"cyc_b"};
+    const char* depsB[] = {"cyc_a"};
+    logos_core_register_module_dependencies("cyc_a", depsA, 1);
+    logos_core_register_module_dependencies("cyc_b", depsB, 1);
+
+    // Cycle detected → must return 0.
+    EXPECT_EQ(logos_core_load_module("cyc_a", true), 0)
+        << "must return 0 when a circular dependency is detected";
+}
+
+// =============================================================================
 // Module Directory Management Tests
 // =============================================================================
 

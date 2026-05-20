@@ -299,24 +299,33 @@ namespace ModuleManager {
         std::vector<std::string> requested;
         requested.push_back(name);
 
-        std::vector<std::string> resolved = DependencyResolver::resolve(
+        auto resolved = DependencyResolver::resolve(
             requested,
             [](const std::string& n) { return registryInstance().isKnown(n); },
             [](const std::string& n) { return registryInstance().moduleDependencies(n); }
         );
 
+        // Treat missing dependencies and cycles as hard failures.
+        // The header contract (logos_core.h) promises "returns 0 when
+        // dependency resolution fails", so we must not proceed with a
+        // partial order that silently dropped unknown deps or cycled.
+        if (!resolved.ok()) {
+            spdlog::warn("Cannot resolve dependencies for: {}", name);
+            return false;
+        }
+
         bool nameFound = false;
-        for (const auto& r : resolved) {
+        for (const auto& r : resolved.order) {
             if (r == name) { nameFound = true; break; }
         }
 
-        if (resolved.empty() || !nameFound) {
+        if (resolved.order.empty() || !nameFound) {
             spdlog::warn("Cannot resolve dependencies for: {}", name);
             return false;
         }
 
         bool allSucceeded = true;
-        for (const std::string& moduleName : resolved) {
+        for (const std::string& moduleName : resolved.order) {
             if (!loadModuleInternal(moduleName.c_str())) {
                 spdlog::warn("Failed to load module: {}", moduleName);
                 allSucceeded = false;
@@ -377,11 +386,13 @@ namespace ModuleManager {
 
         // Order leaves-first: resolve load-order for the teardown set, then
         // reverse. Dependents come down before the modules they depend on.
+        // Teardown is best-effort — we use .order and ignore resolution errors
+        // (missing deps / cycles) because we need to tear down what we can.
         std::vector<std::string> loadOrder = DependencyResolver::resolve(
             teardownSet,
             [](const std::string& n) { return registryInstance().isKnown(n); },
             [](const std::string& n) { return registryInstance().moduleDependencies(n); }
-        );
+        ).order;
         std::vector<std::string> teardownOrder;
         std::unordered_set<std::string> teardownOrderMembers;
         for (auto it = loadOrder.rbegin(); it != loadOrder.rend(); ++it) {
@@ -451,7 +462,7 @@ namespace ModuleManager {
             requestedModules,
             [](const std::string& name) { return registryInstance().isKnown(name); },
             [](const std::string& name) { return registryInstance().moduleDependencies(name); }
-        );
+        ).order;
     }
 
     std::vector<std::string> getDependencies(const std::string& name, bool recursive) {
