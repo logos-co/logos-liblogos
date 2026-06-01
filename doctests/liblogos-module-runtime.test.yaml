@@ -1,0 +1,241 @@
+name: "Running a Real Module Against This liblogos"
+output: liblogos-module-runtime.md
+release: ""
+
+intro: |
+  `logos-liblogos` is the core of the Logos platform — `logos_host` and the
+  `liblogos_core` C API that every frontend (the `logoscore` CLI, the basecamp
+  desktop app) builds on. This doc-test exercises **this** liblogos commit
+  end-to-end through the headless `logoscore` runtime:
+
+  1. Build the `logoscore` CLI, **overriding its `logos-liblogos` input with the
+     commit under test** — so the runtime you exercise is built against the code
+     in this repository, not the latest published release.
+  2. Build the `lgpm` local package manager.
+  3. Build the real [`accounts_module`](https://github.com/logos-co/logos-accounts-module)
+     as an `.lgx` package straight from its own flake, and install it into a
+     `./modules` directory with `lgpm`.
+  4. Start `logoscore` in daemon mode (`-D`), load `accounts_module`, introspect
+     it, and call one of its methods — verifying the module actually runs on top
+     of this liblogos.
+
+  Because every layer (host, module loader, IPC) comes from the liblogos commit
+  under test, a green run is real evidence that this change keeps the module
+  runtime working.
+
+what_you_build: "The real `accounts_module`, installed with `lgpm` and called through a `logoscore` daemon running on this liblogos commit."
+
+what_you_learn:
+  - How to build `logoscore` against a specific `logos-liblogos` commit via `--override-input`
+  - How to build a real module's `.lgx` from its own flake
+  - How to install an `.lgx` into a modules directory with `lgpm`
+  - How to start the `logoscore` daemon, load a module, and call its methods
+
+prerequisites:
+  - |
+    **Nix** with flakes enabled. Install from [nixos.org](https://nixos.org/download.html), then enable flakes:
+
+    ```bash
+    mkdir -p ~/.config/nix
+    echo 'experimental-features = nix-command flakes' >> ~/.config/nix/nix.conf
+    ```
+
+    Verify: `nix flake --help >/dev/null 2>&1 && echo "Flakes enabled"`
+  - "**git** — to clone the module repository."
+  - "A Linux or macOS machine."
+
+sections:
+  - title: "Build logoscore against this liblogos"
+    step: true
+    text: |
+      Build the `logoscore` CLI from its published flake, but **override its
+      `logos-liblogos` input** so it links against the commit under test rather
+      than the latest release. The result is symlinked to `./logos/`.
+
+      > The override URL is what pins liblogos to a specific commit: the doc-test
+      > runner expands a release placeholder on it to a concrete ref. Locally that
+      > is this checkout's `HEAD` (see `run.sh`); in CI it is the commit being
+      > tested. With no pin it falls back to latest `master`.
+    steps:
+      - title: "Build the CLI with the liblogos override"
+        run: "nix build 'github:logos-co/logos-logoscore-cli' --override-input logos-liblogos 'github:logos-co/logos-liblogos{release}' --out-link ./logos"
+        code_block: |
+          nix build 'github:logos-co/logos-logoscore-cli' \
+            --override-input logos-liblogos 'github:logos-co/logos-liblogos' \
+            --out-link ./logos
+        check_file: "logos/bin/logoscore"
+        post_text: |
+          The build produces `logos/bin/logoscore` plus bundled runtime libraries
+          and a `logos/modules/` directory containing the built-in
+          `capability_module` (required for the auth handshake when loading
+          modules). Because `follows` propagates the override, the whole
+          dependency closure — `logos_host`, `liblogos_core`, every module — is
+          rebuilt against this liblogos.
+
+  - title: "Build the lgpm package manager"
+    step: true
+    text: |
+      `lgpm` installs `.lgx` packages into a modules directory and scans what is
+      installed. Build it from `logos-liblogos`' own `logos-package-manager`
+      input and link it as `./lgpm`.
+    steps:
+      - title: "Build lgpm"
+        run: "nix build 'github:logos-co/logos-package-manager#cli' -o lgpm"
+        check_file: "lgpm/bin/lgpm"
+        post_text: "The executable is at `./lgpm/bin/lgpm`."
+
+  - title: "Build and install the accounts module"
+    step: true
+    text: |
+      Clone [`logos-accounts-module`](https://github.com/logos-co/logos-accounts-module),
+      build its `.lgx` straight from its flake's `#lgx` output, and install it
+      into a local `./modules` directory with `lgpm`. Every module built with
+      [`logos-module-builder`](https://github.com/logos-co/logos-module-builder)
+      exposes a ready-to-install `#lgx`.
+    steps:
+      - title: "Clone the module"
+        text: |
+          We clone over HTTPS so the step works in CI; over SSH the URL is
+          `git@github.com:logos-co/logos-accounts-module.git`.
+        run: "git clone --depth 1 https://github.com/logos-co/logos-accounts-module.git"
+        check_file: "logos-accounts-module/flake.nix"
+
+      - title: "Build the module's .lgx"
+        text: |
+          Build the `#lgx` output and link it as `./accounts-lgx`. (This compiles
+          the module and its SDK dependencies through Nix, so the first build is
+          slow.)
+        run: "nix build 'path:./logos-accounts-module#lgx' -o accounts-lgx"
+        code_block: |
+          # From inside the clone this is simply: nix build '.#lgx'
+          nix build 'path:./logos-accounts-module#lgx' -o accounts-lgx
+        post_text: "The `.lgx` package is now under `./accounts-lgx/`:"
+        extra_run:
+          run: "ls accounts-lgx/*.lgx"
+
+      - title: "Seed the modules directory with the bundled capability module"
+        text: |
+          `accounts_module` is loaded through the host's capability layer, so the
+          modules directory also needs the `capability_module` that ships with
+          `logoscore`. Copy it across first.
+        run: |
+          mkdir -p modules
+          cp -RL ./logos/modules/. ./modules/
+        check_file: "modules/capability_module/manifest.json"
+
+      - title: "Install the .lgx with lgpm"
+        text: |
+          Install the freshly-built package into `./modules`. `accounts_module` is
+          a `core` module, so it goes to `--modules-dir`. The package is unsigned
+          (a local dev build), so we pass `--allow-unsigned`.
+        run: "./lgpm/bin/lgpm --modules-dir ./modules --allow-unsigned install --file accounts-lgx/*.lgx"
+        expect_contains:
+          - "Installed to:"
+
+      - title: "Confirm the install"
+        text: "Scan the directory and confirm the module landed:"
+        run: "./lgpm/bin/lgpm --modules-dir ./modules list"
+        expect_contains:
+          - "accounts_module"
+        check_file: "modules/accounts_module/manifest.json"
+
+  - title: "Run the daemon and call the module"
+    step: true
+    text: |
+      Start `logoscore` in daemon mode pointed at `./modules`, then use the client
+      subcommands to load `accounts_module`, introspect it, and call one of its
+      methods. Daemon output is captured in `logs.txt`.
+    steps:
+      - title: "Start the daemon"
+        text: |
+          Start logoscore in daemon mode in the background, capturing output to
+          `logs.txt`:
+        run: "sh -c './logos/bin/logoscore -D -m ./modules > logs.txt 2>&1 &'"
+        code_block: "logoscore -D -m ./modules > logs.txt &"
+        post_text: |
+          The `-D` flag starts the daemon. The client subcommands below connect to
+          this running process via the config written under `~/.logoscore/`.
+
+      - run: "sleep 3"
+
+      - title: "Inspect the startup log"
+        text: "Review the daemon's startup output:"
+        run: "cat logs.txt"
+
+      - title: "Check daemon status"
+        text: "Verify the daemon is running:"
+        run: "./logos/bin/logoscore status"
+        code_block: "logoscore status"
+
+      - title: "List discovered modules"
+        text: "`accounts_module` should be visible in the scan directory:"
+        run: "./logos/bin/logoscore list-modules"
+        code_block: "logoscore list-modules"
+        expect_contains:
+          - "accounts_module"
+
+      - title: "Load the module"
+        text: "Load `accounts_module` into the running daemon:"
+        run: "./logos/bin/logoscore load-module accounts_module"
+        code_block: "logoscore load-module accounts_module"
+        expect_contains:
+          - "accounts_module"
+
+      - title: "Confirm the module is loaded"
+        text: |
+          Re-run `status`; the module that was `not_loaded` before now reports
+          `loaded`:
+        run: "./logos/bin/logoscore status"
+        code_block: "logoscore status"
+        expect_contains:
+          - "accounts_module"
+          - '"status":"loaded"'
+
+      - title: "Introspect the module with module-info"
+        text: |
+          `module-info` lists the `Q_INVOKABLE` methods the module exposes — the
+          same methods you can `call`:
+        run: "./logos/bin/logoscore module-info accounts_module"
+        code_block: "logoscore module-info accounts_module"
+        expect_contains:
+          - "accounts_module"
+          - "createRandomMnemonic"
+
+      - title: "Call a method"
+        text: |
+          Generate a fresh 12-word BIP-39 mnemonic. `createRandomMnemonic` takes
+          the word count and returns the phrase — a real round-trip through the
+          go-wallet-sdk C library wrapped by the module, dispatched over liblogos'
+          IPC:
+        run: "./logos/bin/logoscore call accounts_module createRandomMnemonic 12"
+        code_block: "logoscore call accounts_module createRandomMnemonic 12"
+        expect_contains:
+          - '"result"'
+
+      - title: "Call a second method"
+        text: |
+          `lengthToEntropyStrength` maps a mnemonic word count to its entropy
+          strength in bits — 12 words is 128 bits. This exercises an `int`
+          round-trip:
+        run: "./logos/bin/logoscore call accounts_module lengthToEntropyStrength 12"
+        code_block: "logoscore call accounts_module lengthToEntropyStrength 12"
+        expect_contains:
+          - '"result":128'
+
+      - title: "Stop the daemon"
+        text: "Shut the daemon down cleanly:"
+        run: "./logos/bin/logoscore stop"
+        code_block: "logoscore stop"
+        post_text: |
+          The daemon removes its state file and exits.
+
+      - run: "sleep 2"
+
+      - title: "Confirm the daemon has stopped"
+        text: |
+          With no daemon running, the client reports `not_running` and exits
+          non-zero, so we add `|| true` to let the doc-test assert on the output:
+        run: "./logos/bin/logoscore status || true"
+        code_block: "logoscore status"
+        expect_contains:
+          - '"status":"not_running"'
