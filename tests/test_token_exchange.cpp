@@ -16,9 +16,11 @@
 #include <gtest/gtest.h>
 #include "logos_core.h"
 #include "qt_test_adapter.h"
+#include "peer_credentials.h"
 #include "unix_socket_path.h"
 #include "path_safety.h"
 #include <atomic>
+#include <cerrno>
 #include <chrono>
 #include <cstdlib>
 #include <cstring>
@@ -26,6 +28,8 @@
 #include <fstream>
 #include <future>
 #include <string>
+#include <sys/socket.h>
+#include <sys/stat.h>
 #include <thread>
 #include <unistd.h>
 
@@ -611,4 +615,101 @@ TEST_F(TokenExchangeTest, IsSafePathSegment_RejectsTraversalAndSeparators) {
     EXPECT_FALSE(isSafePathSegment("a\\b"));
     EXPECT_FALSE(isSafePathSegment(std::string("nul\0byte", 8)));
     EXPECT_FALSE(isSafePathSegment(std::string(256, 'a')));
+}
+
+// =============================================================================
+// F-012 — the token-handoff socket must not be reachable by other local users.
+//
+// Exploit scenario this guards against: on a shared/multi-user host, an
+// attacker under a different uid knows a module (say "chat_module") is about to
+// load — module names aren't secret — and races the parent by repeatedly
+// connect()ing to the predictable socket path /tmp/logos_token_chat_module.
+// If it wins the connection, it writes a token T it chose; the child accepts T
+// verbatim as its auth credential. The attacker then presents T on inter-module
+// calls and is authorized as that module, bypassing the capability/token gate
+// (CWE-862, missing peer authentication on a local IPC channel).
+//
+// Root cause: the child listened with QLocalServer's default NoOptions, so the
+// socket node was created at that public path under the world-writable $TMPDIR
+// with mode 0777 & ~umask (≈0755) — group/other can connect.
+//
+// The fix sets QLocalServer::UserAccessOption so the node is owner-only
+// (0600), which stops a different-uid attacker from connecting at all. We can't
+// spawn a second uid in CI to run the inject directly, but that socket mode is
+// the exact precondition that makes it possible — so we assert the node is
+// owner-only. Before the fix this test fails (group/other bits set); after it,
+// the node carries no group/other access.
+// =============================================================================
+
+TEST_F(TokenExchangeTest, TokenSocket_IsNotAccessibleByOtherUsers) {
+    const std::string moduleName = "rt_sock_perms";
+    const std::string token = "5ec0ff12-0000-0000-0000-000000000012";
+
+    // Pin the path: unset both env vars that influence socket naming so the
+    // expected path is simple and deterministic (see RoundTrip_..TmpdirUnset).
+    ScopedEnv tmpdirEnv("TMPDIR", nullptr);
+    ScopedEnv instanceEnv("LOGOS_INSTANCE_ID", nullptr);
+
+    const std::string socketPath =
+        ::logos::unixSocketPath("logos_token_" + moduleName);
+
+    // Start a receiver and wait for it to bind the socket node, then inspect
+    // its mode while it is still listening.
+    ReceiverHandle receiver;
+    receiver.start(moduleName);
+    logos_core_register_process(moduleName.c_str());
+
+    ASSERT_TRUE(waitUntil(
+        [&]() { return std::filesystem::exists(socketPath); }, 5000))
+        << "receiver never bound the token socket at: " << socketPath;
+
+    struct stat st{};
+    ASSERT_EQ(::stat(socketPath.c_str(), &st), 0)
+        << "stat() failed for token socket: " << socketPath;
+
+    // The vulnerability is group/other being able to reach the socket. With
+    // UserAccessOption the node is owner-only; assert no group/other bits.
+    // Before the fix the default NoOptions left the node at 0777 & ~umask
+    // (≈0755 with umask 022), so this expectation failed.
+    EXPECT_EQ(st.st_mode & (S_IRWXG | S_IRWXO), 0u)
+        << "token socket is reachable by group/other (mode "
+        << std::oct << (st.st_mode & 07777) << std::dec
+        << "); a co-tenant uid could inject an auth token (F-012)";
+
+    // The legitimate same-uid handoff must still succeed with the socket
+    // hardened and the peer-uid check in place — also unblocks the receiver
+    // so the test finishes immediately instead of waiting out the 10s timeout.
+    ASSERT_EQ(logos_core_send_token(moduleName.c_str(), token.c_str()), 1)
+        << "hardened socket must not break the legitimate same-uid handoff";
+    ASSERT_TRUE(waitUntil([&]() { return receiver.finished.load(); }, 5000));
+    receiver.join();
+    EXPECT_EQ(receiver.token, token);
+}
+
+// =============================================================================
+// Peer-credential helper — the primitive behind the sender/receiver peer
+// authentication. Both sides call ::logos::socketPeerIsSameUid() to refuse a
+// peer running under a different uid. We can't fabricate a different-uid peer
+// in CI, but we can pin the two contractual behaviours the hardening relies on:
+//   - a same-uid connected peer is accepted (so the legitimate handoff works)
+//   - a bad fd fails closed (so errors never read as "trusted")
+// =============================================================================
+
+TEST_F(TokenExchangeTest, PeerCredentials_SameUidSocketPairIsTrusted) {
+    int sv[2] = {-1, -1};
+    ASSERT_EQ(::socketpair(AF_UNIX, SOCK_STREAM, 0, sv), 0)
+        << "socketpair() failed: " << std::strerror(errno);
+
+    // Both ends belong to this process → same uid → must be trusted.
+    EXPECT_TRUE(::logos::socketPeerIsSameUid(sv[0]));
+    EXPECT_TRUE(::logos::socketPeerIsSameUid(sv[1]));
+
+    ::close(sv[0]);
+    ::close(sv[1]);
+}
+
+TEST_F(TokenExchangeTest, PeerCredentials_BadFdFailsClosed) {
+    // A negative/closed fd must be rejected — the helper fails closed so a
+    // syscall error can never be mistaken for a trusted peer.
+    EXPECT_FALSE(::logos::socketPeerIsSameUid(-1));
 }

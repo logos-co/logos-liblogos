@@ -102,6 +102,19 @@ Since the remote object registry has no built-in security mechanisms, all RPC ca
 2. **Module → Module**: When modules need to communicate, they request authorization from the Capability Module, which issues a token and notifies both parties. The modules then use this token for subsequent requests.
 3. **Token Storage**: Each module stores tokens in a thread-safe `TokenManager` (part of the SDK). `ModuleProxy` validates tokens before dispatching method calls.
 
+#### Token-handoff socket hardening
+
+The Core → Module handoff socket lives at a public, predictable path under the world-writable temp directory (`$TMPDIR`, default `/tmp`), so the local IPC channel is hardened against a same-host attacker injecting or intercepting the auth token.
+
+**Threat (F-012).** On a shared/multi-user host, an attacker under a different uid knows a module (e.g. `chat_module`) is about to load — module names are not secret — and races the parent by repeatedly connecting to the predictable socket path `/tmp/logos_token_chat_module`. If it wins the connection, it sends a token `T` of its choosing; the child accepts `T` verbatim as its auth credential. The attacker then presents `T` on inter-module calls and is authorized as that module, bypassing the capability/token gate.
+
+The hardening closes this on both sides of the handoff:
+
+- **Owner-only socket node.** The child binds the `QLocalServer` with `UserAccessOption`, creating the socket node with mode `0600`. A process running under a different uid cannot `connect()` to it, closing the window where a co-tenant could race the parent and hand the child an attacker-chosen token.
+- **Mutual peer-uid authentication.** Both sides verify the other end's uid before trusting it, via a Qt-free helper (`socketPeerIsSameUid()`, `SO_PEERCRED` on Linux / `getpeereuid()` on BSD/macOS). The child rejects any connecting peer whose uid is not its own; the parent refuses to write the token to a listener it did not authenticate as the same uid (guarding against a hostile listener planted at the predictable path). The check fails closed — a bad fd or syscall error is treated as untrusted.
+
+This authenticates the connecting *uid*, not the specific parent/child process; a same-uid sibling could still race the socket. Closing that residual gap (a per-user `0700` socket directory and/or a pid check) is left as future hardening.
+
 ### Module Metadata
 
 Every module ships a `metadata.json` referenced by Qt's `Q_PLUGIN_METADATA` macro. Required fields:

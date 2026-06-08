@@ -25,6 +25,7 @@
 #include <sys/types.h>
 #include <unistd.h>
 
+#include "peer_credentials.h"
 #include "unix_socket_path.h"
 
 #include <array>
@@ -657,6 +658,31 @@ bool SubprocessContainer::sendTokenToProcess(const std::string& name,
     if (sock < 0) {
         fprintf(stderr, "[SubprocessContainer] Failed to connect to token socket for: %s\n",
                 name.c_str());
+
+        std::shared_ptr<ProcessEntry> entry;
+        {
+            std::lock_guard<std::mutex> lock(s_processesMutex);
+            auto it = s_processes.find(name);
+            if (it != s_processes.end()) {
+                entry = it->second;
+                s_processes.erase(it);
+            }
+        }
+        syncKill(entry);
+        return false;
+    }
+
+    // Authenticate the listener before handing it the token. The socket path
+    // is public and predictable under the world-writable $TMPDIR, so a
+    // co-tenant attacker could win the race to create the listener we just
+    // connect()ed to. Only deliver the credential if the peer runs as our own
+    // uid (the legitimate child host); otherwise we'd be leaking the token to
+    // a hostile process (F-012, CWE-862). Symmetric with the receiver's check.
+    if (!::logos::socketPeerIsSameUid(sock)) {
+        fprintf(stderr,
+            "[SubprocessContainer] Refusing to send token to untrusted listener "
+            "(uid mismatch) for: %s\n", name.c_str());
+        ::close(sock);
 
         std::shared_ptr<ProcessEntry> entry;
         {

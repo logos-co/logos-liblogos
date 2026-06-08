@@ -1,4 +1,5 @@
 #include "token_receiver.h"
+#include "peer_credentials.h"
 #include "unix_socket_path.h"
 #include "path_safety.h"
 #include <QByteArray>
@@ -6,6 +7,8 @@
 #include <QLocalSocket>
 #include <QString>
 #include <spdlog/spdlog.h>
+
+#include <unistd.h>
 
 #include <cstdlib>
 #include <string>
@@ -62,6 +65,15 @@ std::string receive(const std::string& moduleName)
     // RAII makes every exit path (incl. listen() failure) clean up.
     QLocalServer tokenServer;
 
+    // Harden the socket node to owner-only (mode 0600) so a co-tenant
+    // process running under a different uid cannot connect() at all. The
+    // socket lives at a public, predictable path under the world-writable
+    // $TMPDIR (default /tmp); without this, the default NoOptions leaves
+    // it group/other-accessible and a local attacker could race the
+    // parent to inject an attacker-chosen auth token (F-012, CWE-862).
+    // This must be set before listen() creates the node.
+    tokenServer.setSocketOptions(QLocalServer::UserAccessOption);
+
     QLocalServer::removeServer(socketPathQ);
 
     if (!tokenServer.listen(socketPathQ)) {
@@ -73,6 +85,22 @@ std::string receive(const std::string& moduleName)
     std::string authToken;
     if (tokenServer.waitForNewConnection(10000)) {
         QLocalSocket* clientSocket = tokenServer.nextPendingConnection();
+
+        // Authenticate the peer by uid: only a process running as our own
+        // uid (the legitimate parent host) may hand us a token. The
+        // owner-only socket node above already blocks a different-uid
+        // attacker; this is the defence-in-depth check that rejects any
+        // peer that slips through, rather than trusting whatever bytes the
+        // first connector sends (F-012, CWE-862).
+        const int peerFd = static_cast<int>(clientSocket->socketDescriptor());
+        if (!::logos::socketPeerIsSameUid(peerFd)) {
+            spdlog::critical(
+                "Rejecting token connection from untrusted peer (expected uid {})",
+                ::getuid());
+            clientSocket->abort();
+            return {};
+        }
+
         if (clientSocket->waitForReadyRead(5000)) {
             QByteArray tokenData = clientSocket->readAll();
             authToken = QString::fromUtf8(tokenData).toStdString();
