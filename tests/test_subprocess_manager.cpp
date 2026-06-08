@@ -25,6 +25,7 @@
 #include <cstdlib>
 #include <cstring>      // for strncpy
 #include <mutex>
+#include <poll.h>        // for poll() in the impostor accept loop
 #include <string>
 #include <sys/socket.h>
 #include <sys/un.h>
@@ -389,3 +390,134 @@ TEST_F(ProcessManagerTest, SendToken_SucceedsAfterDelay) {
     EXPECT_TRUE(received.load());
     EXPECT_EQ(receivedToken, "hello-token");
 }
+
+// ---------------------------------------------------------------------------
+// F-010 (CWE-940): the parent must NOT hand the auth token to an impostor
+// that pre-binds the predictable token socket before the real child listens.
+//
+// Threat model: the token socket path ($TMPDIR/logos_token_<name>) is
+// predictable and lives in a world-writable temp dir. A local attacker can
+// bind+listen there before the legitimate child module calls listen(). If the
+// parent connects and writes the token without checking who is listening, the
+// secret leaks and the attacker can replay it for authorized cross-module
+// calls.
+//
+// We replicate the squat with an in-process impostor whose listener pid is the
+// test process itself, while a *real* child (a sleep) is registered for the
+// same name so the container knows the genuine child's pid. The peer-pid gate
+// must reject the impostor: sendTokenToProcess must NOT write the token to it
+// and must fail rather than leak the secret. The gate reads the peer pid via
+// SO_PEERCRED on Linux and getsockopt(SOL_LOCAL, LOCAL_PEERPID) on macOS, so
+// the same in-process impostor is rejected on both platforms — its pid is the
+// test process, not the registered child.
+//
+// Pre-fix (no listener authentication) this test FAILS: the impostor receives
+// the token and `ok` is true. Post-fix it passes: the impostor receives
+// nothing and `ok` is false.
+//
+// Limited to Linux and macOS — the two platforms with a peer-credential API
+// and a pid gate. On any other platform peerIsTrusted() fails closed without
+// inspecting a pid, so this in-process impostor (same uid, different pid)
+// cannot exercise the pid gate the test is asserting.
+// ---------------------------------------------------------------------------
+
+#if defined(__linux__) || defined(__APPLE__)
+TEST_F(ProcessManagerTest, SendToken_RejectsImpostorListenerSquattingSocket) {
+    const char* sleep = sleepBinary();
+    if (!sleep) GTEST_SKIP() << "sleep binary not found";
+
+    const std::string name = "f010_impostor";
+    const std::string path = tokenSocketPath(name);
+    ::unlink(path.c_str());  // clear any stale socket
+
+    // The attacker pre-binds the predictable socket path and listens. Use a
+    // generous backlog and (below) a thread that accepts continuously: the
+    // parent's connect() is blocking, so an un-drained backlog could wedge it
+    // and mask the behaviour we're testing. We want connect() to keep
+    // succeeding so the parent's *authentication* decision is what's exercised.
+    int impostor = ::socket(AF_UNIX, SOCK_STREAM, 0);
+    ASSERT_GE(impostor, 0);
+    struct sockaddr_un addr{};
+    addr.sun_family = AF_UNIX;
+    strncpy(addr.sun_path, path.c_str(), sizeof(addr.sun_path) - 1);
+    ASSERT_EQ(::bind(impostor, reinterpret_cast<struct sockaddr*>(&addr), sizeof(addr)), 0)
+        << "failed to bind impostor listener at " << path;
+    ASSERT_EQ(::listen(impostor, 64), 0);
+    struct SockGuard {
+        int fd; std::string p;
+        ~SockGuard() { if (fd >= 0) ::close(fd); ::unlink(p.c_str()); }
+    } guard{impostor, path};
+
+    // Spawn a real child for `name` so the container records its (genuine)
+    // pid. This is what makes the impostor distinguishable: its listener pid
+    // is this test process, not the registered child. (The impostor shares our
+    // uid, so the uid gate alone wouldn't reject it; the pid gate is what
+    // catches the squat — via SO_PEERCRED on Linux, LOCAL_PEERPID on macOS.)
+    const char* args[] = {"5", nullptr};
+    ASSERT_EQ(logos_core_start_process(name.c_str(), sleep, args), 1);
+    const int64_t childPid = logos_core_get_process_id(name.c_str());
+    ASSERT_GT(childPid, 0);
+    ASSERT_NE(childPid, static_cast<int64_t>(::getpid()))
+        << "impostor pid must differ from the real child pid for this test to "
+           "exercise the pid gate";
+
+    // Impostor accept loop: keep accepting (draining the backlog so the
+    // parent's blocking connect() never wedges) and read whatever arrives,
+    // until the main thread signals it is done sending. If the fix works the
+    // parent rejects us and closes without writing, so every accepted client
+    // yields zero bytes; pre-fix it writes the token and `stolen` captures it.
+    std::atomic<bool> stop{false};
+    std::atomic<bool> impostorGotToken{false};
+    std::mutex stolenMtx;
+    std::string stolen;
+    std::thread thief([&]() {
+        while (!stop.load()) {
+            struct pollfd pfd{impostor, POLLIN, 0};
+            int pr = ::poll(&pfd, 1, 50);
+            if (pr <= 0 || !(pfd.revents & POLLIN)) continue;
+            int client = ::accept(impostor, nullptr, nullptr);
+            if (client < 0) continue;
+            std::string chunk;
+            char buf[256];
+            for (;;) {
+                ssize_t n = ::read(client, buf, sizeof(buf));
+                if (n > 0) { chunk.append(buf, static_cast<std::size_t>(n)); continue; }
+                if (n < 0 && errno == EINTR) continue;
+                break;  // EOF or error
+            }
+            ::close(client);
+            if (!chunk.empty()) {
+                std::lock_guard<std::mutex> lk(stolenMtx);
+                stolen += chunk;
+                impostorGotToken.store(true);
+            }
+        }
+    });
+
+    const std::string secret = "f47ac10b-58cc-4372-a567-0e02b2c3d479";
+    // Short budget: the legitimate child never binds (we squat the path), so
+    // after the impostor is rejected sendTokenToProcess runs out its retry
+    // budget and fails. Keep it small so the test is quick.
+    const int budget_ms = 400;
+    bool ok = SubprocessManager::sendTokenToProcess(name, secret, budget_ms);
+
+    // Give the impostor a moment to surface any bytes the parent may have
+    // written on its final connection before we tear down.
+    std::this_thread::sleep_for(std::chrono::milliseconds(100));
+    stop.store(true);
+    thief.join();
+
+    std::string stolenCopy;
+    { std::lock_guard<std::mutex> lk(stolenMtx); stolenCopy = stolen; }
+
+    EXPECT_FALSE(impostorGotToken.load())
+        << "SECURITY: auth token leaked to an impostor squatting the token "
+           "socket — the parent wrote the secret to a listener it never "
+           "authenticated (CWE-940). Stolen bytes: '" << stolenCopy << "'";
+    EXPECT_NE(stolenCopy, secret)
+        << "SECURITY: impostor received the exact auth token";
+    EXPECT_FALSE(ok)
+        << "sendTokenToProcess must fail rather than hand the token to an "
+           "unauthenticated peer";
+}
+#endif  // __linux__ || __APPLE__

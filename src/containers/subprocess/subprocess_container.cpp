@@ -1,3 +1,11 @@
+// _GNU_SOURCE exposes struct ucred / SO_PEERCRED from <sys/socket.h> on glibc.
+// Must precede any system header. CMake's default -std=gnu++17 predefines it,
+// but pin it here so the peer-credential check below compiles regardless of
+// the C++ dialect a downstream consumer builds us with.
+#ifndef _GNU_SOURCE
+#define _GNU_SOURCE 1
+#endif
+
 #include "subprocess_container.h"
 
 #include <boost/asio/connect_pipe.hpp>
@@ -14,6 +22,7 @@
 
 #include <sys/socket.h>
 #include <sys/un.h>
+#include <sys/types.h>
 #include <unistd.h>
 
 #include "unix_socket_path.h"
@@ -159,6 +168,132 @@ IoRuntime::~IoRuntime() {
 // passes it to QLocalServer::listen() as an absolute path, so Qt's
 // QDir::tempPath() resolution is bypassed on both sides.
 using ::logos::unixSocketPath;
+
+// ---------------------------------------------------------------------------
+// Listener authentication (CWE-940)
+// ---------------------------------------------------------------------------
+//
+// The token socket lives at a predictable path under a world-writable temp
+// dir (see unix_socket_path.h) and we connect() to it in a retry loop. A
+// successful connect() proves only that *something* is listening there — not
+// that it is the child module we spawned. A local co-tenant can pre-bind that
+// path before the real child calls listen(); our connect() then lands on the
+// attacker's socket and, without this check, write()s the genuine auth token
+// straight to them. They replay it as `authToken` to make authorized
+// cross-module calls.
+//
+// Before writing the secret we verify the peer's kernel-reported credentials:
+//   - the peer must run as our own euid (no other user may receive the token);
+//   - when we know the child's pid (the common case — launch() records it
+//     before sendToken() runs), the peer must be exactly that process.
+//
+// Any failure is fatal: we refuse to write the token rather than risk leaking
+// it. This is the sender/parent half of the handoff (CWE-940 / finding F-010);
+// the child/receiver side (token_receiver.cpp) has a symmetric exposure that
+// still needs the mirror-image peer check.
+//
+// The peer pid comes from SO_PEERCRED on Linux and getsockopt(SOL_LOCAL,
+// LOCAL_PEERPID) on macOS, so both platforms enforce the uid+pid gate.
+//
+// Residual risk: when no child pid is recorded (e.g. the placeholder path used
+// by some callers) only the uid gate applies, so a same-uid co-tenant could
+// still receive the token. Even with the pid gate, a same-uid attacker can in
+// principle race for the path between the child's listen() and our connect().
+// The race window is fully closed only by handing the child a pre-connected
+// socketpair() fd instead of a named path — see the note in docs/spec.md.
+// The peer-credential check is the defense-in-depth that closes the cross-uid
+// theft this finding describes and, when the child pid is known, the same-uid
+// squat as well.
+//
+// Returns true if the connected peer is acceptable, false if the token must
+// not be written. `expectedPid <= 0` means "child pid unknown, skip the pid
+// gate" (the uid gate still applies).
+bool peerIsTrusted(int sock, int64_t expectedPid, const std::string& name)
+{
+#if defined(__linux__)
+    struct ucred cred{};
+    socklen_t len = sizeof(cred);
+    if (::getsockopt(sock, SOL_SOCKET, SO_PEERCRED, &cred, &len) != 0) {
+        fprintf(stderr,
+            "[SubprocessContainer] SO_PEERCRED failed for token peer of %s: %s\n",
+            name.c_str(), strerror(errno));
+        return false;
+    }
+    if (cred.uid != ::geteuid()) {
+        fprintf(stderr,
+            "[SubprocessContainer] token peer uid mismatch for %s (peer uid %u != %u); "
+            "refusing to send token\n",
+            name.c_str(), static_cast<unsigned>(cred.uid),
+            static_cast<unsigned>(::geteuid()));
+        return false;
+    }
+    if (expectedPid > 0 && static_cast<int64_t>(cred.pid) != expectedPid) {
+        fprintf(stderr,
+            "[SubprocessContainer] token peer pid mismatch for %s (peer pid %d != child %lld); "
+            "refusing to send token\n",
+            name.c_str(), static_cast<int>(cred.pid),
+            static_cast<long long>(expectedPid));
+        return false;
+    }
+    return true;
+#elif defined(__APPLE__)
+    // macOS has no SO_PEERCRED/ucred, but it exposes the two facts we need
+    // through separate APIs: getpeereid() for the peer's effective uid, and
+    // getsockopt(SOL_LOCAL, LOCAL_PEERPID) for the peer's pid (since macOS
+    // 10.8). Checking both gives parity with the Linux uid+pid gate, so a
+    // same-uid co-tenant squatting the path is rejected on the pid mismatch
+    // just as it is on Linux — not only the cross-uid theft.
+    uid_t peerUid = 0;
+    gid_t peerGid = 0;
+    if (::getpeereid(sock, &peerUid, &peerGid) != 0) {
+        fprintf(stderr,
+            "[SubprocessContainer] getpeereid failed for token peer of %s: %s\n",
+            name.c_str(), strerror(errno));
+        return false;
+    }
+    if (peerUid != ::geteuid()) {
+        fprintf(stderr,
+            "[SubprocessContainer] token peer uid mismatch for %s (peer uid %u != %u); "
+            "refusing to send token\n",
+            name.c_str(), static_cast<unsigned>(peerUid),
+            static_cast<unsigned>(::geteuid()));
+        return false;
+    }
+    // When the child pid is known, enforce it too. LOCAL_PEERPID reports the
+    // pid of the process that connect()ed the socket — exactly the peer we are
+    // about to hand the token to. A getsockopt failure (e.g. EOPNOTSUPP on a
+    // pre-10.8 kernel) is fatal: we fail closed rather than silently downgrade
+    // to the uid-only gate and leak the token to a same-uid squatter.
+    if (expectedPid > 0) {
+        pid_t peerPid = 0;
+        socklen_t pidLen = sizeof(peerPid);
+        if (::getsockopt(sock, SOL_LOCAL, LOCAL_PEERPID, &peerPid, &pidLen) != 0) {
+            fprintf(stderr,
+                "[SubprocessContainer] LOCAL_PEERPID failed for token peer of %s: %s; "
+                "refusing to send token\n",
+                name.c_str(), strerror(errno));
+            return false;
+        }
+        if (static_cast<int64_t>(peerPid) != expectedPid) {
+            fprintf(stderr,
+                "[SubprocessContainer] token peer pid mismatch for %s (peer pid %d != child %lld); "
+                "refusing to send token\n",
+                name.c_str(), static_cast<int>(peerPid),
+                static_cast<long long>(expectedPid));
+            return false;
+        }
+    }
+    return true;
+#else
+    // Unknown platform: we cannot authenticate the peer, so we cannot make
+    // the security guarantee. Fail closed rather than leak the token.
+    (void)sock; (void)expectedPid;
+    fprintf(stderr,
+        "[SubprocessContainer] no peer-credential API on this platform; "
+        "refusing to send token for %s\n", name.c_str());
+    return false;
+#endif
+}
 
 // ---------------------------------------------------------------------------
 // Async read loop
@@ -478,6 +613,13 @@ bool SubprocessContainer::sendTokenToProcess(const std::string& name,
     using clock = std::chrono::steady_clock;
     const auto deadline = clock::now() + std::chrono::milliseconds(max_wait_ms);
 
+    // The child we spawned, if known. launch() -> startProcess() records the
+    // child's pid before sendToken() runs, so in the normal load path this is
+    // the genuine child's pid and lets us reject any other listener squatting
+    // the predictable socket path. -1 (placeholder / unknown) skips the pid
+    // gate but still enforces the uid gate in peerIsTrusted().
+    const int64_t expectedPid = getProcessId(name);
+
     int sock = -1;
     for (;;) {
         sock = ::socket(AF_UNIX, SOCK_STREAM, 0);
@@ -490,8 +632,21 @@ bool SubprocessContainer::sendTokenToProcess(const std::string& name,
         addr.sun_family = AF_UNIX;
         strncpy(addr.sun_path, path.c_str(), sizeof(addr.sun_path) - 1);
 
-        if (::connect(sock, reinterpret_cast<struct sockaddr*>(&addr), sizeof(addr)) == 0)
-            break;
+        if (::connect(sock, reinterpret_cast<struct sockaddr*>(&addr), sizeof(addr)) == 0) {
+            // connect() only proves something is listening at this predictable,
+            // world-writable path — not that it is our child. Authenticate the
+            // peer before writing the secret (CWE-940). A trusted peer ends the
+            // loop; an untrusted one is treated like a failed connect, so a
+            // co-tenant squatting the path cannot steal the token and the real
+            // child can still claim the path before the deadline.
+            if (peerIsTrusted(sock, expectedPid, name))
+                break;
+            ::close(sock);
+            sock = -1;
+            if (clock::now() >= deadline) break;
+            std::this_thread::sleep_for(std::chrono::milliseconds(50));
+            continue;
+        }
 
         ::close(sock);
         sock = -1;
