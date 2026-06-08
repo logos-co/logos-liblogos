@@ -14,6 +14,7 @@ logos-liblogos/
 │   └── project.md                       # This document
 ├── src/
 │   ├── CMakeLists.txt                   # Source build configuration
+│   ├── path_safety.h                    # logos::isSafePathSegment — validate untrusted names used as path segments
 │   ├── logos_core/                      # Core library implementation
 │   │   ├── logos_core.h                 # C API header (public)
 │   │   ├── logos_core.cpp               # C API implementation
@@ -29,7 +30,7 @@ logos-liblogos/
 │   │   └── subprocess/                  # Subprocess container (Boost.Process v2)
 │   │       ├── subprocess_container.h/cpp   # ModuleContainer impl: process spawn, pipes, kill, token send
 │   │       ├── subprocess_manager.h         # Backward-compat shim for SubprocessManager name
-│   │       └── token_receiver.h/cpp         # Child-side auth token receipt via Unix socket
+│   │       └── token_receiver.h/cpp         # Child-side auth token receipt via Unix socket (validates module name as a safe path segment before deriving the socket path)
 │   └── runtimes/                        # Module runtime/loader implementations
 │       └── runtime_qt/                  # Qt plugin runtime
 │           ├── qt_plugin_runtime.h/cpp      # ModuleLoader impl: resolve logos_host_qt, build CLI args
@@ -48,7 +49,7 @@ logos-liblogos/
 │   ├── test_module_runtime_abstraction.cpp  # End-to-end runtime abstraction tests (FakeRuntime)
 │   ├── test_dependency_resolver.cpp     # DependencyResolver tests
 │   ├── test_process_stats.cpp           # ProcessStats tests (external process-stats lib)
-│   ├── test_token_exchange.cpp          # Token exchange via Unix domain socket tests
+│   ├── test_token_exchange.cpp          # Token exchange via Unix domain socket tests (incl. F-011 path-traversal module-name rejection)
 │   └── qt_test_adapter.h               # Qt test utilities/adapter header
 ├── nix/                                 # Nix build modules
 │   ├── default.nix                      # Common configuration (deps, flags, metadata)
@@ -152,7 +153,7 @@ logos-liblogos/
 | `addModulesDir(dir)` | Add to module directory list |
 | `modulesDirs() → std::vector<std::string>` | Return configured directories |
 | `discoverInstalledModules()` | Scan directories, parse manifest.json files; recomputes dependents at end |
-| `processModule(path) → std::string` | Extract metadata from module file, register as known; recomputes dependents at end |
+| `processModule(path) → std::string` | Extract metadata from module file, register as known; recomputes dependents at end. Rejects (returns `""`, no registry entry) a module whose name — taken from untrusted plugin JSON — is not a single safe path segment (`logos::isSafePathSegment`), since the name later becomes a token-socket / persistence path component |
 | `registerModule(name, path, deps)` | Manually register a module; recomputes dependents when deps are passed |
 | `registerDependencies(name, deps)` | Set dependencies for a known module; recomputes dependents |
 | `isKnown(name) → bool` | Module exists in registry |
@@ -284,6 +285,8 @@ A backward-compat `SubprocessManager` header (`src/containers/subprocess/subproc
 **Files:** `src/runtimes/runtime_qt/host/logos_host.cpp`, `src/runtimes/runtime_qt/host/command_line_parser.h/cpp`, `src/runtimes/runtime_qt/host/module_initializer.h/cpp`, `src/runtimes/runtime_qt/host/qt/qt_app.h/cpp`, `src/containers/subprocess/token_receiver.h/cpp`
 
 **Purpose:** Lightweight subprocess (`logos_host_qt`) that loads a single Qt module. Parses `--name`, `--path`, optional `--instance-persistence-path`, and optional `--transport-set` (per-module `LogosTransportSet` JSON; empty = global-default LocalSocket only) arguments. On startup, token receipt (container concern) is separated from module loading (runtime concern): the host first receives its auth token via subprocess container IPC (Unix socket), then loads the Qt plugin and constructs the `LogosAPI` with the parsed transport set (explicit-transport ctor when provided, single-arg ctor otherwise). Registers the module with the remote object registry and runs the Qt event loop. A `logos_host` compatibility symlink is installed for backward compatibility with downstream consumers.
+
+Because a directly-invoked host receives `--name` straight from its command line (not via the registry, which validates names at discovery time), `SubprocessTokenReceiver::receive` independently re-validates the module name — and the `LOGOS_INSTANCE_ID` it appends — as a single safe path segment (`logos::isSafePathSegment`) before building the `logos_token_<name>` socket path. Without this defense-in-depth check, a name like `seg/../victim` would make `QLocalServer::removeServer()` unlink an attacker-chosen file outside the temp directory.
 
 ## C API
 
