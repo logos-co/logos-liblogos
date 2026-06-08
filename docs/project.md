@@ -233,6 +233,7 @@ Takes callback functions (`IsKnownFn`, `GetDependenciesFn`) so it has no couplin
 - Async read loop for stdout/stderr with line buffering
 - Synchronous kill with graceful SIGTERM → SIGKILL escalation (5s timeout)
 - Unix domain socket for token delivery (scoped by `LOGOS_INSTANCE_ID`)
+- **Token-listener authentication (CWE-940):** the socket path is predictable and world-writable, so before writing the auth token `sendTokenToProcess()` verifies the connected peer's credentials. The peer uid must match ours and, when the child pid is known, the peer pid must equal the spawned child — read via `SO_PEERCRED` on Linux and via `getpeereid()` + `getsockopt(SOL_LOCAL, LOCAL_PEERPID)` on macOS, so both platforms enforce the uid + pid gate. A mismatched peer is treated like a failed connect: the token is never written and the send fails closed, so a co-tenant pre-binding the path cannot intercept the secret. The named-path race is closed completely only by a future `socketpair()`-fd handoff.
 - A `std::mutex` (`s_processesMutex`) protects the `s_processes` map against concurrent access
 
 **ModuleContainer interface:** `id()` → `"subprocess"`, `canHandle()`, `launch()`, `sendToken()`, `terminate()`, `terminateAll()`, `hasModule()`, `pid()`, `getAllPids()`
