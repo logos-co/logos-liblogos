@@ -1,4 +1,5 @@
 #include "module_registry.h"
+#include "path_safety.h"
 #include <spdlog/spdlog.h>
 #include <cassert>
 #include <deque>
@@ -99,6 +100,18 @@ std::string ModuleRegistry::processModuleInternal(const std::string& modulePath)
     std::string name = ModuleLib::LogosModule::getModuleName(modulePath);
     if (name.empty()) {
         spdlog::warn("No valid metadata for module: {}", modulePath);
+        return {};
+    }
+
+    // The module name comes from untrusted plugin JSON metadata and later
+    // becomes a filesystem/socket path segment (the token socket
+    // "logos_token_<name>" and the instance-persistence dir). Reject any
+    // name that is not a single safe path segment here, at the trust
+    // boundary, so a crafted name like "x/../../victim" cannot escape the
+    // temp/data dir and drive QLocalServer::removeServer() into unlinking
+    // an attacker-chosen file. See logos::isSafePathSegment (path_safety.h).
+    if (!logos::isSafePathSegment(name)) {
+        spdlog::warn("Rejecting module with unsafe name '{}' from {}", name, modulePath);
         return {};
     }
 

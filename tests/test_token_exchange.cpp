@@ -17,6 +17,7 @@
 #include "logos_core.h"
 #include "qt_test_adapter.h"
 #include "unix_socket_path.h"
+#include "path_safety.h"
 #include <atomic>
 #include <chrono>
 #include <cstdlib>
@@ -26,6 +27,7 @@
 #include <future>
 #include <string>
 #include <thread>
+#include <unistd.h>
 
 namespace {
 
@@ -428,4 +430,185 @@ TEST_F(TokenExchangeTest, RoundTrip_SucceedsWithTmpdirUnset) {
     receiver.join();
 
     EXPECT_EQ(receiver.token, token);
+}
+
+// =============================================================================
+// F-011 — attacker-controlled module name must not flow unsanitized into
+// QLocalServer::removeServer()/listen(), which would give an arbitrary
+// file-unlink/clobber primitive.
+//
+// The module name originates from untrusted plugin JSON metadata and is
+// propagated verbatim to the child host, which builds
+//   socketName = "logos_token_" + moduleName
+// and feeds ::logos::unixSocketPath(socketName) (= tempdir + "/" + name, no
+// validation) to QLocalServer::removeServer() — which UNLINKS the resolved
+// path — and then listen(). A name containing "/" and "../" escapes the temp
+// dir, so removeServer() deletes an attacker-chosen file.
+//
+// The receiver (SubprocessTokenReceiver::receive, exposed here via
+// logos_core_receive_auth_token) must reject any module name that is not a
+// single safe path segment BEFORE deriving the socket path.
+// =============================================================================
+
+// A crafted module name with path-traversal components must NOT cause the
+// receiver to delete a file outside the flat socket namespace.
+//
+// Exploit mechanics (local-attacker threat model). The receiver builds
+//   socketName = "logos_token_" + moduleName            // glued, no separator
+//   path       = tempDir + "/" + socketName
+// and passes `path` to QLocalServer::removeServer(), which unlink()s it.
+// POSIX `..` resolution requires every intermediate component to be an
+// existing, searchable directory, so a *bare* leading "../" in the name does
+// not traverse (it yields the literal component "logos_token_.."). But the
+// temp dir is world-writable (or per-user), so a local attacker can first
+// create the intermediate directory  tempDir/logos_token_<seg>  and then get
+// the daemon to load a module named  "<seg>/../<victim>" . The path then
+// resolves through that real directory straight to an attacker-chosen victim
+// outside the socket namespace, and removeServer() deletes it with the host
+// process's privileges.
+//
+// With the guard in place the receiver rejects the name (it is not a single
+// path segment) before deriving any path, so the victim survives.
+TEST_F(TokenExchangeTest, MaliciousName_DoesNotUnlinkFileOutsideSocketNamespace) {
+    const std::string tmp = ::logos::qtCompatibleTempDir();
+    const std::string tag = std::to_string(static_cast<long long>(::getpid()));
+
+    // (1) The intermediate directory a local attacker pre-creates in the
+    //     world-writable temp dir. Its name is "logos_token_" + <seg> so that
+    //     the receiver's glued prefix lands inside a directory that exists.
+    const std::string seg = "f011seg" + tag;
+    const std::string intermediateDir = tmp + "/logos_token_" + seg;
+    std::filesystem::create_directories(intermediateDir);
+
+    // (2) The victim file, in a sibling dir reached by traversing back out of
+    //     the intermediate dir. This stands in for any file the host can write
+    //     (a config, a key, another module's socket, ...).
+    const std::string victimDir = tmp + "/f011_victim_" + tag;
+    std::filesystem::create_directories(victimDir);
+    const std::string victimPath = victimDir + "/precious.dat";
+    { std::ofstream f(victimPath); f << "do not delete me"; }
+
+    struct DirGuard {
+        std::string a, b;
+        ~DirGuard() {
+            std::error_code ec;
+            std::filesystem::remove_all(a, ec);
+            std::filesystem::remove_all(b, ec);
+        }
+    } guard{intermediateDir, victimDir};
+
+    ASSERT_TRUE(std::filesystem::exists(victimPath));
+
+    // moduleName = "<seg>/../f011_victim_<tag>/precious.dat"
+    //  -> socket  = tmp/logos_token_<seg>/../f011_victim_<tag>/precious.dat
+    //  -> resolves to tmp/f011_victim_<tag>/precious.dat (the victim)
+    const std::string maliciousName =
+        seg + "/../f011_victim_" + tag + "/precious.dat";
+
+    // Pin the exploit construction: without the fix, the name resolves to
+    // exactly the victim path, and every intermediate component exists, so
+    // removeServer()'s unlink() would succeed.
+    const std::string resolved =
+        std::filesystem::path(
+            ::logos::unixSocketPath("logos_token_" + maliciousName))
+            .lexically_normal()
+            .string();
+    ASSERT_EQ(resolved, victimPath)
+        << "test construction error: crafted name must resolve to the victim path";
+
+    char* raw = logos_core_receive_auth_token(maliciousName.c_str());
+    std::string token = raw ? std::string(raw) : std::string();
+    delete[] raw;
+
+    EXPECT_TRUE(token.empty())
+        << "receiver must reject an unsafe module name (no token issued)";
+    EXPECT_TRUE(std::filesystem::exists(victimPath))
+        << "victim file must NOT be unlinked by removeServer() — path "
+           "traversal in the module name escaped the socket namespace";
+}
+
+// The same primitive via LOGOS_INSTANCE_ID. The receiver appends the env var
+// verbatim to the socket name (socketName += "_" + instanceId), so it too
+// becomes a path segment and must be validated. Here the module name is benign
+// but the instance ID carries the traversal. Same world-writable-tempdir setup:
+// the attacker pre-creates the intermediate dir so the "../" resolves, and
+// removeServer() would unlink the victim. With the guard the receiver rejects
+// the instance ID before deriving any path, so the victim survives.
+TEST_F(TokenExchangeTest, MaliciousInstanceId_DoesNotUnlinkFileOutsideSocketNamespace) {
+    const std::string tmp = ::logos::qtCompatibleTempDir();
+    const std::string tag = std::to_string(static_cast<long long>(::getpid()));
+
+    const std::string moduleName = "benign_mod" + tag;
+    const std::string seg = "f011iseg" + tag;
+
+    // socketName = "logos_token_" + moduleName + "_" + instanceId, so the
+    // intermediate directory that must exist for the traversal is
+    //   tmp/logos_token_<moduleName>_<seg>
+    const std::string intermediateDir =
+        tmp + "/logos_token_" + moduleName + "_" + seg;
+    std::filesystem::create_directories(intermediateDir);
+
+    const std::string victimDir = tmp + "/f011_ivictim_" + tag;
+    std::filesystem::create_directories(victimDir);
+    const std::string victimPath = victimDir + "/precious.dat";
+    { std::ofstream f(victimPath); f << "do not delete me"; }
+
+    struct DirGuard {
+        std::string a, b;
+        ~DirGuard() {
+            std::error_code ec;
+            std::filesystem::remove_all(a, ec);
+            std::filesystem::remove_all(b, ec);
+        }
+    } guard{intermediateDir, victimDir};
+
+    ASSERT_TRUE(std::filesystem::exists(victimPath));
+
+    // instanceId = "<seg>/../f011_ivictim_<tag>/precious.dat"
+    const std::string maliciousInstanceId =
+        seg + "/../f011_ivictim_" + tag + "/precious.dat";
+
+    // Pin the exploit construction: the resulting socket path resolves to the
+    // victim, and every intermediate component exists.
+    const std::string resolved =
+        std::filesystem::path(
+            ::logos::unixSocketPath(
+                "logos_token_" + moduleName + "_" + maliciousInstanceId))
+            .lexically_normal()
+            .string();
+    ASSERT_EQ(resolved, victimPath)
+        << "test construction error: crafted instance ID must resolve to the victim path";
+
+    ScopedEnv env("LOGOS_INSTANCE_ID", maliciousInstanceId.c_str());
+
+    char* raw = logos_core_receive_auth_token(moduleName.c_str());
+    std::string token = raw ? std::string(raw) : std::string();
+    delete[] raw;
+
+    EXPECT_TRUE(token.empty())
+        << "receiver must reject an unsafe LOGOS_INSTANCE_ID (no token issued)";
+    EXPECT_TRUE(std::filesystem::exists(victimPath))
+        << "victim file must NOT be unlinked by removeServer() — path "
+           "traversal in LOGOS_INSTANCE_ID escaped the socket namespace";
+}
+
+// The shared guard itself: pin the exact policy so the token-socket sink and
+// the instance-persistence sink stay in agreement on what a safe name is.
+TEST_F(TokenExchangeTest, IsSafePathSegment_RejectsTraversalAndSeparators) {
+    using ::logos::isSafePathSegment;
+
+    // Accept ordinary module names.
+    EXPECT_TRUE(isSafePathSegment("chat_module"));
+    EXPECT_TRUE(isSafePathSegment("waku-module.v2"));
+    EXPECT_TRUE(isSafePathSegment(std::string(255, 'a')));
+
+    // Reject anything that is not a single safe path segment.
+    EXPECT_FALSE(isSafePathSegment(""));
+    EXPECT_FALSE(isSafePathSegment("."));
+    EXPECT_FALSE(isSafePathSegment(".."));
+    EXPECT_FALSE(isSafePathSegment("a/b"));
+    EXPECT_FALSE(isSafePathSegment("../escape"));
+    EXPECT_FALSE(isSafePathSegment("a\\b"));
+    EXPECT_FALSE(isSafePathSegment(std::string("nul\0byte", 8)));
+    EXPECT_FALSE(isSafePathSegment(std::string(256, 'a')));
 }

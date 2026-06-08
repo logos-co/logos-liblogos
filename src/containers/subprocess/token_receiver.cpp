@@ -1,5 +1,6 @@
 #include "token_receiver.h"
 #include "unix_socket_path.h"
+#include "path_safety.h"
 #include <QByteArray>
 #include <QLocalServer>
 #include <QLocalSocket>
@@ -13,6 +14,20 @@ namespace SubprocessTokenReceiver {
 
 std::string receive(const std::string& moduleName)
 {
+    // Defense in depth at the sink. The registry already rejects unsafe
+    // names when loading in-process (ModuleRegistry::processModuleInternal),
+    // but the host child re-derives the name from an unvalidated --name CLI
+    // arg (command_line_parser.cpp), so a directly-invoked host would still
+    // reach this point with an attacker-controlled name. Validate before the
+    // name becomes a path segment: socketName flows into unixSocketPath() and
+    // then QLocalServer::removeServer(), which UNLINKS the resolved file. A
+    // crafted name like "x/../../victim" would otherwise delete an
+    // attacker-chosen file with this process's privileges.
+    if (!::logos::isSafePathSegment(moduleName)) {
+        spdlog::critical("Refusing unsafe module name for token socket: {}", moduleName);
+        return {};
+    }
+
     // Scope the socket name by LOGOS_INSTANCE_ID so parallel Logos instances
     // (multiple daemons or Basecamp profiles) loading the same module don't
     // race on a shared socket. SubprocessContainer (parent) uses the same
@@ -20,6 +35,13 @@ std::string receive(const std::string& moduleName)
     const char* instanceIdEnv = std::getenv("LOGOS_INSTANCE_ID");
     std::string socketName = "logos_token_" + moduleName;
     if (instanceIdEnv && instanceIdEnv[0]) {
+        // LOGOS_INSTANCE_ID is also appended verbatim and so becomes part of
+        // the socket path — apply the same single-segment guard to it.
+        if (!::logos::isSafePathSegment(instanceIdEnv)) {
+            spdlog::critical("Refusing unsafe LOGOS_INSTANCE_ID for token socket: {}",
+                             instanceIdEnv);
+            return {};
+        }
         socketName += '_';
         socketName += instanceIdEnv;
     }
