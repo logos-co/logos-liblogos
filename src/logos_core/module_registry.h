@@ -70,7 +70,16 @@ public:
     void clear();
 
 private:
-    std::string processModuleInternal(const std::string& modulePath);
+    // Reads the plugin's metadata and upserts a ModuleInfo for it.
+    //
+    // `trustedName` binds the module's *identity*. When non-empty (the
+    // discovery path, where it is the package-manager's InstalledPackage::name)
+    // it is used as the registry key, and a plugin whose own embedded metadata
+    // name disagrees is REFUSED — this is the F-022 guard against a binary
+    // claiming a privileged name it doesn't legitimately own. When empty (the
+    // raw processModule() host API), the embedded name is used as before.
+    std::string processModuleInternal(const std::string& modulePath,
+                                      const std::string& trustedName = {});
 
     // Re-derives every ModuleInfo::dependents list by inverting the
     // dependencies edges across m_modules. Called at the tail of

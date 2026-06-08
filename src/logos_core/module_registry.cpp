@@ -58,7 +58,11 @@ void ModuleRegistry::discoverInstalledModules() {
         if (mod.name.empty() || mod.mainFilePath.empty())
             continue;
 
-        std::string moduleName = processModuleInternal(mod.mainFilePath);
+        // Bind identity to the TRUSTED package name (mod.name), not the
+        // self-asserted name embedded in the plugin binary. processModuleInternal
+        // refuses the plugin if its embedded metadata name disagrees, so a
+        // package cannot register under a privileged name it doesn't own.
+        std::string moduleName = processModuleInternal(mod.mainFilePath, mod.name);
         if (moduleName.empty()) {
             spdlog::warn("Failed to process module: {}", mod.mainFilePath);
             continue;
@@ -96,12 +100,32 @@ std::string ModuleRegistry::processModule(const std::string& modulePath) {
     return name;
 }
 
-std::string ModuleRegistry::processModuleInternal(const std::string& modulePath) {
-    std::string name = ModuleLib::LogosModule::getModuleName(modulePath);
-    if (name.empty()) {
+std::string ModuleRegistry::processModuleInternal(const std::string& modulePath,
+                                                  const std::string& trustedName) {
+    // The plugin's *self-asserted* identity, read verbatim from its embedded
+    // metadata. This is attacker-controlled for any plugin we didn't build,
+    // so it must never be trusted as the module's identity on its own.
+    std::string embedded = ModuleLib::LogosModule::getModuleName(modulePath);
+    if (embedded.empty()) {
         spdlog::warn("No valid metadata for module: {}", modulePath);
         return {};
     }
+
+    // When discovery supplies a trusted package name, the plugin's
+    // embedded name MUST match it. Otherwise a package installed under an
+    // innocuous name could ship a binary claiming a privileged name (e.g.
+    // "capability_module") and get wired into that module's token/trust
+    // relationships. Refuse the mismatch rather than silently honoring either
+    // name. With no trusted name (the raw processModule() host API), fall back
+    // to the embedded name as before.
+    if (!trustedName.empty() && embedded != trustedName) {
+        spdlog::error(
+            "Refusing module {}: embedded name '{}' does not match package name '{}'",
+            modulePath, embedded, trustedName);
+        return {};
+    }
+
+    const std::string& name = trustedName.empty() ? embedded : trustedName;
 
     // The module name comes from untrusted plugin JSON metadata and later
     // becomes a filesystem/socket path segment (the token socket
