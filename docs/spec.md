@@ -96,7 +96,7 @@ Each module runs in its own process for isolation:
 
 Since the remote object registry has no built-in security mechanisms, all RPC calls require an authentication token. This is transparent to module developers when using the SDK:
 
-1. **Core → Module**: When a module is loaded, the core generates a UUID token and sends it to the module process via the container's `sendToken()` mechanism (currently a Unix domain socket managed by `SubprocessContainer`). The socket name is `logos_token_<module-name>` (scoped by `LOGOS_INSTANCE_ID` when set); both sides validate the module name as a single safe path segment before deriving the socket path, so an untrusted name cannot turn `removeServer()`/`listen()` into a file-unlink/clobber primitive (see Discovery, above). On the child side, `SubprocessTokenReceiver` receives the token before the module loader initializes the plugin. The module uses this token to authenticate calls from the core.
+1. **Core → Module**: When a module is loaded, the core generates a UUID token and sends it to the module process via the container's `sendToken()` mechanism (currently a Unix domain socket managed by `SubprocessContainer`). The socket name is `logos_token_<module-name>` (scoped by `LOGOS_INSTANCE_ID` when set); the module name is treated as untrusted input and **validated against an allowlist before any path is built** (see [Module name validation](#module-name-validation)), so an untrusted name cannot turn `removeServer()`/`listen()` into a file-unlink/clobber primitive. On the child side, `SubprocessTokenReceiver` receives the token before the module loader initializes the plugin. The module uses this token to authenticate calls from the core.
 
    **Listener authentication (CWE-940).** The token socket lives at a predictable path (`$TMPDIR/logos_token_<name>[_<instanceId>]`) in a world-writable temp directory, so a local co-tenant could pre-bind that path before the legitimate child calls `listen()`. A bare `connect()` only proves *something* is listening — not that it is the child the core spawned. Before writing the token, the parent therefore authenticates the connected peer's kernel-reported credentials: it requires the peer to run as the core's own effective uid, and — when the child's pid is known (the normal load path, where `launch()` records it before `sendToken()` runs) — to be exactly that process. The check uses `SO_PEERCRED` on Linux (uid + pid) and, on macOS, `getpeereid()` for the uid plus `getsockopt(SOL_LOCAL, LOCAL_PEERPID)` for the pid — so both platforms enforce the uid + pid gate. Any mismatch is fatal: the parent refuses to write the token rather than risk leaking it to a squatter, and the send fails. **Residual risk:** when the child pid is unknown (the placeholder path used by some callers) only the uid gate applies, so a same-uid co-tenant could still receive the token; and even with the pid gate a same-uid attacker can in principle race for the path between the child's `listen()` and the parent's `connect()`. Closing that window entirely requires handing the child a pre-connected `socketpair()` fd instead of a named path, eliminating the predictable socket altogether — a planned hardening. The child/receiver side (`SubprocessTokenReceiver`) has a symmetric exposure — it accepts the connecting peer without a credential check — and needs the mirror-image hardening; the `socketpair()` redesign would close both halves at once.
 2. **Module → Module**: When modules need to communicate, they request authorization from the Capability Module, which issues a token and notifies both parties. The modules then use this token for subsequent requests.
@@ -132,6 +132,20 @@ Every module ships a `metadata.json` referenced by Qt's `Q_PLUGIN_METADATA` macr
 | `capabilities` | Array of capabilities this module provides |
 | `include` | Optional array of extra files (shared libs, resources) to bundle |
 
+### Module name validation
+
+A module's `name` originates from its embedded plugin metadata, which is **untrusted input** — a malicious installed `.lgx` can declare any name. That name is then used as a single filesystem path segment for the per-module token-handoff socket (`logos_token_<name>` resolved under the temp directory by `unix_socket_path.h`), as the registry map key, and as the RPC target.
+
+**The attack (CWE-22):** a malicious module declares `name='../<x>'` (or a name colliding with another module's socket). The `/` or `..` escapes the temp directory and moves where the parent connects to deliver the auth token and where the child binds its listener. A local attacker who pre-binds that resolved path captures the per-module auth token — which grants the module's full RPC privileges.
+
+The core therefore validates the name against an allowlist **at the registry trust boundary** (`ModuleRegistry::processModuleInternal`), so every downstream consumer inherits the guarantee, and **again defensively at the socket sinks** (`SubprocessContainer::sendTokenToProcess` and `SubprocessTokenReceiver::receive`) so the socket filename never depends on raw input even if a future path bypasses registration. The shared rule (`logos::isValidModuleName` in `src/logos_core/module_name_validation.h`):
+
+- non-empty and at most 64 bytes;
+- every byte is `[A-Za-z0-9_-]` — rejecting `/`, `\`, whitespace, NUL, `.` and any other separator;
+- `.` and `..` are rejected outright.
+
+A module whose name fails validation is dropped during discovery (logged and skipped), never registered, and never loaded.
+
 ## Features & Requirements
 
 ### Module Lifecycle
@@ -141,11 +155,12 @@ Every module ships a `metadata.json` referenced by Qt's `Q_PLUGIN_METADATA` macr
 1. Core scans configured module directories for `.so`, `.dylib`, or `.dll` files
 2. For each file, metadata is extracted via `QPluginLoader`
 3. A module's **identity is bound to the trusted package name** (the `manifest.json` name the package manager scanned and dedupes on), not to the name a plugin embeds in its own metadata. If a plugin's embedded `name` disagrees with its package name, the plugin is **refused** (not registered under either name). This prevents a package installed under an innocuous name from shipping a binary that claims a privileged identity (e.g.  `capability_module`) and inheriting that module's token/trust relationships.
-4. Modules are added to the "known" list without being loaded
-5. Multiple module directories can be configured
+4. The name is validated against the module-name allowlist (see [Module name validation](#module-name-validation)); modules with an invalid name are logged and skipped
+5. Modules are added to the "known" list without being loaded
+6. Multiple module directories can be configured
 
-The module **name** comes from untrusted plugin JSON metadata and later becomes a filesystem/socket path segment (the per-module token socket `logos_token_<name>` and the instance-persistence directory). It is therefore validated at the trust
-boundary: during processing (`ModuleRegistry::processModuleInternal`) a module whose name is not a single safe path segment — empty, `.`, `..`, longer than 255 bytes, or containing a path separator (`/`, `\`) or embedded NUL — is rejected and never added to the registry. The same check is applied as defense-in-depth at the token-socket sink in the host child (`SubprocessTokenReceiver::receive`, plus the `LOGOS_INSTANCE_ID` it appends), because a directly-invoked host re-derives the name from the `--name` CLI argument without going through the registry. This prevents a crafted name such as `seg/../victim` from escaping the socket/temp directory and driving `LocalServer::removeServer()` into unlinking an attacker-chosen file. See `logos::isSafePathSegment` (`src/path_safety.h`).
+The module **name** comes from untrusted plugin JSON metadata and later becomes a filesystem/socket path segment (the per-module token socket `logos_token_<name>` and the instance-persistence directory). It is therefore validated against an allowlist at the trust
+boundary: during processing (`ModuleRegistry::processModuleInternal`) a module whose name is not a valid identifier — empty, `.`, `..`, longer than 64 bytes, or containing any byte outside `[A-Za-z0-9_-]` (so any path separator, whitespace or embedded NUL) — is rejected and never added to the registry. The same check is applied as defense-in-depth at the token-socket sink in the host child (`SubprocessTokenReceiver::receive`), because a directly-invoked host re-derives the name from the `--name` CLI argument without going through the registry; the `LOGOS_INSTANCE_ID` it also appends is checked as a safe path segment (`logos::isSafePathSegment`). This prevents a crafted name such as `seg/../victim` from escaping the socket/temp directory and driving `LocalServer::removeServer()` into unlinking an attacker-chosen file. See `logos::isValidModuleName` (`src/logos_core/module_name_validation.h`) and the [Module name validation](#module-name-validation) section.
 
 #### Loading
 

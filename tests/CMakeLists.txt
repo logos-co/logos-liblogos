@@ -17,6 +17,7 @@ add_executable(logos_core_tests
     test_qt_plugin_runtime.cpp
     test_composite_runtime.cpp
     test_token_exchange.cpp
+    test_module_name_validation.cpp
     test_runtime_registry.cpp
     test_module_runtime_abstraction.cpp
     # qt_test_adapter.h calls SubprocessTokenReceiver::receive; compile the

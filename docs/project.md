@@ -20,6 +20,7 @@ logos-liblogos/
 │   │   ├── logos_core.cpp               # C API implementation
 │   │   ├── module_manager.h/cpp         # Facade: orchestrates registry, runtime registry, resolver
 │   │   ├── module_registry.h/cpp        # In-memory registry of discovered/loaded modules
+│   │   ├── module_name_validation.h     # Qt-free allowlist validator for untrusted module names
 │   │   ├── dependency_resolver.h/cpp    # Topological sort with circular dependency detection
 │   │   ├── module_runtime.h             # Abstract ModuleRuntime interface (Qt-free)
 │   │   ├── module_container.h           # Abstract ModuleContainer interface (where/how a module runs)
@@ -32,7 +33,7 @@ logos-liblogos/
 │   │       ├── subprocess_manager.h         # Backward-compat shim for SubprocessManager name
 │   │       ├── peer_credentials.h           # Qt-free peer-uid auth for the token socket (SO_PEERCRED/getpeereuid), shared by both handoff sides
 │   │       ├── unix_socket_path.h           # Qt-free token socket path resolver (shared by both handoff sides)
-│   │       └── token_receiver.h/cpp         # Child-side auth token receipt via an owner-only, peer-authenticated Unix socket (validates module name as a safe path segment before deriving the socket path)
+│   │       └── token_receiver.h/cpp         # Child-side auth token receipt via an owner-only, peer-authenticated Unix socket (validates module name against the allowlist before deriving the socket path)
 │   └── runtimes/                        # Module runtime/loader implementations
 │       └── runtime_qt/                  # Qt plugin runtime
 │           ├── qt_plugin_runtime.h/cpp      # ModuleLoader impl: resolve logos_host_qt, build CLI args
@@ -52,6 +53,7 @@ logos-liblogos/
 │   ├── test_dependency_resolver.cpp     # DependencyResolver tests
 │   ├── test_process_stats.cpp           # ProcessStats tests (external process-stats lib)
 │   ├── test_token_exchange.cpp          # Token exchange via Unix domain socket tests (incl. F-011 path-traversal module-name rejection and F-012 socket-permission & peer-uid hardening)
+│   ├── test_module_name_validation.cpp  # Module-name allowlist + token-socket path-traversal regression (F-030)
 │   └── qt_test_adapter.h               # Qt test utilities/adapter header
 ├── nix/                                 # Nix build modules
 │   ├── default.nix                      # Common configuration (deps, flags, metadata)
@@ -138,6 +140,8 @@ logos-liblogos/
 **Files:** `src/logos_core/module_registry.h`, `src/logos_core/module_registry.cpp`
 
 **Purpose:** In-memory registry of discovered and loaded modules. Single source of truth for the dependency graph: stores module paths, forward dependencies, and the derived reverse edges (dependents). All public methods are thread-safe: mutating methods acquire a `std::unique_lock` on an internal `std::shared_mutex`; read-only methods acquire a `std::shared_lock`, allowing concurrent reads.
+
+**Trust boundary — module name validation:** A module's name comes verbatim from its (untrusted) embedded plugin metadata and is later used as a filesystem path segment for the token-handoff socket, as this map's key, and as the RPC target. Prevents this attack (CWE-22): a malicious installed module declares `name='../<x>'` (or a name colliding with another module's socket); the `/` or `..` escapes the temp dir, so a local attacker pre-binding the resolved socket path captures the per-module auth token and gains the module's RPC privileges. `processModuleInternal()` validates the name with `logos::isValidModuleName` (`src/logos_core/module_name_validation.h`, allowlist `[A-Za-z0-9_-]`, ≤64 bytes, rejects `/`, `..`, etc.) and skips any module whose name is unsafe. The socket sinks (`SubprocessContainer::sendTokenToProcess`, `SubprocessTokenReceiver::receive`) re-validate defensively.
 
 **Data:**
 - `ModuleInfo` struct — holds `path`, `dependencies` (`std::vector<std::string>`), `dependents` (`std::vector<std::string>`, reverse-edge cache), `loaded` flag, `runtime` (`std::shared_ptr<ModuleRuntime>`), `handle` (`LoadedModuleHandle`)
@@ -246,7 +250,7 @@ Takes callback functions (`IsKnownFn`, `GetDependenciesFn`) so it has no couplin
 | Method | Description |
 |--------|-------------|
 | `startProcess(name, executable, arguments, callbacks) → bool` | Launch a subprocess with async output monitoring |
-| `sendTokenToProcess(name, token) → bool` | Send auth token via Unix domain socket (authenticates the listener's uid before sending) |
+| `sendTokenToProcess(name, token) → bool` | Send auth token via Unix domain socket. Re-validates `name` (`logos::isValidModuleName`) before deriving the socket path (refuses and tears down the entry for an invalid name), and authenticates the listener's uid before sending |
 | `terminateProcess(name)` | Gracefully terminate a specific process |
 | `terminateAllProcesses()` | Terminate all managed processes |
 | `hasProcess(name) → bool` | Check if a process entry exists |

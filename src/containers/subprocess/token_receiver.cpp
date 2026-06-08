@@ -2,6 +2,7 @@
 #include "peer_credentials.h"
 #include "unix_socket_path.h"
 #include "path_safety.h"
+#include "logos_core/module_name_validation.h"
 #include <QByteArray>
 #include <QLocalServer>
 #include <QLocalSocket>
@@ -17,7 +18,7 @@ namespace SubprocessTokenReceiver {
 
 std::string receive(const std::string& moduleName)
 {
-    // Defense in depth at the sink. The registry already rejects unsafe
+    // Defense in depth at the sink. The registry already rejects invalid
     // names when loading in-process (ModuleRegistry::processModuleInternal),
     // but the host child re-derives the name from an unvalidated --name CLI
     // arg (command_line_parser.cpp), so a directly-invoked host would still
@@ -25,9 +26,11 @@ std::string receive(const std::string& moduleName)
     // name becomes a path segment: socketName flows into unixSocketPath() and
     // then QLocalServer::removeServer(), which UNLINKS the resolved file. A
     // crafted name like "x/../../victim" would otherwise delete an
-    // attacker-chosen file with this process's privileges.
-    if (!::logos::isSafePathSegment(moduleName)) {
-        spdlog::critical("Refusing unsafe module name for token socket: {}", moduleName);
+    // attacker-chosen file with this process's privileges. Uses the shared
+    // module-name allowlist (module_name_validation.h) so both handoff sides
+    // agree on which names are legal.
+    if (!::logos::isValidModuleName(moduleName)) {
+        spdlog::critical("Refusing invalid module name for token socket: {}", moduleName);
         return {};
     }
 

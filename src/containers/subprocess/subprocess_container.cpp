@@ -27,6 +27,7 @@
 
 #include "peer_credentials.h"
 #include "unix_socket_path.h"
+#include "logos_core/module_name_validation.h"
 
 #include <array>
 #include <atomic>
@@ -583,6 +584,30 @@ bool SubprocessContainer::sendTokenToProcess(const std::string& name,
                                               const std::string& token,
                                               int max_wait_ms)
 {
+    // Defense-in-depth: `name` is validated at the registry trust boundary
+    // (ModuleRegistry::processModuleInternal), but the token-handoff socket
+    // filename must never depend on raw caller input even if some future path
+    // reaches here without going through registration. A name with '/' or
+    // ".." would otherwise escape qtCompatibleTempDir() and let the parent
+    // connect() to an attacker-controlled path, leaking the auth token
+    // (CWE-22). See module_name_validation.h.
+    if (!logos::isValidModuleName(name)) {
+        fprintf(stderr,
+            "[SubprocessContainer] Refusing token handoff for invalid module name: %s\n",
+            name.c_str());
+        std::shared_ptr<ProcessEntry> entry;
+        {
+            std::lock_guard<std::mutex> lock(s_processesMutex);
+            auto it = s_processes.find(name);
+            if (it != s_processes.end()) {
+                entry = it->second;
+                s_processes.erase(it);
+            }
+        }
+        syncKill(entry);
+        return false;
+    }
+
     const char* instanceId = std::getenv("LOGOS_INSTANCE_ID");
     std::string socketName = "logos_token_" + name;
     if (instanceId && *instanceId) {
