@@ -121,7 +121,7 @@ Every module ships a `metadata.json` referenced by Qt's `Q_PLUGIN_METADATA` macr
 
 | Field | Purpose |
 |-------|---------|
-| `name` | Unique module identifier (must match `name()` return value) |
+| `name` | Unique module identifier. **Enforced**, not advisory: it must match the installed package name at discovery time and the plugin's `name()` return value at load time — a mismatch on either is refused (see Discovery and Loading). |
 | `version` | Semantic version string |
 | `description` | Human-readable description |
 | `author` | Module author or organization |
@@ -140,8 +140,9 @@ Every module ships a `metadata.json` referenced by Qt's `Q_PLUGIN_METADATA` macr
 
 1. Core scans configured module directories for `.so`, `.dylib`, or `.dll` files
 2. For each file, metadata is extracted via `QPluginLoader`
-3. Modules are added to the "known" list without being loaded
-4. Multiple module directories can be configured
+3. A module's **identity is bound to the trusted package name** (the `manifest.json` name the package manager scanned and dedupes on), not to the name a plugin embeds in its own metadata. If a plugin's embedded `name` disagrees with its package name, the plugin is **refused** (not registered under either name). This prevents a package installed under an innocuous name from shipping a binary that claims a privileged identity (e.g.  `capability_module`) and inheriting that module's token/trust relationships.
+4. Modules are added to the "known" list without being loaded
+5. Multiple module directories can be configured
 
 The module **name** comes from untrusted plugin JSON metadata and later becomes a filesystem/socket path segment (the per-module token socket `logos_token_<name>` and the instance-persistence directory). It is therefore validated at the trust
 boundary: during processing (`ModuleRegistry::processModuleInternal`) a module whose name is not a single safe path segment — empty, `.`, `..`, longer than 255 bytes, or containing a path separator (`/`, `\`) or embedded NUL — is rejected and never added to the registry. The same check is applied as defense-in-depth at the token-socket sink in the host child (`SubprocessTokenReceiver::receive`, plus the `LOGOS_INSTANCE_ID` it appends), because a directly-invoked host re-derives the name from the `--name` CLI argument without going through the registry. This prevents a crafted name such as `seg/../victim` from escaping the socket/temp directory and driving `LocalServer::removeServer()` into unlinking an attacker-chosen file. See `logos::isSafePathSegment` (`src/path_safety.h`).
@@ -158,7 +159,7 @@ boundary: during processing (`ModuleRegistry::processModuleInternal`) a module w
    b. The `ModuleContainer` launches the process with the resolved binary and arguments
 7. Core generates a UUID authentication token
 8. Core sends the token to the module via the runtime's `sendToken()` (delegates to the container, which authenticates the receiving peer's credentials before writing the secret — see Token-Based Authentication)
-9. Host process receives the token via `SubprocessTokenReceiver` (container concern), then loads the module plugin and calls `initLogos(LogosAPI*)` (loader/runtime concern)
+9. Host process receives the token via `SubprocessTokenReceiver` (container concern), then loads the module plugin and calls `initLogos(LogosAPI*)` (loader/runtime concern). As a defense-in-depth identity check, the host **refuses to initialize** the plugin if its `name()` does not match the name it was loaded as (the trusted registry key passed by the core) — a binary cannot run, or receive tokens, under a name it does not implement
 10. The `LogosAPI` instance exposes `modulePath`, `instanceId`, and `instancePersistencePath` as properties
 11. Host process registers the module with the remote object registry
 12. Core waits for registration and records the module as loaded (along with the runtime and handle)
@@ -276,7 +277,7 @@ The SDK abstracts away registry lookup, token management, and async invocation.
 
 ## Future Work
 
-- **Signature support** — Signing and verifying module packages
+- **Signature support** — Signing and verifying module packages. Required to fully close the *Module Identity & Trust* residual: enforcing REQUIRE-mode signature checks for reserved/privileged module names so a malicious package cannot claim a privileged name (e.g. `capability_module`) by winning scan-time dedup from a user-writable directory
 - **Additional containers** — Register alternative `ModuleContainer` implementations (e.g. Docker, in-process, sandboxed) that can be composed with any loader
 - **Additional loaders** — Register alternative `ModuleLoader` implementations (e.g. WASM/Extism, native shared libraries) that can be composed with any container
 - **Cross-language modules** — Modules in languages other than C++

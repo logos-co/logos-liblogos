@@ -626,6 +626,126 @@ TEST_F(RealModuleRegistryTest, ProcessModule_RegistersRealModule) {
 }
 
 // =============================================================================
+// Security regression: privileged-name impersonation during discovery (F-022).
+//
+// Module identity used to be taken from the name embedded in the plugin's own
+// Qt metadata, ignoring the trusted package name the package manager scanned.
+// That let a package installed under an innocuous name ship a binary whose
+// embedded metadata claims a privileged name (e.g. "capability_module"), and
+// the registry would key the module under that privileged name — wiring the
+// attacker's plugin into the impersonated module's token/trust relationships.
+//
+// The discovery path (logos_core_refresh_modules → discoverInstalledModules)
+// must bind identity to the *trusted package name* (InstalledPackage::name)
+// and refuse a plugin whose embedded name disagrees.
+//
+// These tests use the real TEST_PLUGIN as the impersonating payload: we first
+// read its real embedded name via the raw process-module path, then plant a
+// package whose manifest name differs from it, and assert the embedded name
+// never leaks into the registry.
+// =============================================================================
+
+class ImpersonationRegistryTest : public ::testing::Test {
+protected:
+    std::string modulePath;       // real TEST_PLUGIN on disk
+    std::string embeddedName;     // the name baked into TEST_PLUGIN's metadata
+
+    void SetUp() override {
+        clearModuleState();
+
+        const char* envPlugin = std::getenv("TEST_PLUGIN");
+        if (!envPlugin || std::strlen(envPlugin) == 0 || !fs::exists(envPlugin)) {
+            GTEST_SKIP() << "No real test module available. "
+                         << "Set TEST_PLUGIN env var to a built Qt plugin (.so/.dylib).";
+        }
+        modulePath = envPlugin;
+
+        // Discover the plugin's self-asserted embedded name via the raw
+        // process-module path (which intentionally trusts the embedded name).
+        // This is the name an attacker's binary would carry to impersonate.
+        char* name = logos_core_process_module(modulePath.c_str());
+        ASSERT_NE(name, nullptr) << "process_module failed for " << modulePath;
+        embeddedName = name;
+        delete[] name;
+        ASSERT_FALSE(embeddedName.empty());
+
+        // Wipe the scratch registration + modules dirs so each test below
+        // starts from a clean registry.
+        clearModuleState();
+    }
+
+    void TearDown() override {
+        clearModuleState();
+    }
+
+    // Plant a package directory named `packageName` whose manifest declares
+    // name=packageName but whose main binary is a byte copy of the real
+    // TEST_PLUGIN (embedding `embeddedName`).
+    void plantPackage(const fs::path& parentDir, const std::string& packageName) {
+        const std::string mainFile = packageName + "_plugin.so";
+        createFakeModule(parentDir, packageName, mainFile);  // manifest + placeholder
+        std::error_code ec;
+        fs::copy_file(modulePath, parentDir / packageName / mainFile,
+                      fs::copy_options::overwrite_existing, ec);
+        ASSERT_FALSE(ec) << "failed to copy real plugin into package dir: " << ec.message();
+    }
+};
+
+// The core repro: an "innocent_helper" package carrying a binary that claims
+// the privileged embedded name must NOT register under that privileged name,
+// and must not silently bind it either. Before the fix the registry keyed the
+// module under `embeddedName`, so is_module_known(embeddedName) was 1.
+TEST_F(ImpersonationRegistryTest, Discovery_RefusesPrivilegedNameImpersonation) {
+    // Only meaningful when the trusted package name differs from the embedded
+    // one (true for the capability_module fixture: package "innocent_helper"
+    // vs embedded "capability_module").
+    const std::string packageName = "innocent_helper";
+    ASSERT_NE(packageName, embeddedName);
+
+    TmpDir tmpDir;
+    ASSERT_TRUE(tmpDir.isValid());
+    plantPackage(tmpDir.path, packageName);
+
+    logos_core_add_modules_dir(tmpDir.str().c_str());
+    logos_core_refresh_modules();
+
+    // The impersonated privileged identity must never enter the registry.
+    EXPECT_EQ(logos_core_is_module_known(embeddedName.c_str()), 0)
+        << "a package must not be able to claim the embedded name '"
+        << embeddedName << "' it does not legitimately own";
+
+    // And the lying package is refused outright (its binary's identity does
+    // not match its package name), so the innocuous name isn't bound either.
+    EXPECT_EQ(logos_core_is_module_known(packageName.c_str()), 0)
+        << "a package whose binary impersonates another module must be refused";
+
+    char** known = logos_core_get_known_modules();
+    ASSERT_NE(known, nullptr);
+    EXPECT_EQ(known[0], nullptr) << "no module should be registered from a lying package";
+    freeStringArray(known);
+}
+
+// Positive control: an honest package whose manifest name matches the binary's
+// embedded name still registers normally. The fix must not break legitimate
+// discovery of (even reserved-named) modules installed under their true name.
+TEST_F(ImpersonationRegistryTest, Discovery_HonestPackageRegistersUnderItsName) {
+    TmpDir tmpDir;
+    ASSERT_TRUE(tmpDir.isValid());
+    plantPackage(tmpDir.path, embeddedName);  // manifest name == embedded name
+
+    logos_core_add_modules_dir(tmpDir.str().c_str());
+    logos_core_refresh_modules();
+
+    EXPECT_EQ(logos_core_is_module_known(embeddedName.c_str()), 1)
+        << "an honest package (manifest name == embedded name) must register";
+
+    char* path = logos_core_get_module_path(embeddedName.c_str());
+    ASSERT_NE(path, nullptr);
+    EXPECT_NE(std::string(path), "");
+    delete[] path;
+}
+
+// =============================================================================
 // Cascading unload: logos_core_unload_module(name, true)
 //
 // The cascade is exercised without real Qt modules. We:

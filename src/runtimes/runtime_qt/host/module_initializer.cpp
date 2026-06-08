@@ -30,9 +30,15 @@ LogosModule loadModule(const std::string& modulePath, const std::string& expecte
         return LogosModule();
     }
 
+    // Defense-in-depth against privileged-name impersonation (F-022). The
+    // parent passes the trusted registry key as `expectedName`; the plugin's
+    // own name() is its self-asserted identity. If they disagree, the binary
+    // is not the module it was loaded as — refuse to initialize it rather than
+    // let it run (and receive tokens) under a name it doesn't implement.
     if (expectedName != basePlugin->name().toStdString()) {
-        spdlog::warn("Module name mismatch: expected {} got {}",
-                     expectedName, basePlugin->name().toStdString());
+        spdlog::critical("Refusing module: name mismatch, expected '{}' got '{}'",
+                         expectedName, basePlugin->name().toStdString());
+        return LogosModule();
     }
 
     return module;
