@@ -30,7 +30,9 @@ logos-liblogos/
 │   │   └── subprocess/                  # Subprocess container (Boost.Process v2)
 │   │       ├── subprocess_container.h/cpp   # ModuleContainer impl: process spawn, pipes, kill, token send
 │   │       ├── subprocess_manager.h         # Backward-compat shim for SubprocessManager name
-│   │       └── token_receiver.h/cpp         # Child-side auth token receipt via Unix socket (validates module name as a safe path segment before deriving the socket path)
+│   │       ├── peer_credentials.h           # Qt-free peer-uid auth for the token socket (SO_PEERCRED/getpeereuid), shared by both handoff sides
+│   │       ├── unix_socket_path.h           # Qt-free token socket path resolver (shared by both handoff sides)
+│   │       └── token_receiver.h/cpp         # Child-side auth token receipt via an owner-only, peer-authenticated Unix socket (validates module name as a safe path segment before deriving the socket path)
 │   └── runtimes/                        # Module runtime/loader implementations
 │       └── runtime_qt/                  # Qt plugin runtime
 │           ├── qt_plugin_runtime.h/cpp      # ModuleLoader impl: resolve logos_host_qt, build CLI args
@@ -49,7 +51,7 @@ logos-liblogos/
 │   ├── test_module_runtime_abstraction.cpp  # End-to-end runtime abstraction tests (FakeRuntime)
 │   ├── test_dependency_resolver.cpp     # DependencyResolver tests
 │   ├── test_process_stats.cpp           # ProcessStats tests (external process-stats lib)
-│   ├── test_token_exchange.cpp          # Token exchange via Unix domain socket tests (incl. F-011 path-traversal module-name rejection)
+│   ├── test_token_exchange.cpp          # Token exchange via Unix domain socket tests (incl. F-011 path-traversal module-name rejection and F-012 socket-permission & peer-uid hardening)
 │   └── qt_test_adapter.h               # Qt test utilities/adapter header
 ├── nix/                                 # Nix build modules
 │   ├── default.nix                      # Common configuration (deps, flags, metadata)
@@ -234,7 +236,7 @@ Takes callback functions (`IsKnownFn`, `GetDependenciesFn`) so it has no couplin
 - Async read loop for stdout/stderr with line buffering
 - Synchronous kill with graceful SIGTERM → SIGKILL escalation (5s timeout)
 - Unix domain socket for token delivery (scoped by `LOGOS_INSTANCE_ID`)
-- **Token-listener authentication (CWE-940):** the socket path is predictable and world-writable, so before writing the auth token `sendTokenToProcess()` verifies the connected peer's credentials. The peer uid must match ours and, when the child pid is known, the peer pid must equal the spawned child — read via `SO_PEERCRED` on Linux and via `getpeereid()` + `getsockopt(SOL_LOCAL, LOCAL_PEERPID)` on macOS, so both platforms enforce the uid + pid gate. A mismatched peer is treated like a failed connect: the token is never written and the send fails closed, so a co-tenant pre-binding the path cannot intercept the secret. The named-path race is closed completely only by a future `socketpair()`-fd handoff.
+- **Token-listener authentication (CWE-940 / F-010, F-012):** the socket path is predictable and world-writable, so before writing the auth token `sendTokenToProcess()` verifies the connected peer's credentials. The peer uid must match ours and, when the child pid is known, the peer pid must equal the spawned child — read via `SO_PEERCRED` on Linux and via `getpeereid()` + `getsockopt(SOL_LOCAL, LOCAL_PEERPID)` on macOS, so both platforms enforce the uid + pid gate (`peerIsTrusted()`). It additionally refuses to deliver the credential to a listener owned by a different uid via the shared `socketPeerIsSameUid()` helper (`peer_credentials.h`) — the mirror of the receiver's owner-only (0600) socket node (F-012). A mismatched peer is treated like a failed connect: the token is never written and the send fails closed, so a co-tenant pre-binding the path cannot intercept the secret. The named-path race is closed completely only by a future `socketpair()`-fd handoff.
 - A `std::mutex` (`s_processesMutex`) protects the `s_processes` map against concurrent access
 
 **ModuleContainer interface:** `id()` → `"subprocess"`, `canHandle()`, `launch()`, `sendToken()`, `terminate()`, `terminateAll()`, `hasModule()`, `pid()`, `getAllPids()`
@@ -244,7 +246,7 @@ Takes callback functions (`IsKnownFn`, `GetDependenciesFn`) so it has no couplin
 | Method | Description |
 |--------|-------------|
 | `startProcess(name, executable, arguments, callbacks) → bool` | Launch a subprocess with async output monitoring |
-| `sendTokenToProcess(name, token) → bool` | Send auth token via Unix domain socket |
+| `sendTokenToProcess(name, token) → bool` | Send auth token via Unix domain socket (authenticates the listener's uid before sending) |
 | `terminateProcess(name)` | Gracefully terminate a specific process |
 | `terminateAllProcesses()` | Terminate all managed processes |
 | `hasProcess(name) → bool` | Check if a process entry exists |
@@ -284,7 +286,7 @@ A backward-compat `SubprocessManager` header (`src/containers/subprocess/subproc
 
 **Files:** `src/runtimes/runtime_qt/host/logos_host.cpp`, `src/runtimes/runtime_qt/host/command_line_parser.h/cpp`, `src/runtimes/runtime_qt/host/module_initializer.h/cpp`, `src/runtimes/runtime_qt/host/qt/qt_app.h/cpp`, `src/containers/subprocess/token_receiver.h/cpp`
 
-**Purpose:** Lightweight subprocess (`logos_host_qt`) that loads a single Qt module. Parses `--name`, `--path`, optional `--instance-persistence-path`, and optional `--transport-set` (per-module `LogosTransportSet` JSON; empty = global-default LocalSocket only) arguments. On startup, token receipt (container concern) is separated from module loading (runtime concern): the host first receives its auth token via subprocess container IPC (Unix socket), then loads the Qt plugin and constructs the `LogosAPI` with the parsed transport set (explicit-transport ctor when provided, single-arg ctor otherwise). Registers the module with the remote object registry and runs the Qt event loop. A `logos_host` compatibility symlink is installed for backward compatibility with downstream consumers.
+**Purpose:** Lightweight subprocess (`logos_host_qt`) that loads a single Qt module. Parses `--name`, `--path`, optional `--instance-persistence-path`, and optional `--transport-set` (per-module `LogosTransportSet` JSON; empty = global-default LocalSocket only) arguments. On startup, token receipt (container concern) is separated from module loading (runtime concern): the host first receives its auth token via subprocess container IPC (an owner-only Unix socket that authenticates the connecting parent's uid before accepting the token — see [Token-handoff socket hardening](spec.md#token-handoff-socket-hardening)), then loads the Qt plugin and constructs the `LogosAPI` with the parsed transport set (explicit-transport ctor when provided, single-arg ctor otherwise). Registers the module with the remote object registry and runs the Qt event loop. A `logos_host` compatibility symlink is installed for backward compatibility with downstream consumers.
 
 Because a directly-invoked host receives `--name` straight from its command line (not via the registry, which validates names at discovery time), `SubprocessTokenReceiver::receive` independently re-validates the module name — and the `LOGOS_INSTANCE_ID` it appends — as a single safe path segment (`logos::isSafePathSegment`) before building the `logos_token_<name>` socket path. Without this defense-in-depth check, a name like `seg/../victim` would make `QLocalServer::removeServer()` unlink an attacker-chosen file outside the temp directory.
 
