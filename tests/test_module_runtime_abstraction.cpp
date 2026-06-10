@@ -215,6 +215,39 @@ TEST_F(ModuleRuntimeAbstractionTest, LoadWithDeps_SkipsAlreadyLoadedModules) {
     EXPECT_EQ(fake->loadCalls[0], "b");
 }
 
+// LoadsInTopologicalOrder (above) pins the *call sequence*. This one pins the
+// *observable end state*: requesting a single top-level module with
+// with_dependencies=true must leave that module's entire transitive
+// dependency closure loaded, as reported by the public query API. This is the
+// guarantee callers actually rely on ("load app, get everything it needs"),
+// and it exercises a diamond (app → ui, core; ui → core) so a dependency
+// reachable by two paths is still loaded exactly once and not skipped.
+TEST_F(ModuleRuntimeAbstractionTest, LoadWithDeps_LeavesTransitiveClosureLoaded) {
+    registerModule("core");
+    registerModule("ui",  {"core"});
+    registerModule("app", {"ui", "core"});
+
+    // Precondition: nothing in the closure is loaded yet.
+    ASSERT_EQ(logos_core_is_module_loaded("app"),  0);
+    ASSERT_EQ(logos_core_is_module_loaded("ui"),   0);
+    ASSERT_EQ(logos_core_is_module_loaded("core"), 0);
+
+    // Only the top module is requested.
+    int result = logos_core_load_module("app", true);
+    ASSERT_EQ(result, 1);
+
+    // The whole closure ends up loaded — the deps were auto-resolved.
+    EXPECT_EQ(logos_core_is_module_loaded("app"),  1);
+    EXPECT_EQ(logos_core_is_module_loaded("ui"),   1);
+    EXPECT_EQ(logos_core_is_module_loaded("core"), 1);
+
+    // The diamond's shared dependency loads exactly once despite two paths.
+    int coreLoads = 0;
+    for (const auto& n : fake->loadCalls)
+        if (n == "core") ++coreLoads;
+    EXPECT_EQ(coreLoads, 1);
+}
+
 // =============================================================================
 // terminateAll routing
 // =============================================================================
