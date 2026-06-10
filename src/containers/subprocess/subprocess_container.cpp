@@ -310,16 +310,39 @@ void handleRead(std::shared_ptr<ProcessEntry> entry, bool isStderr,
     auto& line_buf = isStderr ? entry->err_line_buf : entry->out_line_buf;
 
     if (n > 0) {
+        // Everything already in line_buf was scanned for '\n' on previous
+        // reads and contained none (the loop below consumes through every
+        // newline and erase() drops the consumed prefix), so resume the
+        // search at the old end instead of rescanning from offset 0. Without
+        // this, a newline-free stream from a child re-scans the whole growing
+        // buffer on every 4 KB read — O(N^2) CPU that pins the shared io
+        // thread supervising all modules (F-014).
+        const std::size_t search_start = line_buf.size();
         line_buf.append(buf.data(), n);
-        std::size_t pos = 0, nl;
-        while ((nl = line_buf.find('\n', pos)) != std::string::npos) {
+
+        std::size_t pos = 0, nl, search = search_start;
+        while ((nl = line_buf.find('\n', search)) != std::string::npos) {
             std::string line = line_buf.substr(pos, nl - pos);
             if (!line.empty() && line.back() == '\r') line.pop_back();
             if (!line.empty() && entry->callbacks.onOutput)
                 entry->callbacks.onOutput(entry->name, line, isStderr);
             pos = nl + 1;
+            search = pos;
         }
         line_buf.erase(0, pos);
+
+        // Bound the unterminated remainder. The child runs partially-trusted
+        // module code; one that emits a long newline-free stream (or a single
+        // multi-GB write) would otherwise grow line_buf without limit, pinning
+        // host memory until the OS OOM-kills the trusted parent and every
+        // module it supervises. Once the buffered prefix reaches the cap,
+        // force-flush it as a line and reset so memory stays bounded — a
+        // module must not be able to take the host down this way (F-014).
+        if (line_buf.size() >= SubprocessContainer::kMaxOutputLineBytes) {
+            if (entry->callbacks.onOutput)
+                entry->callbacks.onOutput(entry->name, line_buf, isStderr);
+            line_buf.clear();
+        }
     }
 
     if (!ec) {

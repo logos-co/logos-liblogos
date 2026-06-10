@@ -2,6 +2,7 @@
 #define SUBPROCESS_CONTAINER_H
 
 #include "module_container.h"
+#include <cstddef>
 #include <cstdint>
 #include <functional>
 #include <string>
@@ -15,6 +16,20 @@ public:
         std::function<void(const std::string& name, bool crashed)> onError;
         std::function<void(const std::string& name, const std::string& line, bool isStderr)> onOutput;
     };
+
+    // Upper bound on how many bytes of a single newline-free output line the
+    // host will buffer per stream before force-flushing it to onOutput. The
+    // child host runs partially-trusted module code; a malicious or buggy
+    // module can emit an unbounded newline-free stream on stdout/stderr. The
+    // parent (basecamp/logoscore) relays that output line-by-line, so without
+    // a cap the per-stream line buffer grows without limit (OOM-killing the
+    // trusted host and every module it supervises) while each 4 KB read
+    // re-scans the whole accumulated buffer for a newline — O(N^2) CPU that
+    // pins the single shared io thread. This cap bounds both: memory is held
+    // to ~kMaxOutputLineBytes per stream and the buffered prefix is flushed
+    // and reset once it is reached, so process isolation holds even for a
+    // module that never emits a newline (F-014).
+    static constexpr std::size_t kMaxOutputLineBytes = 1u * 1024u * 1024u; // 1 MiB
 
     // -- ModuleContainer interface --
     std::string id() const override { return "subprocess"; }
