@@ -7,7 +7,9 @@
 // =============================================================================
 #include <gtest/gtest.h>
 #include "containers/subprocess/subprocess_container.h"
+#include <algorithm>
 #include <atomic>
+#include <cstddef>
 #include <chrono>
 #include <condition_variable>
 #include <csignal>
@@ -212,6 +214,95 @@ TEST_F(SubprocessContainerTest, Launch_OutputCallbackReceivesStdoutAndStderr) {
     }
     EXPECT_TRUE(saw_stdout);
     EXPECT_TRUE(saw_stderr);
+}
+
+// ---------------------------------------------------------------------------
+// Output relay is bounded — a module cannot OOM/stall the host via stdout
+// ---------------------------------------------------------------------------
+//
+// F-014: the parent (trusted host) relays each child's stdout/stderr to
+// onOutput line-by-line, buffering bytes until a '\n' arrives. A
+// partially-trusted module that emits a long *newline-free* stream (or one
+// giant write) would, without a cap, grow the per-stream line buffer without
+// bound — pinning host memory until the OS OOM-kills basecamp/logoscore and
+// every module it supervises — while each 4 KB read re-scanned the whole
+// accumulated buffer for a newline (O(N^2) CPU on the single shared io
+// thread). Process isolation exists precisely so a module fault cannot take
+// the host down; an unbounded relay buffer breaks that guarantee.
+//
+// This test drives a child that writes ~5 MB to stdout with NO newline, then
+// closes it. The contract: the host must surface that output in bounded
+// pieces (each <= kMaxOutputLineBytes plus at most one read chunk), never as a
+// single unbounded line. Against the pre-fix code the entire payload is
+// accumulated and emitted as one ~5 MB line, which fails the per-piece bound.
+
+TEST_F(SubprocessContainerTest, Launch_BoundsUnterminatedOutputLine) {
+    // The child writes a fixed number of newline-free bytes via dd. Skip
+    // cleanly if /dev/zero isn't available (some constrained sandboxes).
+    if (access("/dev/zero", R_OK) != 0)
+        GTEST_SKIP() << "/dev/zero not available";
+
+    // ~5 MB of newline-free output: several times the 1 MiB per-line cap, and
+    // deliberately not an exact multiple of it so the final EOF flush carries
+    // a non-trivial remainder too.
+    constexpr std::size_t kTotalBytes = 5'000'000;
+
+    std::mutex mtx;
+    std::condition_variable cv;
+    std::size_t received_total = 0;
+    std::size_t max_piece = 0;
+    std::size_t piece_count = 0;
+    std::atomic<bool> terminated{false};
+
+    SubprocessContainer::ProcessCallbacks cb;
+    cb.onOutput = [&](const std::string&, const std::string& line, bool isStderr) {
+        if (isStderr) return; // dd's own summary is silenced, but be defensive
+        std::lock_guard<std::mutex> lock(mtx);
+        received_total += line.size();
+        max_piece = std::max(max_piece, line.size());
+        ++piece_count;
+        cv.notify_all();
+    };
+    cb.onFinished = [&](const std::string&, int, bool) {
+        terminated.store(true);
+        cv.notify_all();
+    };
+
+    // bs=1000000 count=5 => exactly 5,000,000 NUL bytes on stdout, no newline.
+    // dd's transfer summary goes to stderr, which we discard.
+    ASSERT_TRUE(SubprocessContainer::startProcess(
+        "oom_relay_test", "/bin/sh",
+        {"-c", "dd if=/dev/zero bs=1000000 count=5 2>/dev/null"}, cb));
+
+    {
+        std::unique_lock<std::mutex> lock(mtx);
+        // Wait until every byte has been relayed (the meaningful condition);
+        // onFinished may fire slightly before the final pipe read drains.
+        bool ok = cv.wait_for(lock, std::chrono::seconds(15),
+                              [&]() { return received_total >= kTotalBytes; });
+        ASSERT_TRUE(ok) << "host relayed only " << received_total << " of "
+                        << kTotalBytes << " bytes before timing out";
+    }
+
+    std::lock_guard<std::mutex> lock(mtx);
+
+    // No data lost or duplicated: every byte the child wrote is surfaced.
+    EXPECT_EQ(received_total, kTotalBytes);
+
+    // The core invariant: a single newline-free stream is delivered in bounded
+    // pieces, not one unbounded line. A flush is triggered once the buffer
+    // reaches the cap, after appending at most one read chunk (4096 bytes), so
+    // no emitted piece may exceed cap + one chunk.
+    EXPECT_LE(max_piece, SubprocessContainer::kMaxOutputLineBytes + 4096u)
+        << "host buffered a " << max_piece << "-byte line without a newline; "
+           "the per-stream relay buffer is unbounded (F-014) — a module can "
+           "OOM/stall the trusted host through stdout.";
+
+    // ~5 MB at a 1 MiB cap must split into several pieces. Pre-fix this is
+    // exactly one (everything accumulated, emitted once at EOF).
+    EXPECT_GT(piece_count, 1u)
+        << "expected the capped relay to split a 5 MB newline-free stream into "
+           "multiple bounded pieces, got " << piece_count;
 }
 
 // ---------------------------------------------------------------------------
