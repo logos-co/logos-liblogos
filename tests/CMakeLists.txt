@@ -20,6 +20,7 @@ add_executable(logos_core_tests
     test_module_name_validation.cpp
     test_runtime_registry.cpp
     test_module_runtime_abstraction.cpp
+    test_protocol_gate.cpp
     # qt_test_adapter.h calls SubprocessTokenReceiver::receive; compile the
     # implementation unit directly into the test binary (it lives in logos_host_qt,
     # which is an executable, not a linkable library).
@@ -53,15 +54,28 @@ if(DEFINED PROCESS_STATS_ROOT AND EXISTS "${PROCESS_STATS_ROOT}/include")
   target_include_directories(logos_core_tests PRIVATE ${PROCESS_STATS_ROOT}/include)
 endif()
 
-# Add SDK include directory (same logic as src/CMakeLists.txt)
-if(EXISTS "${LOGOS_CPP_SDK_ROOT}/lib" AND EXISTS "${LOGOS_CPP_SDK_ROOT}/include")
+# Add SDK include directories (same layering as src/CMakeLists.txt:
+# Qt-free base headers + qt-sdk developer layer + protocol layer)
+if(EXISTS "${LOGOS_CPP_SDK_ROOT}/include")
   target_include_directories(logos_core_tests PRIVATE 
     ${LOGOS_CPP_SDK_ROOT}/include
     ${LOGOS_CPP_SDK_ROOT}/include/cpp
-    ${LOGOS_CPP_SDK_ROOT}/include/core
   )
 else()
   target_include_directories(logos_core_tests PRIVATE ${LOGOS_CPP_SDK_ROOT}/cpp)
+endif()
+if(DEFINED LOGOS_QT_SDK_ROOT AND EXISTS "${LOGOS_QT_SDK_ROOT}/include")
+  target_include_directories(logos_core_tests PRIVATE
+    ${LOGOS_QT_SDK_ROOT}/include
+    ${LOGOS_QT_SDK_ROOT}/include/cpp
+    ${LOGOS_QT_SDK_ROOT}/include/core
+  )
+endif()
+if(DEFINED LOGOS_PROTOCOL_ROOT AND EXISTS "${LOGOS_PROTOCOL_ROOT}/include")
+  target_include_directories(logos_core_tests PRIVATE
+    ${LOGOS_PROTOCOL_ROOT}/include
+    ${LOGOS_PROTOCOL_ROOT}/include/cpp
+  )
 endif()
 
 gtest_discover_tests(logos_core_tests)

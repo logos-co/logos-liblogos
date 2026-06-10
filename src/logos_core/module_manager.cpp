@@ -15,6 +15,11 @@
 #include <boost/uuid/uuid_io.hpp>
 #include "logos_api.h"
 #include "logos_api_client.h"
+#include "logos_module.h"
+#include "logos_protocol.h"
+#include "protocol_gate.h"
+#include <QJsonDocument>
+#include <QJsonObject>
 #include "logos_transport_config_json.h"
 #include "token_manager.h"
 #include "instance_persistence.h"
@@ -158,6 +163,49 @@ namespace {
         if (auto it = moduleTransportsMap().find(name);
             it != moduleTransportsMap().end()) {
             desc.transportSetJson = it->second;
+        }
+
+        // ── Protocol-version load gate ─────────────────────────────────
+        // Read the module's embedded metadata without loading it and apply
+        // the one compatibility rule: equal logos-protocol MAJOR loads,
+        // different MAJOR is refused, a missing stamp (pre-protocol module)
+        // loads permissively with a warning.
+        std::string moduleProtocolVersion;
+        if (auto meta = ModuleLib::LogosModule::extractMetadata(
+                QString::fromStdString(modPath))) {
+            moduleProtocolVersion = meta->rawMetadata
+                .value(QStringLiteral("logos_protocol_version"))
+                .toString().toStdString();
+            // While we have it, hand the full metadata to the runtime.
+            desc.rawMetadata = nlohmann::json::parse(
+                QJsonDocument(meta->rawMetadata)
+                    .toJson(QJsonDocument::Compact).toStdString(),
+                nullptr, /*allow_exceptions=*/false);
+            if (desc.rawMetadata.is_discarded())
+                desc.rawMetadata = nlohmann::json::object();
+        }
+        const auto gate = LogosCore::evaluateProtocolGate(
+            moduleProtocolVersion, LOGOS_PROTOCOL_VERSION_MAJOR);
+        switch (gate.decision) {
+        case LogosCore::ProtocolGateDecision::Refuse:
+            spdlog::error(
+                "Refusing to load module {}: built against logos-protocol {} "
+                "(major {}), this host speaks major {} ({}) — incompatible "
+                "protocol majors",
+                name, moduleProtocolVersion, gate.moduleMajor,
+                LOGOS_PROTOCOL_VERSION_MAJOR, LOGOS_PROTOCOL_VERSION_STRING);
+            return false;
+        case LogosCore::ProtocolGateDecision::AllowLegacy:
+            spdlog::warn(
+                "Module {} carries no usable logos_protocol_version "
+                "(pre-protocol build) — loading permissively",
+                name);
+            break;
+        case LogosCore::ProtocolGateDecision::Allow:
+            spdlog::debug("Module {} protocol version {} compatible with host {}",
+                          name, moduleProtocolVersion,
+                          LOGOS_PROTOCOL_VERSION_STRING);
+            break;
         }
 
         auto rt = runtimeRegistry().select(desc);

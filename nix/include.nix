@@ -1,5 +1,5 @@
 # Installs the logos-liblogos headers
-{ pkgs, common, src, logosSdk ? null }:
+{ pkgs, common, src, logosSdk ? null, logosProtocolPkg ? null, logosQtSdk ? null }:
 
 pkgs.stdenv.mkDerivation {
   pname = "${common.pname}-headers";
@@ -26,6 +26,12 @@ pkgs.stdenv.mkDerivation {
     # Also copy SDK headers if available (including logos_mode.h)
     if [ -n "${toString logosSdk}" ] && [ -d "${toString logosSdk}/include" ]; then
       cp -r ${toString logosSdk}/include/* $out/include/ 2>/dev/null || true
+    fi
+    if [ -n "${toString logosProtocolPkg}" ] && [ -d "${toString logosProtocolPkg}/include" ]; then
+      cp -r ${toString logosProtocolPkg}/include/* $out/include/ 2>/dev/null || true
+    fi
+    if [ -n "${toString logosQtSdk}" ] && [ -d "${toString logosQtSdk}/include" ]; then
+      cp -r ${toString logosQtSdk}/include/* $out/include/ 2>/dev/null || true
     fi
     
     runHook postInstall

@@ -5,13 +5,18 @@
     logos-nix.url = "github:logos-co/logos-nix";
     nixpkgs.follows = "logos-nix/nixpkgs";
     logos-cpp-sdk.url = "github:logos-co/logos-cpp-sdk";
+    logos-cpp-sdk.inputs.logos-protocol.follows = "logos-protocol";
+    logos-protocol.url = "github:logos-co/logos-protocol";
+    logos-qt-sdk.url = "github:logos-co/logos-qt-sdk";
+    logos-qt-sdk.inputs.logos-protocol.follows = "logos-protocol";
+    logos-qt-sdk.inputs.logos-cpp-sdk.follows = "logos-cpp-sdk";
     logos-capability-module.url = "github:logos-co/logos-capability-module";
     logos-module.url = "github:logos-co/logos-module";
     process-stats.url = "github:logos-co/process-stats";
     logos-package-manager.url = "github:logos-co/logos-package-manager";
   };
 
-  outputs = { self, nixpkgs, logos-nix, logos-cpp-sdk, logos-capability-module, logos-module, logos-package-manager, process-stats }:
+  outputs = { self, nixpkgs, logos-nix, logos-cpp-sdk, logos-protocol, logos-qt-sdk, logos-capability-module, logos-module, logos-package-manager, process-stats }:
 
     let
       systems = [ "aarch64-darwin" "x86_64-darwin" "aarch64-linux" "x86_64-linux" ];
@@ -19,6 +24,8 @@
         inherit system;
         pkgs = import nixpkgs { inherit system; };
         logosSdk = logos-cpp-sdk.packages.${system}.default;
+        logosProtocolPkg = logos-protocol.packages.${system}.default;
+        logosQtSdk = logos-qt-sdk.packages.${system}.default;
         capabilityModule = logos-capability-module.packages.${system}.default;
         logosModule = logos-module.packages.${system}.default;
         processStats = process-stats.packages.${system}.default;
@@ -27,12 +34,12 @@
       });
     in
     {
-      packages = forAllSystems ({ pkgs, system, logosSdk, capabilityModule, logosModule, processStats, logosPackageManager, logosPackageManagerPortable }:
+      packages = forAllSystems ({ pkgs, system, logosSdk, logosProtocolPkg, logosQtSdk, capabilityModule, logosModule, processStats, logosPackageManager, logosPackageManagerPortable }:
         let
           # Common configuration (dev, default)
-          common = import ./nix/default.nix { inherit pkgs logosSdk logosModule processStats logosPackageManager; };
+          common = import ./nix/default.nix { inherit pkgs logosSdk logosProtocolPkg logosQtSdk logosModule processStats logosPackageManager; };
           # Common configuration (portable)
-          commonPortable = import ./nix/default.nix { inherit pkgs logosSdk logosModule processStats; logosPackageManager = logosPackageManagerPortable; portableBuild = true; };
+          commonPortable = import ./nix/default.nix { inherit pkgs logosSdk logosProtocolPkg logosQtSdk logosModule processStats; logosPackageManager = logosPackageManagerPortable; portableBuild = true; };
           src = ./.;
 
           # Shared build that compiles everything (dev)
@@ -46,13 +53,13 @@
           modules = import ./nix/modules.nix { inherit pkgs common capabilityModule; };
           modulesPortable = import ./nix/modules.nix { inherit pkgs capabilityModule; common = commonPortable; portableBuild = true; };
           bin = import ./nix/bin.nix { inherit pkgs common build lib modules; };
-          include = import ./nix/include.nix { inherit pkgs common src logosSdk; };
+          include = import ./nix/include.nix { inherit pkgs common src logosSdk; inherit logosProtocolPkg logosQtSdk; };
           tests = import ./nix/tests.nix { inherit pkgs common build; };
 
           # Portable package components
           libPortable = import ./nix/lib.nix { inherit pkgs; common = commonPortable; build = buildPortable; };
           binPortable = import ./nix/bin.nix { inherit pkgs; common = commonPortable; build = buildPortable; lib = libPortable; modules = modulesPortable; };
-          includePortable = import ./nix/include.nix { inherit pkgs src logosSdk; common = commonPortable; };
+          includePortable = import ./nix/include.nix { inherit pkgs src logosSdk; inherit logosProtocolPkg logosQtSdk; common = commonPortable; };
 
           # Combined package (dev)
           liblogos = pkgs.symlinkJoin {

@@ -1,5 +1,5 @@
 # Common build configuration shared across all packages
-{ pkgs, logosSdk, logosModule, processStats, logosPackageManager, portableBuild ? false }:
+{ pkgs, logosSdk, logosProtocolPkg, logosQtSdk, logosModule, processStats, logosPackageManager, portableBuild ? false }:
 
 {
   pname = "logos-liblogos";
@@ -28,6 +28,8 @@
     pkgs.qt6.qtbase
     pkgs.qt6.qtremoteobjects
     logosSdk
+    logosProtocolPkg
+    logosQtSdk
     pkgs.zstd
     pkgs.gtest
     pkgs.cli11
@@ -41,6 +43,8 @@
   cmakeFlags = [
     "-GNinja"
     "-DLOGOS_CPP_SDK_ROOT=${logosSdk}"
+    "-DLOGOS_PROTOCOL_ROOT=${logosProtocolPkg}"
+    "-DLOGOS_QT_SDK_ROOT=${logosQtSdk}"
     "-DLOGOS_MODULE_ROOT=${logosModule}"
     "-DPROCESS_STATS_ROOT=${processStats}"
     "-DLOGOS_PACKAGE_MANAGER_ROOT=${logosPackageManager}"
@@ -51,6 +55,8 @@
   # Environment variables
   env = {
     LOGOS_CPP_SDK_ROOT = "${logosSdk}";
+    LOGOS_PROTOCOL_ROOT = "${logosProtocolPkg}";
+    LOGOS_QT_SDK_ROOT = "${logosQtSdk}";
     LOGOS_MODULE_ROOT = "${logosModule}";
     PROCESS_STATS_ROOT = "${processStats}";
     LOGOS_PACKAGE_MANAGER_ROOT = "${logosPackageManager}";
