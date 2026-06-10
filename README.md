@@ -120,6 +120,11 @@ void logos_core_set_persistence_base_path(const char* path);
 // before the module is loaded.
 void logos_core_set_module_transports(const char* name, const char* transport_set_json);
 
+// Inter-module access policy (per-target allowed-caller allowlists).
+// Should be called before the modules are loaded. NULL/"" clears it.
+// NOTE: currently a no-op — accepted but not yet enforced (TODO).
+void logos_core_set_access_policy(const char* policy_json);
+
 // Module management
 int  logos_core_load_module(const char* name, bool with_dependencies);
 int  logos_core_unload_module(const char* name, bool with_dependents);

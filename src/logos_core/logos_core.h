@@ -105,6 +105,34 @@ LOGOS_CORE_EXPORT void logos_core_set_persistence_base_path(const char* path);
 LOGOS_CORE_EXPORT void logos_core_set_module_transports(const char* module_name,
                                                          const char* transport_set_json);
 
+// Install the inter-module access policy that governs which caller
+// modules may invoke which target modules.
+//
+// `policy_json` is a JSON document of the shape:
+//
+//     {
+//       "version": 1,
+//       "mode": "enforce",
+//       "restrictions": {
+//         "package_manager":    { "allowedCallers": ["package_manager_ui"] },
+//         "package_downloader": { "allowedCallers": ["package_manager_ui"] }
+//       }
+//     }
+//
+// `mode` selects how violations are handled (e.g. "enforce" to deny,
+// other modes may log only). Each entry under `restrictions` names a
+// target module and the set of caller modules permitted to reach it;
+// a target absent from `restrictions` is unrestricted.
+//
+// Should be called before logos_core_start() so the policy is in place
+// before any module is loaded. NULL or "" clears any previously-set
+// policy.
+//
+// TODO: This is currently a no-op — the policy is accepted but not yet
+// enforced. Implement parsing of the JSON document and wire the
+// per-target allowed-caller checks into the inter-module call path.
+LOGOS_CORE_EXPORT void logos_core_set_access_policy(const char* policy_json);
+
 // Re-scan all module directories and update known modules.
 // Call after installing new modules so they become discoverable.
 LOGOS_CORE_EXPORT void logos_core_refresh_modules();
