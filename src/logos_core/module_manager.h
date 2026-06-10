@@ -35,6 +35,13 @@ namespace ModuleManager {
     void setModuleTransports(const std::string& moduleName,
                              const std::string& transportSetJson);
 
+    // Store the inter-module access policy (the raw JSON document set via
+    // logos_core_set_access_policy). Core parses it and registers the
+    // concrete per-target restrictions with capability_module once that
+    // module is loaded (see initializeCapabilityModule). Must be called
+    // BEFORE logos_core_start(). Empty clears any previously set policy.
+    void setAccessPolicy(const std::string& policyJson);
+
     void discoverInstalledModules();
 
     std::string processModule(const std::string& modulePath);
