@@ -121,8 +121,9 @@ void logos_core_set_persistence_base_path(const char* path);
 void logos_core_set_module_transports(const char* name, const char* transport_set_json);
 
 // Inter-module access policy (per-target allowed-caller allowlists).
-// Should be called before the modules are loaded. NULL/"" clears it.
-// NOTE: currently a no-op — accepted but not yet enforced (TODO).
+// Core parses it and registers the per-target restrictions with
+// capability_module, which then denies token issuance for disallowed
+// (caller, target) pairs. Call before logos_core_start(); NULL/"" clears.
 void logos_core_set_access_policy(const char* policy_json);
 
 // Module management

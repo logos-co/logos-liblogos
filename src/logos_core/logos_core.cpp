@@ -103,16 +103,10 @@ void logos_core_set_module_transports(const char* module_name,
 }
 
 void logos_core_set_access_policy(const char* policy_json) {
-    // No-op for now: the policy is accepted but not yet enforced. A NULL
-    // or empty argument is the documented "clear the policy" signal, so
-    // it's explicitly allowed (unlike the module-name setters above, this
-    // does not abort on NULL).
-    //
-    // TODO: Parse `policy_json` (version / mode / per-target
-    // allowedCallers) and enforce the per-target allowed-caller checks
-    // on the inter-module call path. Until then, every call is permitted
-    // regardless of the policy supplied here.
-    (void)policy_json;
+    // NULL/"" clears the policy (see header) — unlike the module-name
+    // setters above, this does not abort on NULL.
+    ModuleManager::setAccessPolicy(
+        policy_json ? std::string(policy_json) : std::string{});
 }
 
 void logos_core_refresh_modules()

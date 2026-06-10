@@ -1,5 +1,6 @@
 #include "module_manager.h"
 #include "module_registry.h"
+#include "access_policy.h"
 #include "dependency_resolver.h"
 #include "runtime_registry.h"
 #include "composite_runtime.h"
@@ -18,6 +19,9 @@
 #include "logos_transport_config_json.h"
 #include "token_manager.h"
 #include "instance_persistence.h"
+#include <QString>
+#include <QStringList>
+#include <QVariant>
 
 namespace {
     ModuleRegistry& registryInstance() {
@@ -42,6 +46,13 @@ namespace {
     std::string& persistenceBasePath() {
         static std::string path;
         return path;
+    }
+
+    // Raw access-policy JSON, set before logos_core_start(); pushed to
+    // capability_module once it loads. Guarded by loadMutex().
+    std::string& accessPolicyJson() {
+        static std::string s;
+        return s;
     }
 
     LogosCore::RuntimeRegistry& runtimeRegistry() {
@@ -72,6 +83,73 @@ namespace {
         return result;
     }
 
+    // Dial capability_module from a long-lived "core" LogosAPI. Prefer the
+    // operator's first configured transport; fall back to the global
+    // default (LocalSocket). Needed because the single-arg getClient()
+    // always uses the global default, which hangs against a tcp-only
+    // capability_module that never bound a LocalSocket.
+    LogosAPIClient* capabilityModuleClient() {
+        static LogosAPI* s_coreApi = nullptr;
+        if (!s_coreApi)
+            s_coreApi = new LogosAPI(std::string("core"));
+
+        if (auto it = moduleTransportsMap().find("capability_module");
+            it != moduleTransportsMap().end() && !it->second.empty()) {
+            const auto ts = logos::transportSetFromJsonString(it->second);
+            if (!ts.empty()) {
+                return s_coreApi->getClient(
+                    QStringLiteral("capability_module"), ts.front());
+            }
+        }
+        return s_coreApi->getClient(std::string("capability_module"));
+    }
+
+    // Parse the stored access policy and register its per-target restrictions
+    // with capability_module. Only "enforce" mode registers anything; an
+    // empty/unparseable policy leaves it unrestricted. Best-effort (failures
+    // logged, not fatal).
+    void pushAccessRestrictionsToCapabilityModule() {
+        if (accessPolicyJson().empty())
+            return;
+        if (!registryInstance().isLoaded("capability_module"))
+            return;
+
+        auto policy = LogosCore::parseAccessPolicy(accessPolicyJson());
+        if (!policy) {
+            spdlog::warn("Access policy is not valid JSON — not enforcing any restrictions");
+            return;
+        }
+        if (!policy->enforce())
+            return;
+
+        const std::string capabilityModuleToken =
+            TokenManager::instance().getToken(std::string("capability_module"));
+        LogosAPIClient* client = capabilityModuleClient();
+
+        for (const auto& restriction : policy->restrictions) {
+            QStringList allowedCallers;
+            for (const auto& caller : restriction.allowedCallers)
+                allowedCallers.append(QString::fromStdString(caller));
+
+            // The token is the trusted-channel proof registerRestriction
+            // verifies — only core holds it.
+            const QVariant result = client->invokeRemoteMethod(
+                QStringLiteral("capability_module"),
+                QStringLiteral("registerRestriction"),
+                QVariant(QString::fromStdString(capabilityModuleToken)),
+                QVariant(QString::fromStdString(restriction.target)),
+                QVariant(allowedCallers));
+
+            if (!result.toBool()) {
+                spdlog::warn("Failed to register access restriction for target: {}",
+                             restriction.target);
+            } else {
+                spdlog::info("Registered access restriction for target: {} ({} allowed callers)",
+                             restriction.target, restriction.allowedCallers.size());
+            }
+        }
+    }
+
     void notifyCapabilityModule(const std::string& name, const std::string& token) {
         if (!registryInstance().isLoaded("capability_module"))
             return;
@@ -79,36 +157,7 @@ namespace {
         TokenManager& tokenManager = TokenManager::instance();
         std::string capabilityModuleToken = tokenManager.getToken(std::string("capability_module"));
 
-        static LogosAPI* s_coreApi = nullptr;
-        if (!s_coreApi)
-            s_coreApi = new LogosAPI(std::string("core"));
-
-        // Pick the right transport for dialing capability_module. The
-        // single-arg getClient() defaults to the *global* transport
-        // config (LocalSocket), which is wrong when an operator
-        // configured capability_module for tcp / tcp_ssl only — the
-        // parent's RPC then hangs trying to reach a LocalSocket that
-        // capability_module never bound.
-        //
-        // Resolution order matches the operator's intent: prefer the
-        // first transport the operator named (so a `--module-transport
-        // capability_module=local --module-transport
-        // capability_module=tcp` setup uses LocalSocket, but a tcp-only
-        // setup uses tcp). Empty / unset map → fall back to the global
-        // default, which is correct for the default LocalSocket-only
-        // case (no per-module config registered).
-        LogosAPIClient* client = nullptr;
-        if (auto it = moduleTransportsMap().find("capability_module");
-            it != moduleTransportsMap().end() && !it->second.empty()) {
-            const auto ts = logos::transportSetFromJsonString(it->second);
-            if (!ts.empty()) {
-                client = s_coreApi->getClient(
-                    QStringLiteral("capability_module"), ts.front());
-            }
-        }
-        if (!client) {
-            client = s_coreApi->getClient(std::string("capability_module"));
-        }
+        LogosAPIClient* client = capabilityModuleClient();
 
         if (!client->informModuleToken(capabilityModuleToken, name, token)) {
             spdlog::warn("Failed to register token with capability module for: {}", name);
@@ -264,6 +313,17 @@ namespace ModuleManager {
             moduleTransportsMap()[moduleName] = transportSetJson;
     }
 
+    void setAccessPolicy(const std::string& policyJson) {
+        std::lock_guard<std::mutex> g(loadMutex());  // guards the read at push time
+        accessPolicyJson() = policyJson;
+        // Validate eagerly so a malformed policy is flagged at set time, not
+        // silently at capability_module load. Stored verbatim regardless.
+        if (!policyJson.empty() && !LogosCore::parseAccessPolicy(policyJson)) {
+            spdlog::warn("logos_core_set_access_policy: policy is not valid JSON "
+                         "— no restrictions will be enforced");
+        }
+    }
+
     void discoverInstalledModules() {
         registryInstance().discoverInstalledModules();
     }
@@ -345,6 +405,9 @@ namespace ModuleManager {
             spdlog::warn("Failed to load capability module");
             return false;
         }
+
+        // Register restrictions now, before any other module can call out.
+        pushAccessRestrictionsToCapabilityModule();
 
         return true;
     }
@@ -435,6 +498,7 @@ namespace ModuleManager {
         // clear() between scenarios) would inherit the previous
         // run's transport map and bind unexpected ports.
         moduleTransportsMap().clear();
+        accessPolicyJson().clear();  // same rationale — don't leak across restarts
     }
 
     char** getLoadedModulesCStr() {
