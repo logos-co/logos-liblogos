@@ -75,17 +75,18 @@ LogosAPI* initializeLogosAPI(const std::string& moduleName, QObject* module,
             fs::path(instancePersistencePath).filename().string());
     }
 
+    // Surface the token as a QObject property BEFORE registerObject:
+    // registration runs the provider object's init(), where cdylib-authored
+    // modules read this property (a cross-image-safe dynamic lookup, like
+    // modulePath above) and forward it across the module-impl C ABI via
+    // logos_module_accept_token — their statically-linked protocol stack has
+    // its own TokenManager copy the host's saveToken calls below never reach.
+    logos_api->setProperty("authToken", QString::fromStdString(authToken));
+
     bool success = logos_api->getProvider()->registerObject(basePlugin->name(), module);
     if (success) {
         logos_api->getTokenManager()->saveToken(std::string("core"), authToken);
         logos_api->getTokenManager()->saveToken(std::string("capability_module"), authToken);
-        // Also surface the token as a QObject property: cdylib-authored
-        // modules run their own statically-linked protocol stack whose
-        // TokenManager is a separate copy of the singleton, so the generated
-        // Qt glue reads this property (a cross-image-safe dynamic lookup,
-        // like modulePath above) and forwards it across the module-impl
-        // C ABI via logos_module_accept_token.
-        logos_api->setProperty("authToken", QString::fromStdString(authToken));
     } else {
         spdlog::critical("Failed to register module for remote access: {}", basePlugin->name().toStdString());
         delete module;
