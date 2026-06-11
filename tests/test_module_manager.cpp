@@ -2,6 +2,7 @@
 #include "logos_core.h"
 #include "qt_test_adapter.h"
 #include <nlohmann/json.hpp>
+#include <algorithm>
 #include <cstdlib>
 #include <cstring>
 #include <filesystem>
@@ -1075,4 +1076,137 @@ TEST_F(DependencyQueryTest, GetModuleDependencies_AbortsForNull) {
 
 TEST_F(DependencyQueryTest, GetModuleDependents_AbortsForNull) {
     EXPECT_DEATH(logos_core_get_module_dependents(nullptr, false), "");
+}
+
+// =============================================================================
+// Derived access-restriction computation (graph + policy -> allowed callers)
+// =============================================================================
+//
+// computeDerivedAllowedCallers() is the registry-backed counterpart of the
+// pure derivation seam: it reads the live dependency graph + loaded set + the
+// access policy and returns what core would register with capability_module for
+// a target — without any RPC. We drive it with the test registry adapters
+// (register_module / register_module_dependencies / mark_module_loaded) and the
+// ModuleManager::setAccessPolicy entry point.
+
+class DerivedRestrictionsManagerTest : public ::testing::Test {
+protected:
+    void SetUp() override { clearModuleState(); }
+    void TearDown() override {
+        // Clear the policy so it doesn't leak into other suites.
+        ModuleManager::setAccessPolicy("");
+        clearModuleState();
+    }
+
+    // Register `name` with `deps` declared as dependencies.
+    static void reg(const std::string& name, const std::vector<std::string>& deps) {
+        logos_core_register_module(name.c_str(), ("/fake/" + name).c_str());
+        std::vector<const char*> d;
+        for (const auto& s : deps) d.push_back(s.c_str());
+        logos_core_register_module_dependencies(name.c_str(), d.data(),
+                                                static_cast<int>(d.size()));
+    }
+
+    static std::set<std::string> derived(const std::string& target) {
+        auto v = ModuleManager::computeDerivedAllowedCallers(target);
+        return std::set<std::string>(v.begin(), v.end());
+    }
+
+    // Minimal enforce policy with no explicit restrictions — turns derivation on.
+    static const char* enforceEnvelope() {
+        return "{\"version\":1,\"mode\":\"enforce\",\"restrictions\":{}}";
+    }
+};
+
+TEST_F(DerivedRestrictionsManagerTest, LoadedDependentPlusTrusted) {
+    // a depends on b; both loaded. b's allowed callers = {a} ∪ trusted.
+    reg("b", {});
+    reg("a", {"b"});
+    logos_core_mark_module_loaded("b");
+    logos_core_mark_module_loaded("a");
+    ModuleManager::setAccessPolicy(enforceEnvelope());
+
+    EXPECT_EQ(derived("b"),
+              (std::set<std::string>{"a", "core", "core_service"}));
+}
+
+TEST_F(DerivedRestrictionsManagerTest, UnloadedDependentExcluded) {
+    // a declares b but is NOT loaded — a must not appear in b's callers.
+    reg("b", {});
+    reg("a", {"b"});
+    logos_core_mark_module_loaded("b");  // a left unloaded
+    ModuleManager::setAccessPolicy(enforceEnvelope());
+
+    EXPECT_EQ(derived("b"), (std::set<std::string>{"core", "core_service"}));
+}
+
+TEST_F(DerivedRestrictionsManagerTest, ZeroDependentsIsTrustedOnly) {
+    reg("solo", {});
+    logos_core_mark_module_loaded("solo");
+    ModuleManager::setAccessPolicy(enforceEnvelope());
+
+    EXPECT_EQ(derived("solo"), (std::set<std::string>{"core", "core_service"}));
+}
+
+TEST_F(DerivedRestrictionsManagerTest, NoEnforcePolicyDerivesNothing) {
+    reg("b", {});
+    reg("a", {"b"});
+    logos_core_mark_module_loaded("b");
+    logos_core_mark_module_loaded("a");
+    // No policy set at all -> derivation off -> empty.
+    EXPECT_TRUE(derived("b").empty());
+
+    // A non-enforce policy is also inert.
+    ModuleManager::setAccessPolicy(
+        "{\"version\":1,\"mode\":\"audit\",\"restrictions\":{}}");
+    EXPECT_TRUE(derived("b").empty());
+}
+
+TEST_F(DerivedRestrictionsManagerTest, ExplicitPolicyOverridesDerived) {
+    reg("b", {});
+    reg("a", {"b"});
+    logos_core_mark_module_loaded("b");
+    logos_core_mark_module_loaded("a");
+    // Explicit entry for b names only "x" — replaces the derived {a, trusted}.
+    ModuleManager::setAccessPolicy(
+        "{\"version\":1,\"mode\":\"enforce\",\"restrictions\":{"
+        "\"b\":{\"allowedCallers\":[\"x\"]}}}");
+
+    EXPECT_EQ(derived("b"), (std::set<std::string>{"x"}));
+}
+
+TEST_F(DerivedRestrictionsManagerTest, ExemptTargetsNeverDerived) {
+    reg("capability_module", {});
+    logos_core_mark_module_loaded("capability_module");
+    ModuleManager::setAccessPolicy(enforceEnvelope());
+
+    EXPECT_TRUE(derived("capability_module").empty());
+}
+
+TEST_F(DerivedRestrictionsManagerTest, UnloadDropsDependentFromCallers) {
+    reg("b", {});
+    reg("a", {"b"});
+    logos_core_mark_module_loaded("b");
+    logos_core_mark_module_loaded("a");
+    ModuleManager::setAccessPolicy(enforceEnvelope());
+    EXPECT_TRUE(derived("b").count("a"));
+
+    // Unloading a (it stays known, dependency edge remains) drops it.
+    ModuleManager::registry().markUnloaded("a");
+    EXPECT_FALSE(derived("b").count("a"));
+    EXPECT_EQ(derived("b"), (std::set<std::string>{"core", "core_service"}));
+}
+
+TEST_F(DerivedRestrictionsManagerTest, TrustedDependentNotDuplicated) {
+    // A loaded dependent that shares a trusted name must appear exactly once in
+    // the registered list (the set-based `derived()` helper would hide a dup, so
+    // inspect the raw vector here).
+    reg("b", {});
+    reg("core", {"b"});
+    logos_core_mark_module_loaded("b");
+    logos_core_mark_module_loaded("core");
+    ModuleManager::setAccessPolicy(enforceEnvelope());
+
+    auto callers = ModuleManager::computeDerivedAllowedCallers("b");
+    EXPECT_EQ(std::count(callers.begin(), callers.end(), std::string("core")), 1);
 }

@@ -42,6 +42,10 @@ namespace ModuleManager {
     // BEFORE logos_core_start(). Empty clears any previously set policy.
     void setAccessPolicy(const std::string& policyJson);
 
+    // Allowed callers core would register for `target` (see the .cpp).
+    // A pure read with no RPC — exposed so tests can observe the derivation.
+    std::vector<std::string> computeDerivedAllowedCallers(const std::string& target);
+
     void discoverInstalledModules();
 
     std::string processModule(const std::string& modulePath);
