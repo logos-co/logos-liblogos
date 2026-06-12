@@ -105,10 +105,8 @@ LOGOS_CORE_EXPORT void logos_core_set_persistence_base_path(const char* path);
 LOGOS_CORE_EXPORT void logos_core_set_module_transports(const char* module_name,
                                                          const char* transport_set_json);
 
-// Install the inter-module access policy that governs which caller
-// modules may invoke which target modules.
-//
-// `policy_json` is a JSON document of the shape:
+// Install the inter-module access policy: which callers may invoke which
+// targets. `policy_json` shape:
 //
 //     {
 //       "version": 1,
@@ -119,18 +117,13 @@ LOGOS_CORE_EXPORT void logos_core_set_module_transports(const char* module_name,
 //       }
 //     }
 //
-// `mode` selects how violations are handled (e.g. "enforce" to deny,
-// other modes may log only). Each entry under `restrictions` names a
-// target module and the set of caller modules permitted to reach it;
-// a target absent from `restrictions` is unrestricted.
+// A restricted target rejects callers outside its allowlist; a target
+// absent from `restrictions` is unrestricted. Only `mode` == "enforce"
+// activates gating (any other value registers nothing). Enforced by
+// capability_module, which won't issue a token — hence won't allow the
+// call — for a disallowed caller.
 //
-// Should be called before logos_core_start() so the policy is in place
-// before any module is loaded. NULL or "" clears any previously-set
-// policy.
-//
-// TODO: This is currently a no-op — the policy is accepted but not yet
-// enforced. Implement parsing of the JSON document and wire the
-// per-target allowed-caller checks into the inter-module call path.
+// Must be called before logos_core_start(). NULL or "" clears the policy.
 LOGOS_CORE_EXPORT void logos_core_set_access_policy(const char* policy_json);
 
 // Re-scan all module directories and update known modules.

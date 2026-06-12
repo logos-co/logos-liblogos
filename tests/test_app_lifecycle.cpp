@@ -120,14 +120,15 @@ TEST_F(AppLifecycleTest, Start_UsesCustomModulesDirs) {
 // Access Policy Tests
 // =============================================================================
 //
-// logos_core_set_access_policy is currently a no-op: the policy is
-// accepted but not yet enforced (see the TODO in logos_core.cpp). These
-// tests don't assert any behavioural effect — there's nothing to observe
-// yet — but they pin the contract that already holds: the call accepts a
-// well-formed policy, an empty string, and NULL (the documented "clear"
-// signal) without crashing or aborting, and without disturbing unrelated
-// core state. When enforcement lands, these become the scaffold for
-// asserting the policy actually gates calls.
+// logos_core_set_access_policy stores the policy; core parses it and
+// registers the concrete per-target restrictions with capability_module
+// once that module loads (inside logos_core_start). The parser is unit-
+// tested in test_access_policy.cpp, and the enforcement (deny token
+// issuance for a disallowed caller) is tested in capability_module's own
+// suite. Here we only pin the C-API setter contract that holds without a
+// running capability_module: the call accepts a well-formed policy, an
+// empty string, and NULL (the documented "clear" signal) without crashing
+// or aborting, and without disturbing unrelated core state.
 
 TEST_F(AppLifecycleTest, SetAccessPolicy_AcceptsValidPolicyWithoutCrashing) {
     const char* policy =
