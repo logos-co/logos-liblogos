@@ -7,9 +7,12 @@
 #include "containers/subprocess/subprocess_container.h"
 #include "runtimes/runtime_qt/qt_plugin_runtime.h"
 #include <spdlog/spdlog.h>
+#include <nlohmann/json.hpp>
+#include <algorithm>
 #include <mutex>
 #include <cassert>
 #include <cstring>
+#include <optional>
 #include <unordered_set>
 #include <boost/uuid/uuid.hpp>
 #include <boost/uuid/uuid_generators.hpp>
@@ -24,9 +27,6 @@
 #include "logos_transport_config_json.h"
 #include "token_manager.h"
 #include "instance_persistence.h"
-#include <QString>
-#include <QStringList>
-#include <QVariant>
 
 namespace {
     ModuleRegistry& registryInstance() {
@@ -53,12 +53,24 @@ namespace {
         return path;
     }
 
-    // Raw access-policy JSON, set before logos_core_start(); pushed to
-    // capability_module once it loads. Guarded by loadMutex().
+    // Both guarded by loadMutex(). parsedEnforcePolicy is set only in enforce mode.
     std::string& accessPolicyJson() {
         static std::string s;
         return s;
     }
+
+    std::optional<LogosCore::AccessPolicy>& parsedEnforcePolicy() {
+        static std::optional<LogosCore::AccessPolicy> p;
+        return p;
+    }
+
+    // Always allowed past the dependency check, so they're never locked out.
+    const std::vector<std::string> kTrustedCallers = {"core", "core_service"};
+
+    // Never restricted as targets, even if an explicit policy names them.
+    // TODO: re-eval this; probably is required to restrict core/core_service
+    const std::vector<std::string> kExemptTargets =
+        {"capability_module", "core", "core_service"};
 
     LogosCore::RuntimeRegistry& runtimeRegistry() {
         static LogosCore::RuntimeRegistry reg;
@@ -109,50 +121,90 @@ namespace {
         return s_coreApi->getClient(std::string("capability_module"));
     }
 
-    // Parse the stored access policy and register its per-target restrictions
-    // with capability_module. Only "enforce" mode registers anything; an
-    // empty/unparseable policy leaves it unrestricted. Best-effort (failures
-    // logged, not fatal).
+    // Token authenticates the call. Best-effort; assumes capability_module loaded.
+    void registerRestrictionRpc(const std::string& target,
+                                const std::vector<std::string>& callers) {
+        nlohmann::json args = nlohmann::json::array();
+        args.push_back(TokenManager::instance().getToken(std::string("capability_module")));
+        args.push_back(target);
+        args.push_back(callers);
+
+        nlohmann::json result = capabilityModuleClient()->invokeRemoteMethod(
+            std::string("capability_module"),
+            std::string("registerRestriction"),
+            args);
+
+        if (!result.is_boolean() || !result.get<bool>())
+            spdlog::warn("Failed to register access restriction for target: {}", target);
+        else
+            spdlog::info("Registered access restriction for target: {} ({} allowed callers)",
+                         target, callers.size());
+    }
+
+    // Explicit-policy restrictions, including targets not yet loaded (the
+    // derived path covers only loaded ones).
     void pushAccessRestrictionsToCapabilityModule() {
-        if (accessPolicyJson().empty())
-            return;
         if (!registryInstance().isLoaded("capability_module"))
             return;
-
-        auto policy = LogosCore::parseAccessPolicy(accessPolicyJson());
-        if (!policy) {
-            spdlog::warn("Access policy is not valid JSON — not enforcing any restrictions");
+        const auto& policy = parsedEnforcePolicy();
+        if (!policy)
             return;
-        }
-        if (!policy->enforce())
-            return;
-
-        const std::string capabilityModuleToken =
-            TokenManager::instance().getToken(std::string("capability_module"));
-        LogosAPIClient* client = capabilityModuleClient();
 
         for (const auto& restriction : policy->restrictions) {
-            QStringList allowedCallers;
-            for (const auto& caller : restriction.allowedCallers)
-                allowedCallers.append(QString::fromStdString(caller));
-
-            // The token is the trusted-channel proof registerRestriction
-            // verifies — only core holds it.
-            const QVariant result = client->invokeRemoteMethod(
-                QStringLiteral("capability_module"),
-                QStringLiteral("registerRestriction"),
-                QVariant(QString::fromStdString(capabilityModuleToken)),
-                QVariant(QString::fromStdString(restriction.target)),
-                QVariant(allowedCallers));
-
-            if (!result.toBool()) {
-                spdlog::warn("Failed to register access restriction for target: {}",
-                             restriction.target);
-            } else {
-                spdlog::info("Registered access restriction for target: {} ({} allowed callers)",
-                             restriction.target, restriction.allowedCallers.size());
-            }
+            if (std::find(kExemptTargets.begin(), kExemptTargets.end(),
+                          restriction.target) != kExemptTargets.end())
+                continue;
+            registerRestrictionRpc(restriction.target, restriction.allowedCallers);
         }
+    }
+
+    // A module may only call modules it declared as a dependency, so `target`'s
+    // allowed callers are its loaded dependents plus the trusted set. Empty when
+    // exempt or no enforce policy (fail-open); explicit policy overrides verbatim.
+    std::vector<std::string> computeDerivedAllowedCallersLocked(const std::string& target) {
+        if (std::find(kExemptTargets.begin(), kExemptTargets.end(), target)
+                != kExemptTargets.end())
+            return {};
+
+        const auto& policy = parsedEnforcePolicy();
+        if (!policy)
+            return {};
+
+        for (const auto& r : policy->restrictions)
+            if (r.target == target)
+                return r.allowedCallers;
+
+        // Deduped; no dependents => trusted only (deny-by-default for peers).
+        std::vector<std::string> callers;
+        std::unordered_set<std::string> seen;
+        auto add = [&](const std::string& c) {
+            if (seen.insert(c).second)
+                callers.push_back(c);
+        };
+        for (const auto& d : registryInstance().moduleDependents(target, /*recursive=*/false))
+            if (registryInstance().isLoaded(d))
+                add(d);
+        for (const auto& t : kTrustedCallers)
+            add(t);
+        return callers;
+    }
+
+    void pushDerivedRestrictionForTarget(const std::string& target) {
+        if (!registryInstance().isLoaded("capability_module"))
+            return;
+        auto callers = computeDerivedAllowedCallersLocked(target);
+        if (!callers.empty())
+            registerRestrictionRpc(target, callers);
+    }
+
+    // On load/unload of `name`, re-push the targets whose caller set changed:
+    // its declared dependencies, plus `name` itself.
+    void refreshDerivedRestrictionsForDependenciesOf(const std::string& name) {
+        if (!registryInstance().isLoaded("capability_module"))
+            return;
+        for (const auto& dep : registryInstance().moduleDependencies(name, /*recursive=*/false))
+            pushDerivedRestrictionForTarget(dep);
+        pushDerivedRestrictionForTarget(name);
     }
 
     void notifyCapabilityModule(const std::string& name, const std::string& token) {
@@ -284,6 +336,8 @@ namespace {
 
         notifyCapabilityModule(name, authToken);
 
+        refreshDerivedRestrictionsForDependenciesOf(name);
+
         spdlog::info("Module loaded: {}", name);
 
         return true;
@@ -316,6 +370,9 @@ namespace {
         }
 
         registryInstance().markUnloaded(name);
+
+        // markUnloaded keeps the dependency edges, so this still resolves them.
+        refreshDerivedRestrictionsForDependenciesOf(name);
 
         spdlog::info("Module unloaded: {}", name);
         return true;
@@ -364,11 +421,16 @@ namespace ModuleManager {
     void setAccessPolicy(const std::string& policyJson) {
         std::lock_guard<std::mutex> g(loadMutex());  // guards the read at push time
         accessPolicyJson() = policyJson;
-        // Validate eagerly so a malformed policy is flagged at set time, not
-        // silently at capability_module load. Stored verbatim regardless.
-        if (!policyJson.empty() && !LogosCore::parseAccessPolicy(policyJson)) {
-            spdlog::warn("logos_core_set_access_policy: policy is not valid JSON "
-                         "— no restrictions will be enforced");
+        // Cache the parse only in enforce mode; malformed/non-enforce stays empty.
+        parsedEnforcePolicy().reset();
+        if (!policyJson.empty()) {
+            auto parsed = LogosCore::parseAccessPolicy(policyJson);
+            if (!parsed) {
+                spdlog::warn("logos_core_set_access_policy: policy is not valid JSON "
+                             "— no restrictions will be enforced");
+            } else if (parsed->enforce()) {
+                parsedEnforcePolicy() = std::move(parsed);
+            }
         }
     }
 
@@ -454,8 +516,12 @@ namespace ModuleManager {
             return false;
         }
 
-        // Register restrictions now, before any other module can call out.
+        // Register restrictions before any other module can call out: explicit
+        // entries, then derived for anything already loaded (usually nothing —
+        // only the exempt capability_module is up here).
         pushAccessRestrictionsToCapabilityModule();
+        for (const auto& loaded : registryInstance().loadedModuleNames())
+            pushDerivedRestrictionForTarget(loaded);
 
         return true;
     }
@@ -547,6 +613,7 @@ namespace ModuleManager {
         // run's transport map and bind unexpected ports.
         moduleTransportsMap().clear();
         accessPolicyJson().clear();  // same rationale — don't leak across restarts
+        parsedEnforcePolicy().reset();
     }
 
     char** getLoadedModulesCStr() {
@@ -600,5 +667,10 @@ namespace ModuleManager {
     char** getDependentsCStr(const char* name, bool recursive) {
         return toNullTerminatedArray(
             getDependents(std::string(name), recursive));
+    }
+
+    std::vector<std::string> computeDerivedAllowedCallers(const std::string& target) {
+        std::lock_guard lock(loadMutex());
+        return computeDerivedAllowedCallersLocked(target);
     }
 }
