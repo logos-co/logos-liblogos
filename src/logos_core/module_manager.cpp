@@ -22,8 +22,6 @@
 #include "logos_module.h"
 #include "logos_protocol.h"
 #include "protocol_gate.h"
-#include <QJsonDocument>
-#include <QJsonObject>
 #include "logos_transport_config_json.h"
 #include "token_manager.h"
 #include "instance_persistence.h"
@@ -272,18 +270,15 @@ namespace {
         // different MAJOR is refused, a missing stamp (pre-protocol module)
         // loads permissively with a warning.
         std::string moduleProtocolVersion;
-        if (auto meta = ModuleLib::LogosModule::extractMetadata(
-                QString::fromStdString(modPath))) {
-            moduleProtocolVersion = meta->rawMetadata
-                .value(QStringLiteral("logos_protocol_version"))
-                .toString().toStdString();
+        if (auto meta = ModuleLib::LogosModule::extractMetadata(modPath)) {
             // While we have it, hand the full metadata to the runtime.
             desc.rawMetadata = nlohmann::json::parse(
-                QJsonDocument(meta->rawMetadata)
-                    .toJson(QJsonDocument::Compact).toStdString(),
-                nullptr, /*allow_exceptions=*/false);
+                meta->rawMetadataJson, nullptr, /*allow_exceptions=*/false);
             if (desc.rawMetadata.is_discarded())
                 desc.rawMetadata = nlohmann::json::object();
+            if (auto it = desc.rawMetadata.find("logos_protocol_version");
+                it != desc.rawMetadata.end() && it->is_string())
+                moduleProtocolVersion = it->get<std::string>();
         }
         const auto gate = LogosCore::evaluateProtocolGate(
             moduleProtocolVersion, LOGOS_PROTOCOL_VERSION_MAJOR);
