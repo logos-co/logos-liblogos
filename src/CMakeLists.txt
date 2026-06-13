@@ -7,30 +7,45 @@ endif()
 
 get_filename_component(LOGOS_CPP_SDK_ROOT "${LOGOS_CPP_SDK_ROOT}" ABSOLUTE)
 
-# Check if we have a built SDK package (with lib and include directories)
-if(EXISTS "${LOGOS_CPP_SDK_ROOT}/lib" AND EXISTS "${LOGOS_CPP_SDK_ROOT}/include")
-  # Use the built SDK package via its CMake Config file. The SDK ships
-  # logos-cpp-sdkConfig.cmake under lib/cmake/logos-cpp-sdk/ whose
-  # imported target (logos-cpp-sdk::logos_sdk) carries OpenSSL / Boost
-  # / nlohmann_json / Qt on its INTERFACE_LINK_LIBRARIES — no manual
-  # wiring required here.
-  message(STATUS "Using built logos-cpp-sdk at ${LOGOS_CPP_SDK_ROOT}")
-  find_package(logos-cpp-sdk REQUIRED
-    PATHS "${LOGOS_CPP_SDK_ROOT}" NO_DEFAULT_PATH)
-  # Provide a `logos_sdk` alias so the rest of this CMakeLists keeps
-  # using the unqualified name (matches the source-layout behaviour
-  # where `logos_sdk` is the target name from add_library).
+# The SDK stack since the Qt split: logos-protocol (transports + lp_* C
+# ABI), logos-qt-sdk (LogosAPI + provider glue — what this runtime's Qt
+# side uses), logos-cpp-sdk (Qt-free std headers). The `logos_sdk` alias
+# is kept so the rest of this file (and the host targets) stay unchanged;
+# it now points at logos-qt-sdk, whose link interface chains
+# logos-protocol and its OpenSSL/Boost/nlohmann deps.
+if(NOT DEFINED LOGOS_PROTOCOL_ROOT AND DEFINED ENV{LOGOS_PROTOCOL_ROOT})
+  set(LOGOS_PROTOCOL_ROOT "$ENV{LOGOS_PROTOCOL_ROOT}")
+endif()
+if(NOT DEFINED LOGOS_QT_SDK_ROOT AND DEFINED ENV{LOGOS_QT_SDK_ROOT})
+  set(LOGOS_QT_SDK_ROOT "$ENV{LOGOS_QT_SDK_ROOT}")
+endif()
+
+if(EXISTS "${LOGOS_PROTOCOL_ROOT}/lib/cmake/logos-protocol"
+   AND EXISTS "${LOGOS_QT_SDK_ROOT}/lib/cmake/logos-qt-sdk")
+  message(STATUS "Using logos-protocol at ${LOGOS_PROTOCOL_ROOT}")
+  message(STATUS "Using logos-qt-sdk at ${LOGOS_QT_SDK_ROOT}")
+  find_package(logos-protocol REQUIRED
+    PATHS "${LOGOS_PROTOCOL_ROOT}/lib/cmake/logos-protocol" NO_DEFAULT_PATH)
+  find_package(logos-qt-sdk REQUIRED
+    PATHS "${LOGOS_QT_SDK_ROOT}/lib/cmake/logos-qt-sdk" NO_DEFAULT_PATH)
   if(NOT TARGET logos_sdk)
     add_library(logos_sdk INTERFACE IMPORTED)
-    target_link_libraries(logos_sdk INTERFACE logos-cpp-sdk::logos_sdk)
+    target_link_libraries(logos_sdk INTERFACE logos-qt-sdk::logos_qt_sdk)
   endif()
-
-elseif(EXISTS "${LOGOS_CPP_SDK_ROOT}/cpp/CMakeLists.txt")
-  # Use the source SDK (original behavior)
-  message(STATUS "Using logos-cpp-sdk source at ${LOGOS_CPP_SDK_ROOT}")
-  add_subdirectory(${LOGOS_CPP_SDK_ROOT}/cpp ${CMAKE_BINARY_DIR}/sdk)
 else()
-  message(FATAL_ERROR "logos-cpp-sdk not found at ${LOGOS_CPP_SDK_ROOT}")
+  message(FATAL_ERROR "logos-protocol / logos-qt-sdk not found. Set "
+                      "LOGOS_PROTOCOL_ROOT and LOGOS_QT_SDK_ROOT to built packages.")
+endif()
+
+# Qt-free base SDK headers (logos_module_context.h etc.) — header-only.
+if(EXISTS "${LOGOS_CPP_SDK_ROOT}/lib/cmake/logos-cpp-sdk")
+  find_package(logos-cpp-sdk REQUIRED
+    PATHS "${LOGOS_CPP_SDK_ROOT}/lib/cmake/logos-cpp-sdk" NO_DEFAULT_PATH)
+  if(NOT TARGET logos_headers)
+    add_library(logos_headers INTERFACE IMPORTED)
+    target_link_libraries(logos_headers INTERFACE logos-cpp-sdk::logos_headers)
+  endif()
+  target_link_libraries(logos_sdk INTERFACE logos-cpp-sdk::logos_headers)
 endif()
 
 # Find logos-module library

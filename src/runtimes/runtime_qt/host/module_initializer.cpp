@@ -75,6 +75,14 @@ LogosAPI* initializeLogosAPI(const std::string& moduleName, QObject* module,
             fs::path(instancePersistencePath).filename().string());
     }
 
+    // Surface the token as a QObject property BEFORE registerObject:
+    // registration runs the provider object's init(), where cdylib-authored
+    // modules read this property (a cross-image-safe dynamic lookup, like
+    // modulePath above) and forward it across the module-impl C ABI via
+    // logos_module_accept_token — their statically-linked protocol stack has
+    // its own TokenManager copy the host's saveToken calls below never reach.
+    logos_api->setProperty("authToken", QString::fromStdString(authToken));
+
     bool success = logos_api->getProvider()->registerObject(basePlugin->name(), module);
     if (success) {
         logos_api->getTokenManager()->saveToken(std::string("core"), authToken);
