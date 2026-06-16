@@ -110,28 +110,28 @@ set(LOGOS_CORE_SOURCES
     logos_core/access_policy.h
     logos_core/module_manager.cpp
     logos_core/module_manager.h
-    logos_core/module_runtime.h
-    logos_core/module_container.h
     logos_core/module_loader.h
-    logos_core/composite_runtime.cpp
-    logos_core/composite_runtime.h
-    logos_core/runtime_registry.cpp
-    logos_core/runtime_registry.h
+    logos_core/module_container.h
+    logos_core/module_format_loader.h
+    logos_core/composite_module_loader.cpp
+    logos_core/composite_module_loader.h
+    logos_core/module_loader_registry.cpp
+    logos_core/module_loader_registry.h
     containers/subprocess/subprocess_container.cpp
     containers/subprocess/subprocess_container.h
-    runtimes/runtime_qt/qt_plugin_runtime.cpp
-    runtimes/runtime_qt/qt_plugin_runtime.h
+    module_loaders/module_loader_qt/qt_plugin_format_loader.cpp
+    module_loaders/module_loader_qt/qt_plugin_format_loader.h
 )
 
 # Define the logos host sources
 set(LOGOS_HOST_SOURCES
-    runtimes/runtime_qt/host/logos_host.cpp
-    runtimes/runtime_qt/host/command_line_parser.cpp
-    runtimes/runtime_qt/host/command_line_parser.h
-    runtimes/runtime_qt/host/module_initializer.cpp
-    runtimes/runtime_qt/host/module_initializer.h
-    runtimes/runtime_qt/host/qt/qt_app.cpp
-    runtimes/runtime_qt/host/qt/qt_app.h
+    module_loaders/module_loader_qt/host/logos_host.cpp
+    module_loaders/module_loader_qt/host/command_line_parser.cpp
+    module_loaders/module_loader_qt/host/command_line_parser.h
+    module_loaders/module_loader_qt/host/module_initializer.cpp
+    module_loaders/module_loader_qt/host/module_initializer.h
+    module_loaders/module_loader_qt/host/qt/qt_app.cpp
+    module_loaders/module_loader_qt/host/qt/qt_app.h
     containers/subprocess/token_receiver.cpp
     containers/subprocess/token_receiver.h
 )
@@ -192,7 +192,7 @@ target_include_directories(logos_core PRIVATE
     ${CMAKE_CURRENT_SOURCE_DIR}
     ${CMAKE_CURRENT_SOURCE_DIR}/logos_core
     ${CMAKE_CURRENT_SOURCE_DIR}/containers
-    ${CMAKE_CURRENT_SOURCE_DIR}/runtimes
+    ${CMAKE_CURRENT_SOURCE_DIR}/module_loaders
     ${Qt${QT_VERSION_MAJOR}_INCLUDE_DIRS}
 )
 
@@ -258,7 +258,7 @@ target_link_libraries(logos_host_qt PRIVATE
 # Include directories for the logos host application
 target_include_directories(logos_host_qt PRIVATE
     ${CMAKE_CURRENT_SOURCE_DIR}
-    ${CMAKE_CURRENT_SOURCE_DIR}/runtimes/runtime_qt/host
+    ${CMAKE_CURRENT_SOURCE_DIR}/module_loaders/module_loader_qt/host
     ${CMAKE_CURRENT_SOURCE_DIR}/containers/subprocess
     ${Qt${QT_VERSION_MAJOR}_INCLUDE_DIRS}
 )

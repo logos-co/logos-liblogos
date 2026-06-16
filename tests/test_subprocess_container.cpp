@@ -3,7 +3,7 @@
 // manages child processes via Boost.Process v2.
 //
 // Verifies the container interface methods (launch, sendToken, terminate,
-// hasModule, pid, getAllPids) independently from any ModuleLoader.
+// hasModule, pid, getAllPids) independently from any ModuleFormatLoader.
 // =============================================================================
 #include <gtest/gtest.h>
 #include "containers/subprocess/subprocess_container.h"
@@ -311,7 +311,7 @@ TEST_F(SubprocessContainerTest, Launch_BoundsUnterminatedOutputLine) {
 //
 // When a child dies on a signal, the container must surface it via
 // onFinished(name, exit_code, crashed=true) and tear down its own
-// bookkeeping. Every observer above (composite_runtime → module_manager's
+// bookkeeping. Every observer above (composite_module_loader → module_manager's
 // onTerminated → registry.markUnloaded → daemon → CLI) hangs off this
 // callback — if it stops firing with crashed=true, isolation breaks
 // silently. The end-to-end test in logos-logoscore-cli covers the full

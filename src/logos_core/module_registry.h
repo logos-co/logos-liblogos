@@ -1,7 +1,7 @@
 #ifndef MODULE_REGISTRY_H
 #define MODULE_REGISTRY_H
 
-#include "module_runtime.h"
+#include "module_loader.h"
 #include <memory>
 #include <string>
 #include <vector>
@@ -18,7 +18,7 @@ struct ModuleInfo {
     std::vector<std::string> dependents;
     bool loaded = false;
     // Null when loaded directly via markLoaded(name) (test/external scenarios).
-    std::shared_ptr<LogosCore::ModuleRuntime> runtime;
+    std::shared_ptr<LogosCore::ModuleLoader> loader;
     LogosCore::LoadedModuleHandle handle;
 };
 
@@ -53,19 +53,19 @@ public:
     bool isLoaded(const std::string& name) const;
     void markLoaded(const std::string& name);
 
-    // Full mark-as-loaded that stores the owning runtime and handle for later
+    // Full mark-as-loaded that stores the owning loader and handle for later
     // use by unloadModule(). Should be called from loadModuleInternal().
     void markLoaded(const std::string& name,
-                    std::shared_ptr<LogosCore::ModuleRuntime> runtime,
+                    std::shared_ptr<LogosCore::ModuleLoader> loader,
                     LogosCore::LoadedModuleHandle handle);
 
     void markUnloaded(const std::string& name);
     std::vector<std::string> loadedModuleNames() const;
     void clearLoaded();
 
-    // Returns the runtime that owns the named loaded module, or nullptr if
-    // loaded without a runtime association (e.g. via markLoaded(name) only).
-    std::shared_ptr<LogosCore::ModuleRuntime> runtimeFor(const std::string& name) const;
+    // Returns the loader that owns the named loaded module, or nullptr if
+    // loaded without a loader association (e.g. via markLoaded(name) only).
+    std::shared_ptr<LogosCore::ModuleLoader> loaderFor(const std::string& name) const;
 
     void clear();
 

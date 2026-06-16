@@ -2,22 +2,22 @@
 #define SUBPROCESS_MANAGER_H
 
 // Backward-compatibility shim: SubprocessManager is now composed of
-// SubprocessContainer (process lifecycle) + QtPluginRuntime (host resolution).
+// SubprocessContainer (process lifecycle) + QtPluginFormatLoader (host resolution).
 // Tests and qt_test_adapter.h that reference SubprocessManager by name,
 // clearAll(), registerProcess(), startProcess(), ProcessCallbacks etc.
 // keep compiling through this header.
 
 #include "subprocess_container.h"
-#include "composite_runtime.h"
-#include "module_loader.h"
-#include "runtimes/runtime_qt/qt_plugin_runtime.h"
+#include "composite_module_loader.h"
+#include "module_format_loader.h"
+#include "module_loaders/module_loader_qt/qt_plugin_format_loader.h"
 #include <memory>
 
-class SubprocessManager : public LogosCore::CompositeRuntime {
+class SubprocessManager : public LogosCore::CompositeModuleLoader {
 public:
     SubprocessManager()
-        : CompositeRuntime(std::make_shared<SubprocessContainer>(),
-                           std::make_shared<QtPluginRuntime>())
+        : CompositeModuleLoader(std::make_shared<SubprocessContainer>(),
+                                std::make_shared<QtPluginFormatLoader>())
     {}
 
     // Keep the old id for code that checks it.

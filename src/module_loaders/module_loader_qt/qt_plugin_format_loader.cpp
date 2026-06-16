@@ -1,4 +1,4 @@
-#include "qt_plugin_runtime.h"
+#include "qt_plugin_format_loader.h"
 
 #include <boost/dll/runtime_symbol_info.hpp>
 #include <spdlog/spdlog.h>
@@ -55,17 +55,17 @@ std::string resolveLogosHostPath(const std::vector<std::string>& modulesDirs) {
 
 } // anonymous namespace
 
-bool QtPluginRuntime::canHandle(const LogosCore::ModuleDescriptor& desc) const
+bool QtPluginFormatLoader::canHandle(const LogosCore::ModuleDescriptor& desc) const
 {
     return desc.format == "qt-plugin" || desc.format.empty();
 }
 
-std::string QtPluginRuntime::resolveHostBinary(const LogosCore::ModuleDescriptor& desc) const
+std::string QtPluginFormatLoader::resolveHostBinary(const LogosCore::ModuleDescriptor& desc) const
 {
     return resolveLogosHostPath(desc.modulesDirs);
 }
 
-std::vector<std::string> QtPluginRuntime::buildArguments(const LogosCore::ModuleDescriptor& desc) const
+std::vector<std::string> QtPluginFormatLoader::buildArguments(const LogosCore::ModuleDescriptor& desc) const
 {
     std::vector<std::string> args = {
         "--name", desc.name,

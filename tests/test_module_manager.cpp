@@ -308,14 +308,14 @@ TEST_F(ModuleManagerTest, LoadModuleWithDeps_ReturnsZeroForUnknown) {
 // command. Pinning this in tests so the contract documented in
 // logos_core.h doesn't quietly regress — basecamp's PluginLoader and
 // logoscore-cli's load-module both rely on calling it against modules
-// the runtime may have already brought up at startup, and we don't want
+// the loader may have already brought up at startup, and we don't want
 // a future refactor to start returning 0 in that case (which previously
 // caused UI-plugin loads to abort when a core dep was pre-loaded).
 //
-// We exercise this without a runtime: register fake modules, mark them
+// We exercise this without a loader: register fake modules, mark them
 // loaded via the registry adapter, then call the C entry point. The
 // short-circuit at the top of ModuleManager::loadModuleInternal never
-// reaches the descriptor / runtime path, so no subprocess is spawned.
+// reaches the descriptor / loader path, so no subprocess is spawned.
 // =============================================================================
 
 TEST_F(ModuleManagerTest, LoadModule_ReturnsTrueWhenAlreadyLoaded) {

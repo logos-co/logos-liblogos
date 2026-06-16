@@ -1,22 +1,22 @@
 // =============================================================================
-// Tests for QtPluginRuntime — the ModuleLoader implementation that knows how
+// Tests for QtPluginFormatLoader — the ModuleFormatLoader implementation that knows how
 // to resolve logos_host_qt and build its CLI arguments.
 //
 // These are pure unit tests: no processes spawned, no filesystem side-effects.
 // =============================================================================
 #include <gtest/gtest.h>
-#include "runtimes/runtime_qt/qt_plugin_runtime.h"
+#include "module_loaders/module_loader_qt/qt_plugin_format_loader.h"
 
-class QtPluginRuntimeTest : public ::testing::Test {
+class QtPluginFormatLoaderTest : public ::testing::Test {
 protected:
-    QtPluginRuntime loader;
+    QtPluginFormatLoader loader;
 };
 
 // ---------------------------------------------------------------------------
 // id
 // ---------------------------------------------------------------------------
 
-TEST_F(QtPluginRuntimeTest, Id_ReturnsQtPlugin) {
+TEST_F(QtPluginFormatLoaderTest, Id_ReturnsQtPlugin) {
     EXPECT_EQ(loader.id(), "qt-plugin");
 }
 
@@ -24,25 +24,25 @@ TEST_F(QtPluginRuntimeTest, Id_ReturnsQtPlugin) {
 // canHandle
 // ---------------------------------------------------------------------------
 
-TEST_F(QtPluginRuntimeTest, CanHandle_AcceptsQtPluginFormat) {
+TEST_F(QtPluginFormatLoaderTest, CanHandle_AcceptsQtPluginFormat) {
     LogosCore::ModuleDescriptor desc;
     desc.format = "qt-plugin";
     EXPECT_TRUE(loader.canHandle(desc));
 }
 
-TEST_F(QtPluginRuntimeTest, CanHandle_AcceptsEmptyFormat) {
+TEST_F(QtPluginFormatLoaderTest, CanHandle_AcceptsEmptyFormat) {
     LogosCore::ModuleDescriptor desc;
     desc.format = "";
     EXPECT_TRUE(loader.canHandle(desc));
 }
 
-TEST_F(QtPluginRuntimeTest, CanHandle_RejectsWasmFormat) {
+TEST_F(QtPluginFormatLoaderTest, CanHandle_RejectsWasmFormat) {
     LogosCore::ModuleDescriptor desc;
     desc.format = "wasm";
     EXPECT_FALSE(loader.canHandle(desc));
 }
 
-TEST_F(QtPluginRuntimeTest, CanHandle_RejectsArbitraryFormat) {
+TEST_F(QtPluginFormatLoaderTest, CanHandle_RejectsArbitraryFormat) {
     LogosCore::ModuleDescriptor desc;
     desc.format = "extism";
     EXPECT_FALSE(loader.canHandle(desc));
@@ -52,7 +52,7 @@ TEST_F(QtPluginRuntimeTest, CanHandle_RejectsArbitraryFormat) {
 // buildArguments
 // ---------------------------------------------------------------------------
 
-TEST_F(QtPluginRuntimeTest, BuildArguments_IncludesNameAndPath) {
+TEST_F(QtPluginFormatLoaderTest, BuildArguments_IncludesNameAndPath) {
     LogosCore::ModuleDescriptor desc;
     desc.name = "my_module";
     desc.path = "/opt/modules/my_module_plugin.so";
@@ -66,7 +66,7 @@ TEST_F(QtPluginRuntimeTest, BuildArguments_IncludesNameAndPath) {
     EXPECT_EQ(args[3], "/opt/modules/my_module_plugin.so");
 }
 
-TEST_F(QtPluginRuntimeTest, BuildArguments_IncludesInstancePersistencePath) {
+TEST_F(QtPluginFormatLoaderTest, BuildArguments_IncludesInstancePersistencePath) {
     LogosCore::ModuleDescriptor desc;
     desc.name = "persisted";
     desc.path = "/lib/persisted.so";
@@ -79,7 +79,7 @@ TEST_F(QtPluginRuntimeTest, BuildArguments_IncludesInstancePersistencePath) {
     EXPECT_EQ(args[5], "/var/logos/instances/abc123");
 }
 
-TEST_F(QtPluginRuntimeTest, BuildArguments_OmitsInstancePersistenceWhenEmpty) {
+TEST_F(QtPluginFormatLoaderTest, BuildArguments_OmitsInstancePersistenceWhenEmpty) {
     LogosCore::ModuleDescriptor desc;
     desc.name = "simple";
     desc.path = "/lib/simple.so";

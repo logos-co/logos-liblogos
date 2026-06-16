@@ -1,13 +1,13 @@
-#ifndef QT_PLUGIN_RUNTIME_H
-#define QT_PLUGIN_RUNTIME_H
+#ifndef QT_PLUGIN_FORMAT_LOADER_H
+#define QT_PLUGIN_FORMAT_LOADER_H
 
-#include "module_loader.h"
+#include "module_format_loader.h"
 #include <string>
 #include <vector>
 
 // Parent-side logic for the Qt-plugin module format: knows how to locate the
 // logos_host_qt binary and build the CLI arguments it expects.
-class QtPluginRuntime : public LogosCore::ModuleLoader {
+class QtPluginFormatLoader : public LogosCore::ModuleFormatLoader {
 public:
     std::string id() const override { return "qt-plugin"; }
 
@@ -18,4 +18,4 @@ public:
     std::vector<std::string> buildArguments(const LogosCore::ModuleDescriptor& desc) const override;
 };
 
-#endif // QT_PLUGIN_RUNTIME_H
+#endif // QT_PLUGIN_FORMAT_LOADER_H

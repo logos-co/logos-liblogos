@@ -1,11 +1,11 @@
 // =============================================================================
-// Tests for RuntimeRegistry: registration, selection, fan-out operations.
+// Tests for ModuleLoaderRegistry: registration, selection, fan-out operations.
 //
-// These tests run entirely in-process with FakeRuntime stubs — no Qt event
+// These tests run entirely in-process with FakeModuleLoader stubs — no Qt event
 // loop, no subprocess, no file I/O.
 // =============================================================================
 #include <gtest/gtest.h>
-#include "runtime_registry.h"
+#include "module_loader_registry.h"
 #include <string>
 #include <unordered_map>
 #include <vector>
@@ -13,14 +13,14 @@
 using namespace LogosCore;
 
 // ---------------------------------------------------------------------------
-// A minimal in-process stub runtime used by every test below.
-// Anonymous namespace prevents ODR conflicts with other FakeRuntime definitions
-// in the same binary (e.g. test_module_runtime_abstraction.cpp).
+// A minimal in-process stub loader used by every test below.
+// Anonymous namespace prevents ODR conflicts with other FakeModuleLoader definitions
+// in the same binary (e.g. test_module_loader_abstraction.cpp).
 // ---------------------------------------------------------------------------
 namespace {
 
-struct FakeRuntime : public ModuleRuntime {
-    explicit FakeRuntime(std::string myId, std::string handledFormat = "")
+struct FakeModuleLoader : public ModuleLoader {
+    explicit FakeModuleLoader(std::string myId, std::string handledFormat = "")
         : m_id(std::move(myId)), m_handledFormat(std::move(handledFormat)) {}
 
     std::string id() const override { return m_id; }
@@ -81,21 +81,21 @@ private:
 // Empty registry
 // =============================================================================
 
-TEST(RuntimeRegistryTest, SelectReturnsNullWhenEmpty) {
-    RuntimeRegistry reg;
+TEST(ModuleLoaderRegistryTest, SelectReturnsNullWhenEmpty) {
+    ModuleLoaderRegistry reg;
     ModuleDescriptor desc;
     desc.name   = "foo";
     desc.format = "qt-plugin";
     EXPECT_EQ(reg.select(desc), nullptr);
 }
 
-TEST(RuntimeRegistryTest, TerminateAllOnEmptyRegistryDoesNotCrash) {
-    RuntimeRegistry reg;
+TEST(ModuleLoaderRegistryTest, TerminateAllOnEmptyRegistryDoesNotCrash) {
+    ModuleLoaderRegistry reg;
     EXPECT_NO_THROW(reg.terminateAll());
 }
 
-TEST(RuntimeRegistryTest, GetAllPidsOnEmptyRegistryReturnsEmptyMap) {
-    RuntimeRegistry reg;
+TEST(ModuleLoaderRegistryTest, GetAllPidsOnEmptyRegistryReturnsEmptyMap) {
+    ModuleLoaderRegistry reg;
     EXPECT_TRUE(reg.getAllPids().empty());
 }
 
@@ -103,12 +103,12 @@ TEST(RuntimeRegistryTest, GetAllPidsOnEmptyRegistryReturnsEmptyMap) {
 // canHandle dispatch
 // =============================================================================
 
-TEST(RuntimeRegistryTest, SelectPicksFirstCanHandleRuntime) {
-    RuntimeRegistry reg;
-    auto rtA = std::make_shared<FakeRuntime>("a", "qt-plugin");
-    auto rtB = std::make_shared<FakeRuntime>("b", "qt-plugin");
-    reg.registerRuntime(rtA);
-    reg.registerRuntime(rtB);
+TEST(ModuleLoaderRegistryTest, SelectPicksFirstCanHandleLoader) {
+    ModuleLoaderRegistry reg;
+    auto rtA = std::make_shared<FakeModuleLoader>("a", "qt-plugin");
+    auto rtB = std::make_shared<FakeModuleLoader>("b", "qt-plugin");
+    reg.registerLoader(rtA);
+    reg.registerLoader(rtB);
 
     ModuleDescriptor desc;
     desc.format = "qt-plugin";
@@ -117,12 +117,12 @@ TEST(RuntimeRegistryTest, SelectPicksFirstCanHandleRuntime) {
     EXPECT_EQ(selected->id(), "a");
 }
 
-TEST(RuntimeRegistryTest, SelectSkipsRuntimeThatCannotHandle) {
-    RuntimeRegistry reg;
-    auto rtA = std::make_shared<FakeRuntime>("a", "wasm");
-    auto rtB = std::make_shared<FakeRuntime>("b", "qt-plugin");
-    reg.registerRuntime(rtA);
-    reg.registerRuntime(rtB);
+TEST(ModuleLoaderRegistryTest, SelectSkipsLoaderThatCannotHandle) {
+    ModuleLoaderRegistry reg;
+    auto rtA = std::make_shared<FakeModuleLoader>("a", "wasm");
+    auto rtB = std::make_shared<FakeModuleLoader>("b", "qt-plugin");
+    reg.registerLoader(rtA);
+    reg.registerLoader(rtB);
 
     ModuleDescriptor desc;
     desc.format = "qt-plugin";
@@ -131,10 +131,10 @@ TEST(RuntimeRegistryTest, SelectSkipsRuntimeThatCannotHandle) {
     EXPECT_EQ(selected->id(), "b");
 }
 
-TEST(RuntimeRegistryTest, SelectReturnsNullIfNoRuntimeHandlesFormat) {
-    RuntimeRegistry reg;
-    auto rtA = std::make_shared<FakeRuntime>("a", "wasm");
-    reg.registerRuntime(rtA);
+TEST(ModuleLoaderRegistryTest, SelectReturnsNullIfNoLoaderHandlesFormat) {
+    ModuleLoaderRegistry reg;
+    auto rtA = std::make_shared<FakeModuleLoader>("a", "wasm");
+    reg.registerLoader(rtA);
 
     ModuleDescriptor desc;
     desc.format = "qt-plugin";
@@ -142,44 +142,44 @@ TEST(RuntimeRegistryTest, SelectReturnsNullIfNoRuntimeHandlesFormat) {
 }
 
 // =============================================================================
-// Explicit runtimeConfig["id"] override
+// Explicit loaderConfig["id"] override
 // =============================================================================
 
-TEST(RuntimeRegistryTest, SelectUsesExplicitIdOverride) {
-    RuntimeRegistry reg;
-    auto rtA = std::make_shared<FakeRuntime>("a", "qt-plugin");
-    auto rtB = std::make_shared<FakeRuntime>("b", "qt-plugin");
-    reg.registerRuntime(rtA);
-    reg.registerRuntime(rtB);
+TEST(ModuleLoaderRegistryTest, SelectUsesExplicitIdOverride) {
+    ModuleLoaderRegistry reg;
+    auto rtA = std::make_shared<FakeModuleLoader>("a", "qt-plugin");
+    auto rtB = std::make_shared<FakeModuleLoader>("b", "qt-plugin");
+    reg.registerLoader(rtA);
+    reg.registerLoader(rtB);
 
     ModuleDescriptor desc;
     desc.format = "qt-plugin";
-    desc.runtimeConfig["id"] = "b"; // explicitly request the second one
+    desc.loaderConfig["id"] = "b"; // explicitly request the second one
 
     auto selected = reg.select(desc);
     ASSERT_NE(selected, nullptr);
     EXPECT_EQ(selected->id(), "b");
 }
 
-TEST(RuntimeRegistryTest, SelectReturnsNullForUnknownExplicitId) {
-    RuntimeRegistry reg;
-    auto rtA = std::make_shared<FakeRuntime>("a", "qt-plugin");
-    reg.registerRuntime(rtA);
+TEST(ModuleLoaderRegistryTest, SelectReturnsNullForUnknownExplicitId) {
+    ModuleLoaderRegistry reg;
+    auto rtA = std::make_shared<FakeModuleLoader>("a", "qt-plugin");
+    reg.registerLoader(rtA);
 
     ModuleDescriptor desc;
-    desc.runtimeConfig["id"] = "nonexistent-id";
+    desc.loaderConfig["id"] = "nonexistent-id";
     EXPECT_EQ(reg.select(desc), nullptr);
 }
 
-TEST(RuntimeRegistryTest, ExplicitIdDoesNotFallThroughToCanHandle) {
-    // Even if "other" is the only runtime that canHandle, requesting "missing"
+TEST(ModuleLoaderRegistryTest, ExplicitIdDoesNotFallThroughToCanHandle) {
+    // Even if "other" is the only loader that canHandle, requesting "missing"
     // explicitly must return nullptr rather than silently routing to "other".
-    RuntimeRegistry reg;
-    auto rtA = std::make_shared<FakeRuntime>("other"); // accepts anything
-    reg.registerRuntime(rtA);
+    ModuleLoaderRegistry reg;
+    auto rtA = std::make_shared<FakeModuleLoader>("other"); // accepts anything
+    reg.registerLoader(rtA);
 
     ModuleDescriptor desc;
-    desc.runtimeConfig["id"] = "missing";
+    desc.loaderConfig["id"] = "missing";
     EXPECT_EQ(reg.select(desc), nullptr);
 }
 
@@ -187,12 +187,12 @@ TEST(RuntimeRegistryTest, ExplicitIdDoesNotFallThroughToCanHandle) {
 // terminateAll fan-out
 // =============================================================================
 
-TEST(RuntimeRegistryTest, TerminateAllCallsEveryRuntime) {
-    RuntimeRegistry reg;
-    auto rtA = std::make_shared<FakeRuntime>("a");
-    auto rtB = std::make_shared<FakeRuntime>("b");
-    reg.registerRuntime(rtA);
-    reg.registerRuntime(rtB);
+TEST(ModuleLoaderRegistryTest, TerminateAllCallsEveryLoader) {
+    ModuleLoaderRegistry reg;
+    auto rtA = std::make_shared<FakeModuleLoader>("a");
+    auto rtB = std::make_shared<FakeModuleLoader>("b");
+    reg.registerLoader(rtA);
+    reg.registerLoader(rtB);
 
     reg.terminateAll();
 
@@ -204,15 +204,15 @@ TEST(RuntimeRegistryTest, TerminateAllCallsEveryRuntime) {
 // getAllPids aggregation
 // =============================================================================
 
-TEST(RuntimeRegistryTest, GetAllPidsAggregatesAcrossRuntimes) {
-    RuntimeRegistry reg;
-    auto rtA = std::make_shared<FakeRuntime>("a");
-    auto rtB = std::make_shared<FakeRuntime>("b");
+TEST(ModuleLoaderRegistryTest, GetAllPidsAggregatesAcrossLoaders) {
+    ModuleLoaderRegistry reg;
+    auto rtA = std::make_shared<FakeModuleLoader>("a");
+    auto rtB = std::make_shared<FakeModuleLoader>("b");
     rtA->fakePids["mod1"] = 100;
     rtA->fakePids["mod2"] = 200;
     rtB->fakePids["mod3"] = 300;
-    reg.registerRuntime(rtA);
-    reg.registerRuntime(rtB);
+    reg.registerLoader(rtA);
+    reg.registerLoader(rtB);
 
     auto pids = reg.getAllPids();
     EXPECT_EQ(pids.size(), 3u);
@@ -225,10 +225,10 @@ TEST(RuntimeRegistryTest, GetAllPidsAggregatesAcrossRuntimes) {
 // clearForTests
 // =============================================================================
 
-TEST(RuntimeRegistryTest, ClearForTests_RemovesAllRuntimes) {
-    RuntimeRegistry reg;
-    reg.registerRuntime(std::make_shared<FakeRuntime>("a"));
-    reg.registerRuntime(std::make_shared<FakeRuntime>("b"));
+TEST(ModuleLoaderRegistryTest, ClearForTests_RemovesAllLoaders) {
+    ModuleLoaderRegistry reg;
+    reg.registerLoader(std::make_shared<FakeModuleLoader>("a"));
+    reg.registerLoader(std::make_shared<FakeModuleLoader>("b"));
 
     reg.clearForTests();
 

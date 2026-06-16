@@ -2,10 +2,10 @@
 #include "module_registry.h"
 #include "access_policy.h"
 #include "dependency_resolver.h"
-#include "runtime_registry.h"
-#include "composite_runtime.h"
+#include "module_loader_registry.h"
+#include "composite_module_loader.h"
 #include "containers/subprocess/subprocess_container.h"
-#include "runtimes/runtime_qt/qt_plugin_runtime.h"
+#include "module_loaders/module_loader_qt/qt_plugin_format_loader.h"
 #include <spdlog/spdlog.h>
 #include <nlohmann/json.hpp>
 #include <algorithm>
@@ -70,13 +70,13 @@ namespace {
     const std::vector<std::string> kExemptTargets =
         {"capability_module", "core", "core_service"};
 
-    LogosCore::RuntimeRegistry& runtimeRegistry() {
-        static LogosCore::RuntimeRegistry reg;
+    LogosCore::ModuleLoaderRegistry& loaderRegistry() {
+        static LogosCore::ModuleLoaderRegistry reg;
         static std::once_flag initFlag;
         std::call_once(initFlag, []() {
             auto container = std::make_shared<SubprocessContainer>();
-            auto loader    = std::make_shared<QtPluginRuntime>();
-            reg.registerRuntime(std::make_shared<LogosCore::CompositeRuntime>(container, loader));
+            auto loader    = std::make_shared<QtPluginFormatLoader>();
+            reg.registerLoader(std::make_shared<LogosCore::CompositeModuleLoader>(container, loader));
         });
         return reg;
     }
@@ -241,7 +241,7 @@ namespace {
 
         std::string modPath = registryInstance().modulePath(name);
 
-        // Build a descriptor for the runtime to inspect.
+        // Build a descriptor for the loader to inspect.
         LogosCore::ModuleDescriptor desc;
         desc.name        = name;
         desc.path        = modPath;
@@ -256,7 +256,7 @@ namespace {
         }
 
         // Per-module transport set, if the daemon registered one before
-        // calling load. The runtime threads it through to the child via
+        // calling load. The loader threads it through to the child via
         // a CLI argument so the child's LogosAPIProvider binds the right
         // listeners. Modules without an entry inherit the global default.
         if (auto it = moduleTransportsMap().find(name);
@@ -271,7 +271,7 @@ namespace {
         // loads permissively with a warning.
         std::string moduleProtocolVersion;
         if (auto meta = ModuleLib::LogosModule::extractMetadata(modPath)) {
-            // While we have it, hand the full metadata to the runtime.
+            // While we have it, hand the full metadata to the loader.
             desc.rawMetadata = nlohmann::json::parse(
                 meta->rawMetadataJson, nullptr, /*allow_exceptions=*/false);
             if (desc.rawMetadata.is_discarded())
@@ -304,9 +304,9 @@ namespace {
             break;
         }
 
-        auto rt = runtimeRegistry().select(desc);
-        if (!rt) {
-            spdlog::warn("No runtime available to load module: {}", name);
+        auto loader = loaderRegistry().select(desc);
+        if (!loader) {
+            spdlog::warn("No loader available to load module: {}", name);
             return false;
         }
 
@@ -315,17 +315,17 @@ namespace {
         };
 
         LogosCore::LoadedModuleHandle handle;
-        if (!rt->load(desc, onTerminated, handle))
+        if (!loader->load(desc, onTerminated, handle))
             return false;
 
         std::string authToken = boost::uuids::to_string(boost::uuids::random_generator()());
 
-        if (!rt->sendToken(name, authToken)) {
-            rt->terminate(name);
+        if (!loader->sendToken(name, authToken)) {
+            loader->terminate(name);
             return false;
         }
 
-        registryInstance().markLoaded(name, rt, std::move(handle));
+        registryInstance().markLoaded(name, loader, std::move(handle));
 
         TokenManager::instance().saveToken(name, authToken);
 
@@ -347,13 +347,13 @@ namespace {
             return false;
         }
 
-        auto rt = registryInstance().runtimeFor(name);
-        if (rt) {
-            if (!rt->hasModule(name)) {
+        auto loader = registryInstance().loaderFor(name);
+        if (loader) {
+            if (!loader->hasModule(name)) {
                 spdlog::warn("No module entry found for module: {}", name);
                 return false;
             }
-            rt->terminate(name);
+            loader->terminate(name);
         } else {
             // Fallback: module was loaded via markLoaded(name) directly
             // (test scenarios or external setup). Use SubprocessContainer directly.
@@ -380,8 +380,8 @@ namespace ModuleManager {
         return registryInstance();
     }
 
-    LogosCore::RuntimeRegistry& runtimes() {
-        return runtimeRegistry();
+    LogosCore::ModuleLoaderRegistry& loaders() {
+        return loaderRegistry();
     }
 
     void setModulesDir(const char* modules_dir) {
@@ -593,13 +593,13 @@ namespace ModuleManager {
 
     void terminateAll() {
         std::lock_guard lock(loadMutex());
-        runtimeRegistry().terminateAll();
+        loaderRegistry().terminateAll();
         registryInstance().clearLoaded();
     }
 
     void clear() {
         std::lock_guard lock(loadMutex());
-        runtimeRegistry().terminateAll();
+        loaderRegistry().terminateAll();
         registryInstance().clear();
         // Per-module transport overrides are part of the manager's
         // mutable state — without clearing them here, a daemon
@@ -628,7 +628,7 @@ namespace ModuleManager {
     }
 
     std::unordered_map<std::string, int64_t> getModuleProcessIds() {
-        return runtimeRegistry().getAllPids();
+        return loaderRegistry().getAllPids();
     }
 
     std::vector<std::string> resolveDependencies(const std::vector<std::string>& requestedModules) {

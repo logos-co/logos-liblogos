@@ -452,7 +452,7 @@ bool SubprocessContainer::launch(const LogosCore::ModuleDescriptor& desc,
     // destructors / Qt plugin unload / GUI teardown from this boost::asio
     // worker thread, racing the main thread and segfaulting.)
     // `onTerminated` is documented as safe to invoke from a background thread
-    // (see ModuleRuntime::load); ModuleRegistry::markUnloaded is mutex-guarded.
+    // (see ModuleLoader::load); ModuleRegistry::markUnloaded is mutex-guarded.
     callbacks.onFinished = [onTerminated](const std::string& pName, int exitCode, bool crashed) {
         (void)exitCode;
         if (crashed)

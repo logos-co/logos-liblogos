@@ -1,7 +1,7 @@
 #ifndef MODULE_CONTAINER_H
 #define MODULE_CONTAINER_H
 
-#include "module_runtime.h"
+#include "module_loader.h"
 #include <functional>
 #include <memory>
 #include <optional>
@@ -22,7 +22,7 @@ public:
 
     virtual bool canHandle(const ModuleDescriptor& desc) const = 0;
 
-    // Launch a module inside this container.  The caller (CompositeRuntime)
+    // Launch a module inside this container.  The caller (CompositeModuleLoader)
     // supplies the resolved host binary and CLI arguments — those come from
     // the ModuleLoader, not the container.
     virtual bool launch(const ModuleDescriptor& desc,

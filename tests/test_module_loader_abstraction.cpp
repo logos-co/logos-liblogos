@@ -1,10 +1,10 @@
 // =============================================================================
-// Tests for the ModuleRuntime abstraction seam.
+// Tests for the ModuleLoader abstraction seam.
 //
-// Installs a FakeRuntime into ModuleManager's RuntimeRegistry and drives the
+// Installs a FakeModuleLoader into ModuleManager's ModuleLoaderRegistry and drives the
 // full ModuleManager load/unload/terminateAll path. Proves that:
 //   - load(), sendToken(), terminate(), terminateAll() are routed through the
-//     runtime abstraction (not directly to a subprocess or Qt mechanism).
+//     loader abstraction (not directly to a subprocess or Qt mechanism).
 //   - Dependency-ordered loads call load() in the correct (topo) order.
 //   - Error paths (load returns false) prevent sendToken from being called.
 // No child processes are spawned; no Qt Remote Objects are used.
@@ -14,8 +14,8 @@
 #include "qt_test_adapter.h"
 #include "module_manager.h"
 #include "module_registry.h"
-#include "runtime_registry.h"
-#include "module_runtime.h"
+#include "module_loader_registry.h"
+#include "module_loader.h"
 #include "containers/subprocess/subprocess_manager.h"
 #include <string>
 #include <vector>
@@ -26,13 +26,13 @@
 using namespace LogosCore;
 
 // ---------------------------------------------------------------------------
-// FakeRuntime: records all calls; configurable per-module load result.
-// Placed in an anonymous namespace to avoid ODR conflicts with the FakeRuntime
-// stub in test_runtime_registry.cpp (same binary, different definition).
+// FakeModuleLoader: records all calls; configurable per-module load result.
+// Placed in an anonymous namespace to avoid ODR conflicts with the FakeModuleLoader
+// stub in test_module_loader_registry.cpp (same binary, different definition).
 // ---------------------------------------------------------------------------
 namespace {
 
-struct FakeRuntime : public ModuleRuntime {
+struct FakeModuleLoader : public ModuleLoader {
     std::string id() const override { return "fake"; }
 
     bool canHandle(const ModuleDescriptor&) const override { return true; }
@@ -83,30 +83,30 @@ struct FakeRuntime : public ModuleRuntime {
 } // anonymous namespace
 
 // ---------------------------------------------------------------------------
-// Test fixture: installs FakeRuntime, cleans up registry after each test.
+// Test fixture: installs FakeModuleLoader, cleans up registry after each test.
 // ---------------------------------------------------------------------------
 
-class ModuleRuntimeAbstractionTest : public ::testing::Test {
+class ModuleLoaderAbstractionTest : public ::testing::Test {
 protected:
-    std::shared_ptr<FakeRuntime> fake;
+    std::shared_ptr<FakeModuleLoader> fake;
 
     void SetUp() override {
         logos_core_terminate_all();
         logos_core_clear();
         SubprocessManager::clearAll();
 
-        fake = std::make_shared<FakeRuntime>();
-        ModuleManager::runtimes().clearForTests();
-        ModuleManager::runtimes().registerRuntime(fake);
+        fake = std::make_shared<FakeModuleLoader>();
+        ModuleManager::loaders().clearForTests();
+        ModuleManager::loaders().registerLoader(fake);
     }
 
     void TearDown() override {
         logos_core_terminate_all();
         logos_core_clear();
         SubprocessManager::clearAll();
-        // Restore default runtime so other test suites aren't affected.
-        ModuleManager::runtimes().clearForTests();
-        ModuleManager::runtimes().registerRuntime(
+        // Restore default loader so other test suites aren't affected.
+        ModuleManager::loaders().clearForTests();
+        ModuleManager::loaders().registerLoader(
             std::make_shared<SubprocessManager>());
     }
 
@@ -127,7 +127,7 @@ protected:
 // Basic load/unload routing
 // =============================================================================
 
-TEST_F(ModuleRuntimeAbstractionTest, LoadModule_CallsFakeRuntimeLoad) {
+TEST_F(ModuleLoaderAbstractionTest, LoadModule_CallsFakeModuleLoaderLoad) {
     registerModule("foo");
 
     int result = logos_core_load_module("foo", false);
@@ -137,7 +137,7 @@ TEST_F(ModuleRuntimeAbstractionTest, LoadModule_CallsFakeRuntimeLoad) {
     EXPECT_EQ(fake->loadCalls[0], "foo");
 }
 
-TEST_F(ModuleRuntimeAbstractionTest, LoadModule_CallsSendTokenAfterLoad) {
+TEST_F(ModuleLoaderAbstractionTest, LoadModule_CallsSendTokenAfterLoad) {
     registerModule("foo");
 
     logos_core_load_module("foo", false);
@@ -147,7 +147,7 @@ TEST_F(ModuleRuntimeAbstractionTest, LoadModule_CallsSendTokenAfterLoad) {
     EXPECT_FALSE(fake->sendTokenCalls[0].second.empty());
 }
 
-TEST_F(ModuleRuntimeAbstractionTest, LoadModule_MarksModuleAsLoaded) {
+TEST_F(ModuleLoaderAbstractionTest, LoadModule_MarksModuleAsLoaded) {
     registerModule("foo");
 
     logos_core_load_module("foo", false);
@@ -155,15 +155,15 @@ TEST_F(ModuleRuntimeAbstractionTest, LoadModule_MarksModuleAsLoaded) {
     EXPECT_EQ(logos_core_is_module_loaded("foo"), 1);
 }
 
-TEST_F(ModuleRuntimeAbstractionTest, LoadModule_StoresRuntimeInRegistry) {
+TEST_F(ModuleLoaderAbstractionTest, LoadModule_StoresLoaderInRegistry) {
     registerModule("foo");
     logos_core_load_module("foo", false);
 
-    auto rt = ModuleManager::registry().runtimeFor("foo");
+    auto rt = ModuleManager::registry().loaderFor("foo");
     EXPECT_EQ(rt.get(), fake.get());
 }
 
-TEST_F(ModuleRuntimeAbstractionTest, UnloadModule_CallsFakeRuntimeTerminate) {
+TEST_F(ModuleLoaderAbstractionTest, UnloadModule_CallsFakeModuleLoaderTerminate) {
     registerModule("foo");
     logos_core_load_module("foo", false);
 
@@ -174,7 +174,7 @@ TEST_F(ModuleRuntimeAbstractionTest, UnloadModule_CallsFakeRuntimeTerminate) {
     EXPECT_EQ(fake->terminateCalls[0], "foo");
 }
 
-TEST_F(ModuleRuntimeAbstractionTest, UnloadModule_MarksModuleAsUnloaded) {
+TEST_F(ModuleLoaderAbstractionTest, UnloadModule_MarksModuleAsUnloaded) {
     registerModule("foo");
     logos_core_load_module("foo", false);
     logos_core_unload_module("foo", false);
@@ -186,7 +186,7 @@ TEST_F(ModuleRuntimeAbstractionTest, UnloadModule_MarksModuleAsUnloaded) {
 // Dependency-ordered loads
 // =============================================================================
 
-TEST_F(ModuleRuntimeAbstractionTest, LoadWithDeps_LoadsInTopologicalOrder) {
+TEST_F(ModuleLoaderAbstractionTest, LoadWithDeps_LoadsInTopologicalOrder) {
     // Chain: c depends on b, b depends on a.
     // Expected load order: a, b, c.
     registerModule("a");
@@ -202,7 +202,7 @@ TEST_F(ModuleRuntimeAbstractionTest, LoadWithDeps_LoadsInTopologicalOrder) {
     EXPECT_EQ(fake->loadCalls[2], "c");
 }
 
-TEST_F(ModuleRuntimeAbstractionTest, LoadWithDeps_SkipsAlreadyLoadedModules) {
+TEST_F(ModuleLoaderAbstractionTest, LoadWithDeps_SkipsAlreadyLoadedModules) {
     registerModule("a");
     registerModule("b", {"a"});
 
@@ -222,7 +222,7 @@ TEST_F(ModuleRuntimeAbstractionTest, LoadWithDeps_SkipsAlreadyLoadedModules) {
 // guarantee callers actually rely on ("load app, get everything it needs"),
 // and it exercises a diamond (app → ui, core; ui → core) so a dependency
 // reachable by two paths is still loaded exactly once and not skipped.
-TEST_F(ModuleRuntimeAbstractionTest, LoadWithDeps_LeavesTransitiveClosureLoaded) {
+TEST_F(ModuleLoaderAbstractionTest, LoadWithDeps_LeavesTransitiveClosureLoaded) {
     registerModule("core");
     registerModule("ui",  {"core"});
     registerModule("app", {"ui", "core"});
@@ -252,7 +252,7 @@ TEST_F(ModuleRuntimeAbstractionTest, LoadWithDeps_LeavesTransitiveClosureLoaded)
 // terminateAll routing
 // =============================================================================
 
-TEST_F(ModuleRuntimeAbstractionTest, TerminateAll_CallsFakeTerminateAll) {
+TEST_F(ModuleLoaderAbstractionTest, TerminateAll_CallsFakeTerminateAll) {
     registerModule("foo");
     logos_core_load_module("foo", false);
 
@@ -266,7 +266,7 @@ TEST_F(ModuleRuntimeAbstractionTest, TerminateAll_CallsFakeTerminateAll) {
 // Error paths
 // =============================================================================
 
-TEST_F(ModuleRuntimeAbstractionTest, LoadModule_ReturnsFalseWhenRuntimeLoadFails) {
+TEST_F(ModuleLoaderAbstractionTest, LoadModule_ReturnsFalseWhenLoaderLoadFails) {
     registerModule("bad");
     fake->failOn.insert("bad");
 
@@ -274,7 +274,7 @@ TEST_F(ModuleRuntimeAbstractionTest, LoadModule_ReturnsFalseWhenRuntimeLoadFails
     EXPECT_EQ(result, 0);
 }
 
-TEST_F(ModuleRuntimeAbstractionTest, LoadModule_DoesNotCallSendTokenOnLoadFailure) {
+TEST_F(ModuleLoaderAbstractionTest, LoadModule_DoesNotCallSendTokenOnLoadFailure) {
     registerModule("bad");
     fake->failOn.insert("bad");
 
@@ -283,7 +283,7 @@ TEST_F(ModuleRuntimeAbstractionTest, LoadModule_DoesNotCallSendTokenOnLoadFailur
     EXPECT_TRUE(fake->sendTokenCalls.empty());
 }
 
-TEST_F(ModuleRuntimeAbstractionTest, LoadModule_DoesNotMarkAsLoadedOnFailure) {
+TEST_F(ModuleLoaderAbstractionTest, LoadModule_DoesNotMarkAsLoadedOnFailure) {
     registerModule("bad");
     fake->failOn.insert("bad");
 
@@ -292,7 +292,7 @@ TEST_F(ModuleRuntimeAbstractionTest, LoadModule_DoesNotMarkAsLoadedOnFailure) {
     EXPECT_EQ(logos_core_is_module_loaded("bad"), 0);
 }
 
-TEST_F(ModuleRuntimeAbstractionTest, LoadModule_ReturnsFalseForUnknownModule) {
+TEST_F(ModuleLoaderAbstractionTest, LoadModule_ReturnsFalseForUnknownModule) {
     int result = logos_core_load_module("not_registered", false);
     EXPECT_EQ(result, 0);
     EXPECT_TRUE(fake->loadCalls.empty());

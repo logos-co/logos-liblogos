@@ -1,20 +1,20 @@
-#ifndef COMPOSITE_RUNTIME_H
-#define COMPOSITE_RUNTIME_H
+#ifndef COMPOSITE_MODULE_LOADER_H
+#define COMPOSITE_MODULE_LOADER_H
 
-#include "module_runtime.h"
-#include "module_container.h"
 #include "module_loader.h"
+#include "module_container.h"
+#include "module_format_loader.h"
 #include <memory>
 
 namespace LogosCore {
 
-// Pairs a ModuleContainer (where/how to run) with a ModuleLoader (what to
-// load) and presents the combined result as a single ModuleRuntime — the
-// interface that RuntimeRegistry and ModuleManager already understand.
-class CompositeRuntime : public ModuleRuntime {
+// Pairs a ModuleContainer (where/how to run) with a ModuleFormatLoader (what to
+// load) and presents the combined result as a single ModuleLoader — the
+// interface that ModuleLoaderRegistry and ModuleManager already understand.
+class CompositeModuleLoader : public ModuleLoader {
 public:
-    CompositeRuntime(std::shared_ptr<ModuleContainer> container,
-                     std::shared_ptr<ModuleLoader> loader);
+    CompositeModuleLoader(std::shared_ptr<ModuleContainer> container,
+                          std::shared_ptr<ModuleFormatLoader> loader);
 
     std::string id() const override;
     bool canHandle(const ModuleDescriptor& desc) const override;
@@ -35,9 +35,9 @@ public:
 
 private:
     std::shared_ptr<ModuleContainer> container_;
-    std::shared_ptr<ModuleLoader> loader_;
+    std::shared_ptr<ModuleFormatLoader> loader_;
 };
 
 } // namespace LogosCore
 
-#endif // COMPOSITE_RUNTIME_H
+#endif // COMPOSITE_MODULE_LOADER_H

@@ -15,12 +15,12 @@ add_executable(logos_core_tests
     test_dependency_resolver.cpp
     test_subprocess_manager.cpp
     test_subprocess_container.cpp
-    test_qt_plugin_runtime.cpp
-    test_composite_runtime.cpp
+    test_qt_plugin_format_loader.cpp
+    test_composite_module_loader.cpp
     test_token_exchange.cpp
     test_module_name_validation.cpp
-    test_runtime_registry.cpp
-    test_module_runtime_abstraction.cpp
+    test_module_loader_registry.cpp
+    test_module_loader_abstraction.cpp
     test_protocol_gate.cpp
     # qt_test_adapter.h calls SubprocessTokenReceiver::receive; compile the
     # implementation unit directly into the test binary (it lives in logos_host_qt,
@@ -41,8 +41,8 @@ target_include_directories(logos_core_tests PRIVATE
     ${CMAKE_SOURCE_DIR}/src/logos_core
     ${CMAKE_SOURCE_DIR}/src/containers
     ${CMAKE_SOURCE_DIR}/src/containers/subprocess
-    ${CMAKE_SOURCE_DIR}/src/runtimes
-    ${CMAKE_SOURCE_DIR}/src/runtimes/runtime_qt
+    ${CMAKE_SOURCE_DIR}/src/module_loaders
+    ${CMAKE_SOURCE_DIR}/src/module_loaders/module_loader_qt
 )
 
 # Propagate portable build flag to tests so manifest variant keys match

@@ -1,14 +1,14 @@
 // =============================================================================
-// Tests for CompositeRuntime — verifies that it correctly delegates to its
-// ModuleContainer and ModuleLoader, producing a valid ModuleRuntime.
+// Tests for CompositeModuleLoader — verifies that it correctly delegates to its
+// ModuleContainer and ModuleFormatLoader, producing a valid ModuleLoader.
 //
 // Uses fake/stub implementations to test the composition logic in isolation.
 // No real processes are spawned.
 // =============================================================================
 #include <gtest/gtest.h>
-#include "composite_runtime.h"
+#include "composite_module_loader.h"
 #include "module_container.h"
-#include "module_loader.h"
+#include "module_format_loader.h"
 #include <memory>
 #include <string>
 #include <unordered_set>
@@ -84,7 +84,7 @@ struct FakeContainer : public ModuleContainer {
     std::unordered_set<std::string> activeModules;
 };
 
-struct FakeLoader : public ModuleLoader {
+struct FakeLoader : public ModuleFormatLoader {
     std::string id() const override { return "fake-loader"; }
     bool canHandle(const ModuleDescriptor&) const override { return loaderCanHandle; }
 
@@ -100,18 +100,18 @@ struct FakeLoader : public ModuleLoader {
     std::string hostBinary = "/usr/bin/fake_host";
 };
 
-class CompositeRuntimeTest : public ::testing::Test {
+class CompositeModuleLoaderTest : public ::testing::Test {
 protected:
     std::shared_ptr<FakeContainer> container;
     std::shared_ptr<FakeLoader> loader;
-    std::shared_ptr<CompositeRuntime> runtime;
+    std::shared_ptr<CompositeModuleLoader> composite;
 
     void SetUp() override {
         container.reset(new FakeContainer);
         loader.reset(new FakeLoader);
         std::shared_ptr<ModuleContainer> c = container;
-        std::shared_ptr<ModuleLoader> l = loader;
-        runtime.reset(new CompositeRuntime(c, l));
+        std::shared_ptr<ModuleFormatLoader> l = loader;
+        composite.reset(new CompositeModuleLoader(c, l));
     }
 };
 
@@ -119,42 +119,42 @@ protected:
 // id
 // ---------------------------------------------------------------------------
 
-TEST_F(CompositeRuntimeTest, Id_CombinesLoaderAndContainerIds) {
-    EXPECT_EQ(runtime->id(), "fake-loader+fake-container");
+TEST_F(CompositeModuleLoaderTest, Id_CombinesLoaderAndContainerIds) {
+    EXPECT_EQ(composite->id(), "fake-loader+fake-container");
 }
 
 // ---------------------------------------------------------------------------
 // canHandle
 // ---------------------------------------------------------------------------
 
-TEST_F(CompositeRuntimeTest, CanHandle_TrueWhenBothCanHandle) {
+TEST_F(CompositeModuleLoaderTest, CanHandle_TrueWhenBothCanHandle) {
     ModuleDescriptor desc;
-    EXPECT_TRUE(runtime->canHandle(desc));
+    EXPECT_TRUE(composite->canHandle(desc));
 }
 
-TEST_F(CompositeRuntimeTest, CanHandle_FalseWhenContainerCannot) {
+TEST_F(CompositeModuleLoaderTest, CanHandle_FalseWhenContainerCannot) {
     container->containerCanHandle = false;
     ModuleDescriptor desc;
-    EXPECT_FALSE(runtime->canHandle(desc));
+    EXPECT_FALSE(composite->canHandle(desc));
 }
 
-TEST_F(CompositeRuntimeTest, CanHandle_FalseWhenLoaderCannot) {
+TEST_F(CompositeModuleLoaderTest, CanHandle_FalseWhenLoaderCannot) {
     loader->loaderCanHandle = false;
     ModuleDescriptor desc;
-    EXPECT_FALSE(runtime->canHandle(desc));
+    EXPECT_FALSE(composite->canHandle(desc));
 }
 
 // ---------------------------------------------------------------------------
 // load: resolves host + builds args via loader, launches via container
 // ---------------------------------------------------------------------------
 
-TEST_F(CompositeRuntimeTest, Load_DelegatesResolveAndLaunch) {
+TEST_F(CompositeModuleLoaderTest, Load_DelegatesResolveAndLaunch) {
     ModuleDescriptor desc;
     desc.name = "mod_a";
     desc.path = "/lib/mod_a.so";
     LoadedModuleHandle handle;
 
-    bool ok = runtime->load(desc, nullptr, handle);
+    bool ok = composite->load(desc, nullptr, handle);
     EXPECT_TRUE(ok);
     EXPECT_EQ(handle.name, "mod_a");
     EXPECT_EQ(handle.pid, 42);
@@ -166,49 +166,49 @@ TEST_F(CompositeRuntimeTest, Load_DelegatesResolveAndLaunch) {
     EXPECT_EQ(container->launchCalls[0].args, expected);
 }
 
-TEST_F(CompositeRuntimeTest, Load_FailsWhenHostBinaryEmpty) {
+TEST_F(CompositeModuleLoaderTest, Load_FailsWhenHostBinaryEmpty) {
     loader->hostBinary = "";
     ModuleDescriptor desc;
     desc.name = "no_host";
     LoadedModuleHandle handle;
 
-    EXPECT_FALSE(runtime->load(desc, nullptr, handle));
+    EXPECT_FALSE(composite->load(desc, nullptr, handle));
     EXPECT_TRUE(container->launchCalls.empty());
 }
 
-TEST_F(CompositeRuntimeTest, Load_FailsWhenContainerLaunchFails) {
+TEST_F(CompositeModuleLoaderTest, Load_FailsWhenContainerLaunchFails) {
     container->launchShouldSucceed = false;
     ModuleDescriptor desc;
     desc.name = "fail_launch";
     LoadedModuleHandle handle;
 
-    EXPECT_FALSE(runtime->load(desc, nullptr, handle));
+    EXPECT_FALSE(composite->load(desc, nullptr, handle));
 }
 
 // ---------------------------------------------------------------------------
 // sendToken, terminate, terminateAll delegate to container
 // ---------------------------------------------------------------------------
 
-TEST_F(CompositeRuntimeTest, SendToken_DelegatesToContainer) {
-    EXPECT_TRUE(runtime->sendToken("mod_a", "tok123"));
+TEST_F(CompositeModuleLoaderTest, SendToken_DelegatesToContainer) {
+    EXPECT_TRUE(composite->sendToken("mod_a", "tok123"));
     ASSERT_EQ(container->sendTokenCalls.size(), 1u);
     EXPECT_EQ(container->sendTokenCalls[0].first, "mod_a");
     EXPECT_EQ(container->sendTokenCalls[0].second, "tok123");
 }
 
-TEST_F(CompositeRuntimeTest, Terminate_DelegatesToContainer) {
+TEST_F(CompositeModuleLoaderTest, Terminate_DelegatesToContainer) {
     ModuleDescriptor desc;
     desc.name = "to_term";
     LoadedModuleHandle h;
-    runtime->load(desc, nullptr, h);
+    composite->load(desc, nullptr, h);
 
-    runtime->terminate("to_term");
+    composite->terminate("to_term");
     ASSERT_EQ(container->terminateCalls.size(), 1u);
     EXPECT_EQ(container->terminateCalls[0], "to_term");
 }
 
-TEST_F(CompositeRuntimeTest, TerminateAll_DelegatesToContainer) {
-    runtime->terminateAll();
+TEST_F(CompositeModuleLoaderTest, TerminateAll_DelegatesToContainer) {
+    composite->terminateAll();
     EXPECT_EQ(container->terminateAllCount, 1);
 }
 
@@ -216,42 +216,42 @@ TEST_F(CompositeRuntimeTest, TerminateAll_DelegatesToContainer) {
 // hasModule, pid, getAllPids delegate to container
 // ---------------------------------------------------------------------------
 
-TEST_F(CompositeRuntimeTest, HasModule_DelegatesToContainer) {
-    EXPECT_FALSE(runtime->hasModule("x"));
+TEST_F(CompositeModuleLoaderTest, HasModule_DelegatesToContainer) {
+    EXPECT_FALSE(composite->hasModule("x"));
 
     ModuleDescriptor desc;
     desc.name = "x";
     LoadedModuleHandle h;
-    runtime->load(desc, nullptr, h);
+    composite->load(desc, nullptr, h);
 
-    EXPECT_TRUE(runtime->hasModule("x"));
+    EXPECT_TRUE(composite->hasModule("x"));
 }
 
-TEST_F(CompositeRuntimeTest, Pid_DelegatesToContainer) {
-    EXPECT_FALSE(runtime->pid("x").has_value());
+TEST_F(CompositeModuleLoaderTest, Pid_DelegatesToContainer) {
+    EXPECT_FALSE(composite->pid("x").has_value());
 
     ModuleDescriptor desc;
     desc.name = "x";
     LoadedModuleHandle h;
-    runtime->load(desc, nullptr, h);
+    composite->load(desc, nullptr, h);
 
-    auto p = runtime->pid("x");
+    auto p = composite->pid("x");
     ASSERT_TRUE(p.has_value());
     EXPECT_EQ(*p, 42);
 }
 
-TEST_F(CompositeRuntimeTest, GetAllPids_DelegatesToContainer) {
+TEST_F(CompositeModuleLoaderTest, GetAllPids_DelegatesToContainer) {
     ModuleDescriptor d1;
     d1.name = "a";
     LoadedModuleHandle h1;
-    runtime->load(d1, nullptr, h1);
+    composite->load(d1, nullptr, h1);
 
     ModuleDescriptor d2;
     d2.name = "b";
     LoadedModuleHandle h2;
-    runtime->load(d2, nullptr, h2);
+    composite->load(d2, nullptr, h2);
 
-    auto pids = runtime->getAllPids();
+    auto pids = composite->getAllPids();
     EXPECT_EQ(pids.size(), 2u);
     EXPECT_EQ(pids.at("a"), 42);
     EXPECT_EQ(pids.at("b"), 42);
@@ -261,6 +261,6 @@ TEST_F(CompositeRuntimeTest, GetAllPids_DelegatesToContainer) {
 // Container accessor
 // ---------------------------------------------------------------------------
 
-TEST_F(CompositeRuntimeTest, ContainerAccessor_ReturnsSameInstance) {
-    EXPECT_EQ(&runtime->container(), static_cast<ModuleContainer*>(container.get()));
+TEST_F(CompositeModuleLoaderTest, ContainerAccessor_ReturnsSameInstance) {
+    EXPECT_EQ(&composite->container(), static_cast<ModuleContainer*>(container.get()));
 }
