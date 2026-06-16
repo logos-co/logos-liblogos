@@ -1,10 +1,14 @@
 name: liblogos Doc-Tests
 
-# Runs the executable liblogos doc-test (doctests/liblogos-module-runtime.test.yaml)
-# end-to-end via the shared doctest CLI: builds the logoscore runtime against the
-# commit of logos-liblogos under test (via --override-input), builds lgpm, packages
-# and installs the real accounts module, starts the daemon, loads the module, calls
-# its methods, and asserts on the output.
+# Runs the executable liblogos doc-tests end-to-end via the shared doctest CLI,
+# both pinned to the commit of logos-liblogos under test (via --release-for):
+#   - doctests/liblogos-module-runtime.test.yaml — drives liblogos through the
+#     logoscore CLI frontend (build logoscore against this commit, install the
+#     accounts module, start the daemon, load + call methods).
+#   - doctests/liblogos-as-a-library.test.yaml — embeds liblogos directly:
+#     builds liblogos_core from this commit, compiles a C++ program that links
+#     it, installs modules with lgpm, and loads the accounts module via the C API.
+# Both specs run in one invocation, producing a single combined report.
 #
 # ──────────────────────────────────────────────────────────────────────────────
 # One-time setup required for the clickable report links to work:
@@ -85,17 +89,20 @@ jobs:
       # (+ rich), so no pip install step is needed.
       #
       # --release-for pins the {release} placeholder for logos-liblogos to the
-      # commit under test, so the override URL in the spec
+      # commit under test, so the override URL in each spec
       # (`github:logos-co/logos-liblogos{release}`) becomes `.../<sha>` — the
-      # logoscore runtime is rebuilt against this PR/push rather than master.
-      # Every other repo URL still resolves to latest.
-      - name: Run liblogos module-runtime doc-test
+      # logoscore runtime and the embedded liblogos_core are both rebuilt against
+      # this PR/push rather than master. Every other repo URL still resolves to
+      # latest. Passing both specs to one `run` produces a single combined report
+      # with a per-spec dropdown.
+      - name: Run liblogos doc-tests
         run: |
           # --continue-on-fail so the run walks every step and the published
           # report is complete. The job still fails (non-zero exit) if any step
           # failed; this only changes whether we stop early.
           nix run github:logos-co/logos-doctest -- run \
             doctests/liblogos-module-runtime.test.yaml \
+            doctests/liblogos-as-a-library.test.yaml \
             --verbose \
             --continue-on-fail \
             --release-for logos-liblogos=${{ steps.commit.outputs.sha }} \
@@ -128,6 +135,11 @@ jobs:
             --release-for logos-liblogos=${{ steps.commit.outputs.sha }} \
             -o /tmp/liblogos-module-runtime.md
           test -s /tmp/liblogos-module-runtime.md
+          nix run github:logos-co/logos-doctest -- generate \
+            doctests/liblogos-as-a-library.test.yaml \
+            --release-for logos-liblogos=${{ steps.commit.outputs.sha }} \
+            -o /tmp/liblogos-as-a-library.md
+          test -s /tmp/liblogos-as-a-library.md
           echo "Generated markdown successfully"
 
   publish-report:
