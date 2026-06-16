@@ -95,8 +95,71 @@ else()
   message(STATUS "PROCESS_STATS_ROOT not set, process-stats will need to be provided")
 endif()
 
+# Find logos-container (the Qt-free, header-only container contract:
+# ModuleContainer interface + ModuleDescriptor/LoadedModuleHandle + the
+# module-name allowlist). Header-only, so it is an INTERFACE import keyed on
+# its include dir rather than a library.
+if(DEFINED LOGOS_CONTAINER_ROOT AND EXISTS "${LOGOS_CONTAINER_ROOT}/include")
+  message(STATUS "Using logos-container at ${LOGOS_CONTAINER_ROOT}")
 
-# Define the library sources
+  add_library(logos_container INTERFACE IMPORTED GLOBAL)
+  set_target_properties(logos_container PROPERTIES
+    INTERFACE_INCLUDE_DIRECTORIES "${LOGOS_CONTAINER_ROOT}/include"
+    INTERFACE_LINK_LIBRARIES "nlohmann_json::nlohmann_json"
+  )
+else()
+  message(FATAL_ERROR "LOGOS_CONTAINER_ROOT not set or ${LOGOS_CONTAINER_ROOT}/include does not exist")
+endif()
+
+# Find logos-container-subprocess (the process-isolation ModuleContainer).
+# Two static libs: the parent-side container (linked into logos_core) and the
+# child-side token receiver (linked into logos_host_qt).
+if(DEFINED LOGOS_CONTAINER_SUBPROCESS_ROOT AND EXISTS "${LOGOS_CONTAINER_SUBPROCESS_ROOT}/lib")
+  message(STATUS "Using logos-container-subprocess at ${LOGOS_CONTAINER_SUBPROCESS_ROOT}")
+
+  find_library(LOGOS_CONTAINER_SUBPROCESS_LIBRARY
+    NAMES logos_container_subprocess
+    PATHS "${LOGOS_CONTAINER_SUBPROCESS_ROOT}/lib"
+    NO_DEFAULT_PATH
+  )
+  find_library(LOGOS_CONTAINER_SUBPROCESS_HOST_LIBRARY
+    NAMES logos_container_subprocess_host
+    PATHS "${LOGOS_CONTAINER_SUBPROCESS_ROOT}/lib"
+    NO_DEFAULT_PATH
+  )
+
+  if(NOT LOGOS_CONTAINER_SUBPROCESS_LIBRARY OR NOT LOGOS_CONTAINER_SUBPROCESS_HOST_LIBRARY)
+    message(FATAL_ERROR "logos_container_subprocess libraries not found in ${LOGOS_CONTAINER_SUBPROCESS_ROOT}/lib")
+  endif()
+
+  # Declare the dependency on the header-only contract and on spdlog/Boost so
+  # CMake orders the link correctly for GNU ld and pulls them in.
+  add_library(logos_container_subprocess STATIC IMPORTED GLOBAL)
+  set_target_properties(logos_container_subprocess PROPERTIES
+    IMPORTED_LOCATION "${LOGOS_CONTAINER_SUBPROCESS_LIBRARY}"
+    INTERFACE_INCLUDE_DIRECTORIES "${LOGOS_CONTAINER_SUBPROCESS_ROOT}/include"
+    INTERFACE_LINK_LIBRARIES "logos_container;Boost::process;spdlog::spdlog"
+  )
+
+  add_library(logos_container_subprocess_host STATIC IMPORTED GLOBAL)
+  set_target_properties(logos_container_subprocess_host PROPERTIES
+    IMPORTED_LOCATION "${LOGOS_CONTAINER_SUBPROCESS_HOST_LIBRARY}"
+    INTERFACE_INCLUDE_DIRECTORIES "${LOGOS_CONTAINER_SUBPROCESS_ROOT}/include"
+    INTERFACE_LINK_LIBRARIES "logos_container;Qt${QT_VERSION_MAJOR}::Core;Qt${QT_VERSION_MAJOR}::Network;spdlog::spdlog"
+  )
+else()
+  message(FATAL_ERROR "LOGOS_CONTAINER_SUBPROCESS_ROOT not set or ${LOGOS_CONTAINER_SUBPROCESS_ROOT}/lib does not exist")
+endif()
+
+
+# Define the library sources.
+# The container contract — the ModuleContainer interface, the ModuleDescriptor /
+# LoadedModuleHandle value types, and the module-name allowlist — lives in the
+# logos-container package, and the subprocess container that implements it
+# (subprocess_container, token_receiver) lives in logos-container-subprocess.
+# Both are linked as imported libraries below. The module *loader* strategy
+# (ModuleLoader / ModuleFormatLoader) and the logging foundation are core
+# concerns and stay here.
 set(LOGOS_CORE_SOURCES
     logging/logos_log.cpp
     logging/logos_log.h
@@ -111,14 +174,11 @@ set(LOGOS_CORE_SOURCES
     logos_core/module_manager.cpp
     logos_core/module_manager.h
     logos_core/module_loader.h
-    logos_core/module_container.h
     logos_core/module_format_loader.h
     logos_core/composite_module_loader.cpp
     logos_core/composite_module_loader.h
     logos_core/module_loader_registry.cpp
     logos_core/module_loader_registry.h
-    containers/subprocess/subprocess_container.cpp
-    containers/subprocess/subprocess_container.h
     module_loaders/module_loader_qt/qt_plugin_format_loader.cpp
     module_loaders/module_loader_qt/qt_plugin_format_loader.h
 )
@@ -132,8 +192,6 @@ set(LOGOS_HOST_SOURCES
     module_loaders/module_loader_qt/host/module_initializer.h
     module_loaders/module_loader_qt/host/qt/qt_app.cpp
     module_loaders/module_loader_qt/host/qt/qt_app.h
-    containers/subprocess/token_receiver.cpp
-    containers/subprocess/token_receiver.h
 )
 
 # Create the logos core library
@@ -174,13 +232,18 @@ else()
   message(FATAL_ERROR "LOGOS_PACKAGE_MANAGER_ROOT not set or ${LOGOS_PACKAGE_MANAGER_ROOT}/lib does not exist")
 endif()
 
-# Link Qt libraries, SDK, module library, and package-manager library
+# Link Qt libraries, SDK, module library, and package-manager library.
+# logos_container_subprocess (the parent-side ModuleContainer) and
+# logos_container (the contract + logging foundation it and logos_core share)
+# are linked here; Boost::process/spdlog satisfy their transitive symbols.
 target_link_libraries(logos_core PUBLIC
     Qt${QT_VERSION_MAJOR}::Core
     Qt${QT_VERSION_MAJOR}::RemoteObjects
     logos_sdk
     logos_module
     process_stats
+    logos_container
+    logos_container_subprocess
     package_manager_lib
     nlohmann_json::nlohmann_json
     Boost::process
@@ -191,7 +254,6 @@ target_link_libraries(logos_core PUBLIC
 target_include_directories(logos_core PRIVATE
     ${CMAKE_CURRENT_SOURCE_DIR}
     ${CMAKE_CURRENT_SOURCE_DIR}/logos_core
-    ${CMAKE_CURRENT_SOURCE_DIR}/containers
     ${CMAKE_CURRENT_SOURCE_DIR}/module_loaders
     ${Qt${QT_VERSION_MAJOR}_INCLUDE_DIRS}
 )
@@ -244,13 +306,17 @@ endif()
 # Create the logos host application
 add_executable(logos_host_qt ${LOGOS_HOST_SOURCES})
 
-# Link the logos host with Qt libraries and module library
+# Link the logos host with Qt libraries and module library.
+# logos_container_subprocess_host provides the child-side token receiver;
+# logos_container provides the contract + logging foundation it uses.
 target_link_libraries(logos_host_qt PRIVATE
     Qt${QT_VERSION_MAJOR}::Core
     Qt${QT_VERSION_MAJOR}::Network
     Qt${QT_VERSION_MAJOR}::RemoteObjects
     logos_sdk
     logos_module
+    logos_container
+    logos_container_subprocess_host
     CLI11::CLI11
     spdlog::spdlog
 )
@@ -259,7 +325,6 @@ target_link_libraries(logos_host_qt PRIVATE
 target_include_directories(logos_host_qt PRIVATE
     ${CMAKE_CURRENT_SOURCE_DIR}
     ${CMAKE_CURRENT_SOURCE_DIR}/module_loaders/module_loader_qt/host
-    ${CMAKE_CURRENT_SOURCE_DIR}/containers/subprocess
     ${Qt${QT_VERSION_MAJOR}_INCLUDE_DIRS}
 )
 

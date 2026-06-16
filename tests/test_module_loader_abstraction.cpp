@@ -16,7 +16,7 @@
 #include "module_registry.h"
 #include "module_loader_registry.h"
 #include "module_loader.h"
-#include "containers/subprocess/subprocess_manager.h"
+#include "subprocess_manager.h"
 #include <string>
 #include <vector>
 #include <unordered_map>

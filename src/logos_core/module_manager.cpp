@@ -4,7 +4,7 @@
 #include "dependency_resolver.h"
 #include "module_loader_registry.h"
 #include "composite_module_loader.h"
-#include "containers/subprocess/subprocess_container.h"
+#include <logos_container_subprocess/subprocess_container.h>
 #include "module_loaders/module_loader_qt/qt_plugin_format_loader.h"
 #include <spdlog/spdlog.h>
 #include <nlohmann/json.hpp>

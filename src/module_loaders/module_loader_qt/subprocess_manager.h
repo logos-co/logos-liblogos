@@ -2,15 +2,15 @@
 #define SUBPROCESS_MANAGER_H
 
 // Backward-compatibility shim: SubprocessManager is now composed of
-// SubprocessContainer (process lifecycle) + QtPluginFormatLoader (host resolution).
-// Tests and qt_test_adapter.h that reference SubprocessManager by name,
-// clearAll(), registerProcess(), startProcess(), ProcessCallbacks etc.
-// keep compiling through this header.
+// SubprocessContainer (process lifecycle, from logos-container-subprocess) +
+// QtPluginFormatLoader (host resolution, liblogos). Tests and qt_test_adapter.h
+// that reference SubprocessManager by name, clearAll(), registerProcess(),
+// startProcess(), ProcessCallbacks etc. keep compiling through this header.
 
-#include "subprocess_container.h"
+#include <logos_container_subprocess/subprocess_container.h>
 #include "composite_module_loader.h"
 #include "module_format_loader.h"
-#include "module_loaders/module_loader_qt/qt_plugin_format_loader.h"
+#include "qt_plugin_format_loader.h"
 #include <memory>
 
 class SubprocessManager : public LogosCore::CompositeModuleLoader {

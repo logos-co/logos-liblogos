@@ -16,9 +16,9 @@
 #include <gtest/gtest.h>
 #include "logos_core.h"
 #include "qt_test_adapter.h"
-#include "peer_credentials.h"
-#include "unix_socket_path.h"
-#include "path_safety.h"
+#include <logos_container_subprocess/peer_credentials.h>
+#include <logos_container_subprocess/unix_socket_path.h>
+#include <logos_container_subprocess/path_safety.h>
 #include <atomic>
 #include <cerrno>
 #include <chrono>

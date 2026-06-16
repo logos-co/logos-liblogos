@@ -14,29 +14,18 @@ logos-liblogos/
 │   └── project.md                       # This document
 ├── src/
 │   ├── CMakeLists.txt                   # Source build configuration
-│   ├── path_safety.h                    # logos::isSafePathSegment — validate untrusted names used as path segments
 │   ├── logos_core/                      # Core library implementation
 │   │   ├── logos_core.h                 # C API header (public)
 │   │   ├── logos_core.cpp               # C API implementation
 │   │   ├── module_manager.h/cpp         # Facade: orchestrates registry, loader registry, resolver
 │   │   ├── module_registry.h/cpp        # In-memory registry of discovered/loaded modules
-│   │   ├── module_name_validation.h     # Qt-free allowlist validator for untrusted module names
 │   │   ├── dependency_resolver.h/cpp    # Topological sort with circular dependency detection
-│   │   ├── module_loader.h              # Abstract ModuleLoader interface (Qt-free, top-level)
-│   │   ├── module_container.h           # Abstract ModuleContainer interface (where/how a module runs)
-│   │   ├── module_format_loader.h       # Abstract ModuleFormatLoader interface (what type of module)
 │   │   ├── composite_module_loader.h/cpp # Pairs a container + format loader into a ModuleLoader
 │   │   └── module_loader_registry.h/cpp  # Registry of ModuleLoader implementations
-│   ├── containers/                      # Container implementations (process isolation strategies)
-│   │   └── subprocess/                  # Subprocess container (Boost.Process v2)
-│   │       ├── subprocess_container.h/cpp   # ModuleContainer impl: process spawn, pipes, kill, token send
-│   │       ├── subprocess_manager.h         # Backward-compat shim for SubprocessManager name
-│   │       ├── peer_credentials.h           # Qt-free peer-uid auth for the token socket (SO_PEERCRED/getpeereuid), shared by both handoff sides
-│   │       ├── unix_socket_path.h           # Qt-free token socket path resolver (shared by both handoff sides)
-│   │       └── token_receiver.h/cpp         # Child-side auth token receipt via an owner-only, peer-authenticated Unix socket (validates module name against the allowlist before deriving the socket path)
 │   └── module_loaders/                  # Module loader implementations
 │       └── module_loader_qt/            # Qt plugin module loader
 │           ├── qt_plugin_format_loader.h/cpp # ModuleFormatLoader impl: resolve logos_host_qt, build CLI args
+│           ├── subprocess_manager.h         # Backward-compat shim composing the subprocess ModuleContainer + Qt format loader
 │           └── host/                        # Child-side code (builds logos_host_qt binary)
 │               ├── logos_host.cpp               # Host entry point (logos_host_qt binary)
 │               ├── command_line_parser.h/cpp    # CLI argument parsing (--name, --path)
@@ -68,6 +57,36 @@ logos-liblogos/
         └── ci.yml                       # GitHub Actions CI workflow
 ```
 
+### External container packages
+
+The container contract and the subprocess container implementation live in their
+own repos so that the isolation mechanism can be swapped without touching the
+core. liblogos consumes them as nix inputs (`logos-container`,
+`logos-container-subprocess`) via the `LOGOS_CONTAINER_ROOT` /
+`LOGOS_CONTAINER_SUBPROCESS_ROOT` CMake roots, the same way it consumes
+`process-stats`.
+
+- **[logos-container](https://github.com/logos-co/logos-container)** — the Qt-free,
+  header-only **container contract**, included as `<logos_container/...>`. Scoped
+  to exactly what a container implementation needs — no loader strategy, no logging:
+  - `module_container.h` — `ModuleContainer` interface (where/how a module runs)
+  - `module_descriptor.h` — `ModuleDescriptor` / `LoadedModuleHandle` value types exchanged across the container boundary
+  - `module_name_validation.h` — `logos::isValidModuleName` allowlist (shared by the registry and the token handoff)
+- **[logos-container-subprocess](https://github.com/logos-co/logos-container-subprocess)**
+  — the subprocess `ModuleContainer`, included as `<logos_container_subprocess/...>`:
+  - `subprocess_container.h/cpp` — parent side: process spawn, pipes, kill, token send (linked into `logos_core`)
+  - `token_receiver.h/cpp` — child side: auth-token receipt over an owner-only, peer-authenticated Unix socket (linked into `logos_host_qt`)
+  - `peer_credentials.h`, `unix_socket_path.h`, `path_safety.h` — shared Qt-free handoff helpers
+
+The module *loader* strategy interfaces (`ModuleLoader`, `ModuleFormatLoader`) and
+the logging foundation (`logos_log`) are core concerns and remain in
+`logos-liblogos` (`src/logos_core/` and `src/logging/`).
+
+A backward-compat `SubprocessManager` shim
+(`src/module_loaders/module_loader_qt/subprocess_manager.h`) composes the
+external `SubprocessContainer` with the Qt format loader so test code that
+references the old name keeps compiling.
+
 ## Stack, Frameworks & Dependencies
 
 | Component | Purpose |
@@ -92,6 +111,8 @@ logos-liblogos/
 | **[logos-module](https://github.com/logos-co/logos-module)** | Module library (metadata extraction, module loading utilities) |
 | **[logos-capability-module](https://github.com/logos-co/logos-capability-module)** | Built-in capability authorization module |
 | **[process-stats](https://github.com/logos-co/process-stats)** | CPU and memory monitoring for module processes |
+| **[logos-container](https://github.com/logos-co/logos-container)** | Qt-free header-only container contract (`ModuleContainer` interface, `ModuleDescriptor`/`LoadedModuleHandle` value types, module-name allowlist) |
+| **[logos-container-subprocess](https://github.com/logos-co/logos-container-subprocess)** | Subprocess `ModuleContainer` implementation (process spawn + auth-token handoff) |
 | **[logos-package-manager](https://github.com/logos-co/logos-package-manager-module)** | Package management library for installed module discovery |
 | **[logos-nix](https://github.com/logos-co/logos-nix)** | Common Nix tooling and nixpkgs pin |
 
@@ -141,7 +162,7 @@ logos-liblogos/
 
 **Purpose:** In-memory registry of discovered and loaded modules. Single source of truth for the dependency graph: stores module paths, forward dependencies, and the derived reverse edges (dependents). All public methods are thread-safe: mutating methods acquire a `std::unique_lock` on an internal `std::shared_mutex`; read-only methods acquire a `std::shared_lock`, allowing concurrent reads.
 
-**Trust boundary — module name validation:** A module's name comes verbatim from its (untrusted) embedded plugin metadata and is later used as a filesystem path segment for the token-handoff socket, as this map's key, and as the RPC target. Prevents this attack (CWE-22): a malicious installed module declares `name='../<x>'` (or a name colliding with another module's socket); the `/` or `..` escapes the temp dir, so a local attacker pre-binding the resolved socket path captures the per-module auth token and gains the module's RPC privileges. `processModuleInternal()` validates the name with `logos::isValidModuleName` (`src/logos_core/module_name_validation.h`, allowlist `[A-Za-z0-9_-]`, ≤64 bytes, rejects `/`, `..`, etc.) and skips any module whose name is unsafe. The socket sinks (`SubprocessContainer::sendTokenToProcess`, `SubprocessTokenReceiver::receive`) re-validate defensively.
+**Trust boundary — module name validation:** A module's name comes verbatim from its (untrusted) embedded plugin metadata and is later used as a filesystem path segment for the token-handoff socket, as this map's key, and as the RPC target. Prevents this attack (CWE-22): a malicious installed module declares `name='../<x>'` (or a name colliding with another module's socket); the `/` or `..` escapes the temp dir, so a local attacker pre-binding the resolved socket path captures the per-module auth token and gains the module's RPC privileges. `processModuleInternal()` validates the name with `logos::isValidModuleName` (`logos-container: module_name_validation.h`, allowlist `[A-Za-z0-9_-]`, ≤64 bytes, rejects `/`, `..`, etc.) and skips any module whose name is unsafe. The socket sinks (`SubprocessContainer::sendTokenToProcess`, `SubprocessTokenReceiver::receive`) re-validate defensively.
 
 **Data:**
 - `ModuleInfo` struct — holds `path`, `dependencies` (`std::vector<std::string>`), `dependents` (`std::vector<std::string>`, reverse-edge cache), `loaded` flag, `loader` (`std::shared_ptr<ModuleLoader>`), `handle` (`LoadedModuleHandle`)
@@ -231,7 +252,7 @@ Takes callback functions (`IsKnownFn`, `GetDependenciesFn`) so it has no couplin
 
 ### SubprocessContainer
 
-**Files:** `src/containers/subprocess/subprocess_container.h`, `src/containers/subprocess/subprocess_container.cpp`
+**Files:** `logos-container-subprocess: subprocess_container.h/cpp`
 
 **Purpose:** Concrete `ModuleContainer` implementation for subprocess-based module isolation using Boost.Process v2 and Boost.Asio. Handles process lifecycle (spawn, monitor, kill) and credential delivery via Unix domain sockets. Knows nothing about what type of module runs inside the subprocess.
 
@@ -259,7 +280,7 @@ Takes callback functions (`IsKnownFn`, `GetDependenciesFn`) so it has no couplin
 | `registerProcess(name)` | Register a placeholder process entry |
 | `clearAll()` | Clear all process entries |
 
-A backward-compat `SubprocessManager` header (`src/containers/subprocess/subprocess_manager.h`) inherits from `CompositeModuleLoader` and forwards static methods to `SubprocessContainer`, so test code that references the old name keeps compiling.
+A backward-compat `SubprocessManager` header (`src/module_loaders/module_loader_qt/subprocess_manager.h`) inherits from `CompositeModuleLoader` and forwards static methods to `SubprocessContainer`, so test code that references the old name keeps compiling.
 
 ### QtPluginFormatLoader
 
@@ -288,7 +309,7 @@ A backward-compat `SubprocessManager` header (`src/containers/subprocess/subproc
 
 ### LogosHost
 
-**Files:** `src/module_loaders/module_loader_qt/host/logos_host.cpp`, `src/module_loaders/module_loader_qt/host/command_line_parser.h/cpp`, `src/module_loaders/module_loader_qt/host/module_initializer.h/cpp`, `src/module_loaders/module_loader_qt/host/qt/qt_app.h/cpp`, `src/containers/subprocess/token_receiver.h/cpp`
+**Files:** `src/module_loaders/module_loader_qt/host/logos_host.cpp`, `src/module_loaders/module_loader_qt/host/command_line_parser.h/cpp`, `src/module_loaders/module_loader_qt/host/module_initializer.h/cpp`, `src/module_loaders/module_loader_qt/host/qt/qt_app.h/cpp`, `logos-container-subprocess: token_receiver.h/cpp`
 
 **Purpose:** Lightweight subprocess (`logos_host_qt`) that loads a single Qt module. Parses `--name`, `--path`, optional `--instance-persistence-path`, and optional `--transport-set` (per-module `LogosTransportSet` JSON; empty = global-default LocalSocket only) arguments. On startup, token receipt (container concern) is separated from module loading (loader concern): the host first receives its auth token via subprocess container IPC (an owner-only Unix socket that authenticates the connecting parent's uid before accepting the token — see [Token-handoff socket hardening](spec.md#token-handoff-socket-hardening)), then loads the Qt plugin and constructs the `LogosAPI` with the parsed transport set (explicit-transport ctor when provided, single-arg ctor otherwise). Registers the module with the remote object registry and runs the Qt event loop. A `logos_host` compatibility symlink is installed for backward compatibility with downstream consumers.
 

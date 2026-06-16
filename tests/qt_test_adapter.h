@@ -12,8 +12,8 @@
 
 #include "module_manager.h"
 #include "module_registry.h"
-#include "containers/subprocess/subprocess_manager.h"
-#include "containers/subprocess/token_receiver.h"
+#include "subprocess_manager.h"
+#include <logos_container_subprocess/token_receiver.h>
 
 #include <QByteArray>
 #include <QLocalServer>

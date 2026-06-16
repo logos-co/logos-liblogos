@@ -14,7 +14,6 @@ add_executable(logos_core_tests
     test_process_stats.cpp
     test_dependency_resolver.cpp
     test_subprocess_manager.cpp
-    test_subprocess_container.cpp
     test_qt_plugin_format_loader.cpp
     test_composite_module_loader.cpp
     test_token_exchange.cpp
@@ -22,15 +21,19 @@ add_executable(logos_core_tests
     test_module_loader_registry.cpp
     test_module_loader_abstraction.cpp
     test_protocol_gate.cpp
-    # qt_test_adapter.h calls SubprocessTokenReceiver::receive; compile the
-    # implementation unit directly into the test binary (it lives in logos_host_qt,
-    # which is an executable, not a linkable library).
-    ${CMAKE_SOURCE_DIR}/src/containers/subprocess/token_receiver.cpp
 )
 
+# qt_test_adapter.h calls SubprocessTokenReceiver::receive; the child-side
+# token receiver now lives in logos-container-subprocess as a linkable static
+# lib (logos_container_subprocess_host), so link it instead of compiling the
+# source directly. logos_container_subprocess is pulled in transitively via
+# logos_core, but linked explicitly for the static helpers the tests call.
 target_link_libraries(logos_core_tests PRIVATE
     logos_core
     process_stats
+    logos_container
+    logos_container_subprocess
+    logos_container_subprocess_host
     GTest::gtest
     Qt${QT_VERSION_MAJOR}::Core
     Qt${QT_VERSION_MAJOR}::Network
@@ -39,8 +42,6 @@ target_link_libraries(logos_core_tests PRIVATE
 target_include_directories(logos_core_tests PRIVATE
     ${CMAKE_SOURCE_DIR}/src
     ${CMAKE_SOURCE_DIR}/src/logos_core
-    ${CMAKE_SOURCE_DIR}/src/containers
-    ${CMAKE_SOURCE_DIR}/src/containers/subprocess
     ${CMAKE_SOURCE_DIR}/src/module_loaders
     ${CMAKE_SOURCE_DIR}/src/module_loaders/module_loader_qt
 )

@@ -1,5 +1,5 @@
 # Common build configuration shared across all packages
-{ pkgs, logosSdk, logosProtocolPkg, logosQtSdk, logosModule, processStats, logosPackageManager, portableBuild ? false }:
+{ pkgs, logosSdk, logosProtocolPkg, logosQtSdk, logosModule, processStats, logosContainer, logosContainerSubprocess, logosPackageManager, portableBuild ? false }:
 
 {
   pname = "logos-liblogos";
@@ -36,6 +36,8 @@
     pkgs.spdlog
     logosModule
     processStats
+    logosContainer
+    logosContainerSubprocess
     logosPackageManager
   ];
 
@@ -47,6 +49,8 @@
     "-DLOGOS_QT_SDK_ROOT=${logosQtSdk}"
     "-DLOGOS_MODULE_ROOT=${logosModule}"
     "-DPROCESS_STATS_ROOT=${processStats}"
+    "-DLOGOS_CONTAINER_ROOT=${logosContainer}"
+    "-DLOGOS_CONTAINER_SUBPROCESS_ROOT=${logosContainerSubprocess}"
     "-DLOGOS_PACKAGE_MANAGER_ROOT=${logosPackageManager}"
   ] ++ pkgs.lib.optionals portableBuild [
     "-DLOGOS_PORTABLE_BUILD=ON"
@@ -59,6 +63,8 @@
     LOGOS_QT_SDK_ROOT = "${logosQtSdk}";
     LOGOS_MODULE_ROOT = "${logosModule}";
     PROCESS_STATS_ROOT = "${processStats}";
+    LOGOS_CONTAINER_ROOT = "${logosContainer}";
+    LOGOS_CONTAINER_SUBPROCESS_ROOT = "${logosContainerSubprocess}";
     LOGOS_PACKAGE_MANAGER_ROOT = "${logosPackageManager}";
   };
 

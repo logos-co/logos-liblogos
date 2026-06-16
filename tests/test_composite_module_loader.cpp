@@ -7,7 +7,7 @@
 // =============================================================================
 #include <gtest/gtest.h>
 #include "composite_module_loader.h"
-#include "module_container.h"
+#include <logos_container/module_container.h>
 #include "module_format_loader.h"
 #include <memory>
 #include <string>

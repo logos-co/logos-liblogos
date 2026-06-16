@@ -1,7 +1,7 @@
 #include "command_line_parser.h"
 #include "module_initializer.h"
 #include "qt/qt_app.h"
-#include "token_receiver.h"
+#include <logos_container_subprocess/token_receiver.h>
 #include "logos_api.h"
 #include "interface.h"
 

@@ -27,8 +27,8 @@
 // =============================================================================
 #include <gtest/gtest.h>
 #include "qt_test_adapter.h"
-#include "unix_socket_path.h"
-#include "module_name_validation.h"
+#include <logos_container_subprocess/unix_socket_path.h>
+#include <logos_container/module_name_validation.h>
 
 #include <QLocalServer>
 #include <QLocalSocket>
