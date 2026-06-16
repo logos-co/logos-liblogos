@@ -1,7 +1,7 @@
 #ifndef MODULE_MANAGER_H
 #define MODULE_MANAGER_H
 
-#include "runtime_registry.h"
+#include "module_loader_registry.h"
 #include <string>
 #include <vector>
 #include <unordered_map>
@@ -12,8 +12,8 @@ class ModuleRegistry;
 namespace ModuleManager {
     ModuleRegistry& registry();
 
-    // Access the runtime registry (e.g. for tests that need to install a FakeRuntime).
-    LogosCore::RuntimeRegistry& runtimes();
+    // Access the loader registry (e.g. for tests that need to install a FakeModuleLoader).
+    LogosCore::ModuleLoaderRegistry& loaders();
 
     void setModulesDir(const char* modules_dir);
     void addModulesDir(const char* modules_dir);
@@ -21,7 +21,7 @@ namespace ModuleManager {
 
     // Register a per-module transport set (serialized JSON, see
     // logos-cpp-sdk/cpp/logos_transport_config_json.h for the wire
-    // shape). The runtime threads this through to the child subprocess
+    // shape). The loader threads this through to the child subprocess
     // when the module loads, so the child's LogosAPIProvider binds
     // every transport in the set instead of only the global default
     // (LocalSocket).

@@ -308,21 +308,21 @@ void ModuleRegistry::markLoaded(const std::string& name) {
 }
 
 void ModuleRegistry::markLoaded(const std::string& name,
-                                 std::shared_ptr<LogosCore::ModuleRuntime> runtime,
+                                 std::shared_ptr<LogosCore::ModuleLoader> loader,
                                  LogosCore::LoadedModuleHandle handle) {
     std::unique_lock lock(m_mutex);
     auto& info = m_modules[name];
-    info.loaded  = true;
-    info.runtime = std::move(runtime);
-    info.handle  = std::move(handle);
+    info.loaded = true;
+    info.loader = std::move(loader);
+    info.handle = std::move(handle);
 }
 
-std::shared_ptr<LogosCore::ModuleRuntime>
-ModuleRegistry::runtimeFor(const std::string& name) const {
+std::shared_ptr<LogosCore::ModuleLoader>
+ModuleRegistry::loaderFor(const std::string& name) const {
     std::shared_lock lock(m_mutex);
     auto it = m_modules.find(name);
     if (it == m_modules.end()) return nullptr;
-    return it->second.runtime;
+    return it->second.loader;
 }
 
 void ModuleRegistry::markUnloaded(const std::string& name) {

@@ -89,7 +89,7 @@ LOGOS_CORE_EXPORT char* logos_core_get_module_stats();
 // Must be called before logos_core_start().
 LOGOS_CORE_EXPORT void logos_core_set_persistence_base_path(const char* path);
 
-// Register a per-module transport set for the named module. The runtime
+// Register a per-module transport set for the named module. The loader
 // passes this through to the module's child subprocess so its
 // LogosAPIProvider binds every transport in the set instead of only
 // the global default (LocalSocket).
