@@ -59,7 +59,7 @@ than the latest release. The result is symlinked to `./logos/`.
 ### 1.1 Build the CLI with the liblogos override
 
 ```bash
-nix build 'github:logos-co/logos-logoscore-cli' \
+nix build 'github:logos-co/logos-logoscore-cli/b92ade06cdbd3cdf48c8de5b8375cbcc3a6088cf' \
   --override-input logos-liblogos 'github:logos-co/logos-liblogos' \
   --out-link ./logos
 ```
