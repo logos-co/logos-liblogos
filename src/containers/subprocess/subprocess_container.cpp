@@ -28,6 +28,7 @@
 #include "peer_credentials.h"
 #include "unix_socket_path.h"
 #include "logos_core/module_name_validation.h"
+#include "logging/logos_log.h"
 
 #include <array>
 #include <atomic>
@@ -216,25 +217,20 @@ bool peerIsTrusted(int sock, int64_t expectedPid, const std::string& name)
     struct ucred cred{};
     socklen_t len = sizeof(cred);
     if (::getsockopt(sock, SOL_SOCKET, SO_PEERCRED, &cred, &len) != 0) {
-        fprintf(stderr,
-            "[SubprocessContainer] SO_PEERCRED failed for token peer of %s: %s\n",
-            name.c_str(), strerror(errno));
+        logos::logger("subprocess").warn("SO_PEERCRED failed for token peer of {}: {}",
+                                    name, strerror(errno));
         return false;
     }
     if (cred.uid != ::geteuid()) {
-        fprintf(stderr,
-            "[SubprocessContainer] token peer uid mismatch for %s (peer uid %u != %u); "
-            "refusing to send token\n",
-            name.c_str(), static_cast<unsigned>(cred.uid),
-            static_cast<unsigned>(::geteuid()));
+        logos::logger("subprocess").warn(
+            "token peer uid mismatch for {} (peer uid {} != {}); refusing to send token",
+            name, static_cast<unsigned>(cred.uid), static_cast<unsigned>(::geteuid()));
         return false;
     }
     if (expectedPid > 0 && static_cast<int64_t>(cred.pid) != expectedPid) {
-        fprintf(stderr,
-            "[SubprocessContainer] token peer pid mismatch for %s (peer pid %d != child %lld); "
-            "refusing to send token\n",
-            name.c_str(), static_cast<int>(cred.pid),
-            static_cast<long long>(expectedPid));
+        logos::logger("subprocess").warn(
+            "token peer pid mismatch for {} (peer pid {} != child {}); refusing to send token",
+            name, static_cast<int>(cred.pid), static_cast<long long>(expectedPid));
         return false;
     }
     return true;
@@ -248,17 +244,14 @@ bool peerIsTrusted(int sock, int64_t expectedPid, const std::string& name)
     uid_t peerUid = 0;
     gid_t peerGid = 0;
     if (::getpeereid(sock, &peerUid, &peerGid) != 0) {
-        fprintf(stderr,
-            "[SubprocessContainer] getpeereid failed for token peer of %s: %s\n",
-            name.c_str(), strerror(errno));
+        logos::logger("subprocess").warn("getpeereid failed for token peer of {}: {}",
+                                    name, strerror(errno));
         return false;
     }
     if (peerUid != ::geteuid()) {
-        fprintf(stderr,
-            "[SubprocessContainer] token peer uid mismatch for %s (peer uid %u != %u); "
-            "refusing to send token\n",
-            name.c_str(), static_cast<unsigned>(peerUid),
-            static_cast<unsigned>(::geteuid()));
+        logos::logger("subprocess").warn(
+            "token peer uid mismatch for {} (peer uid {} != {}); refusing to send token",
+            name, static_cast<unsigned>(peerUid), static_cast<unsigned>(::geteuid()));
         return false;
     }
     // When the child pid is known, enforce it too. LOCAL_PEERPID reports the
@@ -270,18 +263,15 @@ bool peerIsTrusted(int sock, int64_t expectedPid, const std::string& name)
         pid_t peerPid = 0;
         socklen_t pidLen = sizeof(peerPid);
         if (::getsockopt(sock, SOL_LOCAL, LOCAL_PEERPID, &peerPid, &pidLen) != 0) {
-            fprintf(stderr,
-                "[SubprocessContainer] LOCAL_PEERPID failed for token peer of %s: %s; "
-                "refusing to send token\n",
-                name.c_str(), strerror(errno));
+            logos::logger("subprocess").warn(
+                "LOCAL_PEERPID failed for token peer of {}: {}; refusing to send token",
+                name, strerror(errno));
             return false;
         }
         if (static_cast<int64_t>(peerPid) != expectedPid) {
-            fprintf(stderr,
-                "[SubprocessContainer] token peer pid mismatch for %s (peer pid %d != child %lld); "
-                "refusing to send token\n",
-                name.c_str(), static_cast<int>(peerPid),
-                static_cast<long long>(expectedPid));
+            logos::logger("subprocess").warn(
+                "token peer pid mismatch for {} (peer pid {} != child {}); refusing to send token",
+                name, static_cast<int>(peerPid), static_cast<long long>(expectedPid));
             return false;
         }
     }
@@ -290,9 +280,8 @@ bool peerIsTrusted(int sock, int64_t expectedPid, const std::string& name)
     // Unknown platform: we cannot authenticate the peer, so we cannot make
     // the security guarantee. Fail closed rather than leak the token.
     (void)sock; (void)expectedPid;
-    fprintf(stderr,
-        "[SubprocessContainer] no peer-credential API on this platform; "
-        "refusing to send token for %s\n", name.c_str());
+    logos::logger("subprocess").error(
+        "no peer-credential API on this platform; refusing to send token for {}", name);
     return false;
 #endif
 }
@@ -427,12 +416,12 @@ void syncKill(std::shared_ptr<ProcessEntry> entry) {
     };
 
     if (!wait(std::chrono::seconds(5))) {
-        fprintf(stderr, "[SubprocessContainer] Process did not terminate gracefully, killing: %s\n",
-                entry->name.c_str());
+        logos::logger("subprocess").warn("Process did not terminate gracefully, killing: {}",
+                                    entry->name);
         entry->process.terminate(ec);
         if (!wait(std::chrono::seconds(2))) {
-            fprintf(stderr, "[SubprocessContainer] Process did not respond to SIGKILL: %s\n",
-                    entry->name.c_str());
+            logos::logger("subprocess").error("Process did not respond to SIGKILL: {}",
+                                         entry->name);
         }
     }
 }
@@ -560,14 +549,14 @@ bool SubprocessContainer::startProcess(const std::string& name, const std::strin
 
     asio::connect_pipe(out_rpipe, out_wpipe, ec);
     if (ec) {
-        fprintf(stderr, "[SubprocessContainer] Failed to create stdout pipe for %s: %s\n",
-                name.c_str(), ec.message().c_str());
+        logos::logger("subprocess").error("Failed to create stdout pipe for {}: {}",
+                                     name, ec.message());
         return false;
     }
     asio::connect_pipe(err_rpipe, err_wpipe, ec);
     if (ec) {
-        fprintf(stderr, "[SubprocessContainer] Failed to create stderr pipe for %s: %s\n",
-                name.c_str(), ec.message().c_str());
+        logos::logger("subprocess").error("Failed to create stderr pipe for {}: {}",
+                                     name, ec.message());
         return false;
     }
 
@@ -581,8 +570,8 @@ bool SubprocessContainer::startProcess(const std::string& name, const std::strin
     err_wpipe.close();
 
     if (ec) {
-        fprintf(stderr, "[SubprocessContainer] Failed to start process for %s: %s\n",
-                name.c_str(), ec.message().c_str());
+        logos::logger("subprocess").error("Failed to start process for {}: {}",
+                                     name, ec.message());
         return false;
     }
 
@@ -615,9 +604,8 @@ bool SubprocessContainer::sendTokenToProcess(const std::string& name,
     // connect() to an attacker-controlled path, leaking the auth token
     // (CWE-22). See module_name_validation.h.
     if (!logos::isValidModuleName(name)) {
-        fprintf(stderr,
-            "[SubprocessContainer] Refusing token handoff for invalid module name: %s\n",
-            name.c_str());
+        logos::logger("subprocess").error(
+            "Refusing token handoff for invalid module name: {}", name);
         std::shared_ptr<ProcessEntry> entry;
         {
             std::lock_guard<std::mutex> lock(s_processesMutex);
@@ -642,9 +630,8 @@ bool SubprocessContainer::sendTokenToProcess(const std::string& name,
     {
         struct sockaddr_un sample{};
         if (path.size() >= sizeof(sample.sun_path)) {
-            fprintf(stderr,
-                "[SubprocessContainer] Unix socket path too long (%zu >= %zu): %s\n",
-                path.size(), sizeof(sample.sun_path), path.c_str());
+            logos::logger("subprocess").error("Unix socket path too long ({} >= {}): {}",
+                                         path.size(), sizeof(sample.sun_path), path);
             std::shared_ptr<ProcessEntry> entry;
             {
                 std::lock_guard<std::mutex> lock(s_processesMutex);
@@ -673,7 +660,7 @@ bool SubprocessContainer::sendTokenToProcess(const std::string& name,
     for (;;) {
         sock = ::socket(AF_UNIX, SOCK_STREAM, 0);
         if (sock < 0) {
-            fprintf(stderr, "[SubprocessContainer] socket() failed: %s\n", strerror(errno));
+            logos::logger("subprocess").error("socket() failed: {}", strerror(errno));
             break;
         }
 
@@ -704,8 +691,7 @@ bool SubprocessContainer::sendTokenToProcess(const std::string& name,
     }
 
     if (sock < 0) {
-        fprintf(stderr, "[SubprocessContainer] Failed to connect to token socket for: %s\n",
-                name.c_str());
+        logos::logger("subprocess").error("Failed to connect to token socket for: {}", name);
 
         std::shared_ptr<ProcessEntry> entry;
         {
@@ -727,9 +713,8 @@ bool SubprocessContainer::sendTokenToProcess(const std::string& name,
     // uid (the legitimate child host); otherwise we'd be leaking the token to
     // a hostile process (F-012, CWE-862). Symmetric with the receiver's check.
     if (!::logos::socketPeerIsSameUid(sock)) {
-        fprintf(stderr,
-            "[SubprocessContainer] Refusing to send token to untrusted listener "
-            "(uid mismatch) for: %s\n", name.c_str());
+        logos::logger("subprocess").warn(
+            "Refusing to send token to untrusted listener (uid mismatch) for: {}", name);
         ::close(sock);
 
         std::shared_ptr<ProcessEntry> entry;

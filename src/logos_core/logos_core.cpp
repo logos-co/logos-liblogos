@@ -1,9 +1,9 @@
 #include "logos_core.h"
+#include "logging/logos_log.h"
 #include "module_manager.h"
 #include <logos_instance.h>
 #include <process_stats/process_stats.h>
 #include "token_manager.h"
-#include <cstdio>
 #include <cstdlib>
 #include <cstring>
 #include <string>
@@ -21,6 +21,7 @@ void logos_core_add_modules_dir(const char* modules_dir) {
 }
 
 void logos_core_start() {
+    logos::initLogging();
     LogosInstance::id();
     ModuleManager::discoverInstalledModules();
     ModuleManager::initializeCapabilityModule();
@@ -39,7 +40,7 @@ char** logos_core_get_known_modules() {
 }
 
 int logos_core_load_module(const char* module_name, bool with_dependencies) {
-    if (!module_name) { fprintf(stderr, "logos_core_load_module: module_name must not be null\n"); std::abort(); }
+    if (!module_name) { logos::logger("core").critical("logos_core_load_module: module_name must not be null"); std::abort(); }
     // "Already loaded ⇒ success" is implemented in
     // ModuleManager::loadModuleInternal (see the block at the top there
     // for the rationale and the dep-tree fast path). The header doc
@@ -50,29 +51,29 @@ int logos_core_load_module(const char* module_name, bool with_dependencies) {
 }
 
 int logos_core_unload_module(const char* module_name, bool with_dependents) {
-    if (!module_name) { fprintf(stderr, "logos_core_unload_module: module_name must not be null\n"); std::abort(); }
+    if (!module_name) { logos::logger("core").critical("logos_core_unload_module: module_name must not be null"); std::abort(); }
     if (with_dependents)
         return ModuleManager::unloadModuleWithDependents(module_name) ? 1 : 0;
     return ModuleManager::unloadModule(module_name) ? 1 : 0;
 }
 
 char** logos_core_get_module_dependencies(const char* module_name, bool recursive) {
-    if (!module_name) { fprintf(stderr, "logos_core_get_module_dependencies: module_name must not be null\n"); std::abort(); }
+    if (!module_name) { logos::logger("core").critical("logos_core_get_module_dependencies: module_name must not be null"); std::abort(); }
     return ModuleManager::getDependenciesCStr(module_name, recursive);
 }
 
 char** logos_core_get_module_dependents(const char* module_name, bool recursive) {
-    if (!module_name) { fprintf(stderr, "logos_core_get_module_dependents: module_name must not be null\n"); std::abort(); }
+    if (!module_name) { logos::logger("core").critical("logos_core_get_module_dependents: module_name must not be null"); std::abort(); }
     return ModuleManager::getDependentsCStr(module_name, recursive);
 }
 
 char* logos_core_process_module(const char* module_path) {
-    if (!module_path) { fprintf(stderr, "logos_core_process_module: module_path must not be null\n"); std::abort(); }
+    if (!module_path) { logos::logger("core").critical("logos_core_process_module: module_path must not be null"); std::abort(); }
     return ModuleManager::processModuleCStr(module_path);
 }
 
 char* logos_core_get_token(const char* key) {
-    if (!key) { fprintf(stderr, "logos_core_get_token: key must not be null\n"); std::abort(); }
+    if (!key) { logos::logger("core").critical("logos_core_get_token: key must not be null"); std::abort(); }
 
     std::string token = TokenManager::instance().getToken(std::string(key));
     if (token.empty()) return nullptr;
@@ -87,14 +88,14 @@ char* logos_core_get_module_stats() {
 }
 
 void logos_core_set_persistence_base_path(const char* path) {
-    if (!path) { fprintf(stderr, "logos_core_set_persistence_base_path: path must not be null\n"); std::abort(); }
+    if (!path) { logos::logger("core").critical("logos_core_set_persistence_base_path: path must not be null"); std::abort(); }
     ModuleManager::setPersistenceBasePath(path);
 }
 
 void logos_core_set_module_transports(const char* module_name,
                                        const char* transport_set_json) {
     if (!module_name) {
-        fprintf(stderr, "logos_core_set_module_transports: module_name must not be null\n");
+        logos::logger("core").critical("logos_core_set_module_transports: module_name must not be null");
         std::abort();
     }
     ModuleManager::setModuleTransports(
