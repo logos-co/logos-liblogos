@@ -98,6 +98,8 @@ endif()
 
 # Define the library sources
 set(LOGOS_CORE_SOURCES
+    logging/logos_log.cpp
+    logging/logos_log.h
     logos_core/logos_core.cpp
     logos_core/logos_core.h
     logos_core/module_registry.cpp
