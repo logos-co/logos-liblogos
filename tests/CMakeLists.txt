@@ -14,28 +14,26 @@ add_executable(logos_core_tests
     test_process_stats.cpp
     test_dependency_resolver.cpp
     test_subprocess_manager.cpp
-    test_qt_plugin_format_loader.cpp
     test_composite_module_loader.cpp
     test_module_name_validation.cpp
     test_module_loader_registry.cpp
     test_module_loader_abstraction.cpp
     test_protocol_gate.cpp
-    test_token_source.cpp
-    # token_source.cpp lives in the logos_host_qt executable (not a linkable
-    # library), so compile its implementation directly into the test binary.
-    ${CMAKE_SOURCE_DIR}/src/module_loaders/module_loader_qt/host/token_source.cpp
 )
 
-# logos_container is the header-only contract (ModuleContainer + descriptor
-# types); logos_container_subprocess is the parent-side container the tests
-# drive via SubprocessManager. Both are pulled in transitively via logos_core
-# but linked explicitly for the static helpers the tests call. There is no
-# child-side library to link — token receipt is the host's own stdin read.
+# Imported container/loader targets the tests drive via SubprocessManager /
+# CompositeModuleLoader: logos_container (contract), logos_container_subprocess
+# (parent container), logos_module_loader (format-loader contract),
+# logos_module_loader_qt (QtPluginFormatLoader lib). Pulled in transitively via
+# logos_core but linked explicitly for the helpers the tests call. The Qt-plugin
+# loader tests and the TokenSource tests now live in logos-module-loader-qt.
 target_link_libraries(logos_core_tests PRIVATE
     logos_core
     process_stats
     logos_container
     logos_container_subprocess
+    logos_module_loader
+    logos_module_loader_qt
     GTest::gtest
     Qt${QT_VERSION_MAJOR}::Core
     Qt${QT_VERSION_MAJOR}::Network
@@ -44,9 +42,6 @@ target_link_libraries(logos_core_tests PRIVATE
 target_include_directories(logos_core_tests PRIVATE
     ${CMAKE_SOURCE_DIR}/src
     ${CMAKE_SOURCE_DIR}/src/logos_core
-    ${CMAKE_SOURCE_DIR}/src/module_loaders
-    ${CMAKE_SOURCE_DIR}/src/module_loaders/module_loader_qt
-    ${CMAKE_SOURCE_DIR}/src/module_loaders/module_loader_qt/host
 )
 
 # Propagate portable build flag to tests so manifest variant keys match

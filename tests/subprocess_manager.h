@@ -13,8 +13,8 @@
 
 #include <logos_container_subprocess/subprocess_container.h>
 #include "composite_module_loader.h"
-#include "module_format_loader.h"
-#include "qt_plugin_format_loader.h"
+#include <logos_module_loader/module_format_loader.h>
+#include <logos_module_loader_qt/qt_plugin_format_loader.h>
 #include <memory>
 
 class SubprocessManager : public LogosCore::CompositeModuleLoader {
