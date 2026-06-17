@@ -6,6 +6,15 @@ The core runtime library for the Logos modular application platform. Provides `l
 - **[logos-basecamp](https://github.com/logos-co/logos-basecamp)** — the desktop GUI application shell
 - **[logos-logoscore-cli](https://github.com/logos-co/logos-logoscore-cli)** — the headless CLI runtime (`logoscore`)
 
+## Composed from
+
+The runtime pulls its module-loading behaviour from a few separate repos so each
+piece can be swapped independently:
+
+- **[logos-capability-module](https://github.com/logos-co/logos-capability-module)** — issues the auth tokens that gate inter-module calls.
+- **[logos-container](https://github.com/logos-co/logos-container)** — the container interface (*where/how* a module runs); current default is the subprocess implementation: **[logos-container-subprocess](https://github.com/logos-co/logos-container-subprocess)** (one OS process per module).
+- **[logos-module-loader](https://github.com/logos-co/logos-module-loader)** — the format-loader interface (*what kind* of module); current default is : **[logos-module-loader-qt](https://github.com/logos-co/logos-module-loader-qt)**.
+
 ## How to Build
 
 The project uses a Nix flake for reproducible builds with a modular structure:
@@ -92,10 +101,21 @@ The nix build system is organized into modular files in the `/nix` directory:
 
 #### Local Development
 
-To use a local `logos-cpp-sdk` repo:
+To build against a local checkout of a dependency, override its input. For example the SDK:
 
 ```bash
 nix build --override-input logos-cpp-sdk path:../logos-cpp-sdk
+```
+
+The container and format-loader abstractions live in their own repos, consumed
+as inputs the same way `process-stats` is. To build against local checkouts:
+
+```bash
+nix build \
+  --override-input logos-container path:../logos-container \
+  --override-input logos-container-subprocess path:../logos-container-subprocess \
+  --override-input logos-module-loader path:../logos-module-loader \
+  --override-input logos-module-loader-qt path:../logos-module-loader-qt
 ```
 
 ## Library API

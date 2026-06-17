@@ -2,8 +2,8 @@
 #define COMPOSITE_MODULE_LOADER_H
 
 #include "module_loader.h"
-#include "module_container.h"
-#include "module_format_loader.h"
+#include <logos_container/module_container.h>
+#include <logos_module_loader/module_format_loader.h>
 #include <memory>
 
 namespace LogosCore {

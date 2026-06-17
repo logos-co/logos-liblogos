@@ -12,7 +12,12 @@ class ModuleRegistry;
 namespace ModuleManager {
     ModuleRegistry& registry();
 
-    // Access the loader registry (e.g. for tests that need to install a FakeModuleLoader).
+    // Access the loader registry. Frontends can register their own loaders /
+    // containers (Docker, WASM, in-process, ...) before logos_core_start():
+    //     ModuleManager::loaders().registerLoader(myLoader);
+    // Loaders are consulted in registration order, or pinned per-module via
+    // loaderConfig["id"]. They compose with the built-in subprocess default
+    // (see module_manager.cpp). Also used by tests to install a FakeModuleLoader.
     LogosCore::ModuleLoaderRegistry& loaders();
 
     void setModulesDir(const char* modules_dir);

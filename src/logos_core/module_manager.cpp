@@ -4,8 +4,8 @@
 #include "dependency_resolver.h"
 #include "module_loader_registry.h"
 #include "composite_module_loader.h"
-#include "containers/subprocess/subprocess_container.h"
-#include "module_loaders/module_loader_qt/qt_plugin_format_loader.h"
+#include <logos_container_subprocess/subprocess_container.h>
+#include <logos_module_loader_qt/qt_plugin_format_loader.h>
 #include <spdlog/spdlog.h>
 #include <nlohmann/json.hpp>
 #include <algorithm>
@@ -70,6 +70,16 @@ namespace {
     const std::vector<std::string> kExemptTargets =
         {"capability_module", "core", "core_service"};
 
+    // Built-in default loader: subprocess container + module format loader.
+    // This is the one place the core names a *specific* container, and the only
+    // reason liblogos build-depends on logos-container-subprocess (for now).
+    //
+    // Frontends can register additional loaders today via
+    // ModuleManager::loaders().registerLoader(...). To remove this default
+    // entirely (core depends only on the logos-container contract; frontends
+    // own all registration): start empty here, drop the static
+    // SubprocessContainer fallback in unloadModuleInternal below, and move this
+    // construction into each frontend's startup.
     LogosCore::ModuleLoaderRegistry& loaderRegistry() {
         static LogosCore::ModuleLoaderRegistry reg;
         static std::once_flag initFlag;

@@ -1,5 +1,4 @@
 #include "module_registry.h"
-#include "module_name_validation.h"
 #include <spdlog/spdlog.h>
 #include <cassert>
 #include <deque>
@@ -9,6 +8,29 @@
 #include <unordered_set>
 #include <module_lib/module_lib.h>
 #include <package_manager_lib.h>
+
+namespace logos {
+
+// See the declaration in module_registry.h for the rule and why it lives at
+// this trust boundary. Charset already excludes "." and ".."; they are
+// re-checked defensively for clarity.
+bool isValidModuleName(const std::string& name) {
+    if (name.empty() || name.size() > 64)
+        return false;
+    for (unsigned char c : name) {
+        const bool ok = (c >= 'a' && c <= 'z') ||
+                        (c >= 'A' && c <= 'Z') ||
+                        (c >= '0' && c <= '9') ||
+                        c == '_' || c == '-';
+        if (!ok)
+            return false;
+    }
+    if (name == "." || name == "..")
+        return false;
+    return true;
+}
+
+}  // namespace logos
 
 static PackageManagerLib& packageManagerInstance() {
     static PackageManagerLib instance;
@@ -128,14 +150,12 @@ std::string ModuleRegistry::processModuleInternal(const std::string& modulePath,
     const std::string& name = trustedName.empty() ? embedded : trustedName;
 
     // The module name comes from untrusted plugin JSON metadata and later
-    // becomes a filesystem/socket path segment (the token socket
-    // "logos_token_<name>" and the instance-persistence dir). Reject any
-    // name that is not a valid module identifier here, at the trust
-    // boundary, so a crafted name like "x/../../victim" cannot escape the
-    // temp/data dir and drive QLocalServer::removeServer() into unlinking
-    // an attacker-chosen file. The shared allowlist (logos::isValidModuleName,
-    // module_name_validation.h) is the single source of truth, so every
-    // downstream socket sink inherits the same guarantee.
+    // becomes the registry map key, the LogosAPI RPC target, and the
+    // instance-persistence directory segment. Reject any name that is not a
+    // valid module identifier here, at the trust boundary, so a crafted name
+    // like "x/../../victim" cannot escape the data dir (CWE-22) or collide
+    // with another module's key. isValidModuleName is the single source of
+    // truth, so every downstream sink inherits the same guarantee.
     if (!logos::isValidModuleName(name)) {
         spdlog::warn("Rejecting module with invalid name '{}' from {}", name, modulePath);
         return {};

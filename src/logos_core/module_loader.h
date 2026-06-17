@@ -1,48 +1,24 @@
 #ifndef MODULE_LOADER_H
 #define MODULE_LOADER_H
 
-#include <any>
+#include <logos_container/module_descriptor.h>
 #include <cstdint>
 #include <functional>
 #include <optional>
 #include <string>
 #include <unordered_map>
-#include <vector>
-#include <nlohmann/json.hpp>
 
 // Qt-free abstract interface for module loading strategies.
 // An implementation decides *how* a module is loaded, isolated, and communicated with.
 // The core (ModuleManager) decides *what* to load and *when*.
+//
+// ModuleDescriptor / LoadedModuleHandle — the value types passed across this
+// interface and the container boundary — live in the logos-container contract
+// package (<logos_container/module_descriptor.h>), since the ModuleContainer
+// interface there needs them too. The loader strategy itself is a core concern
+// and stays here.
 
 namespace LogosCore {
-
-// Describes a module that the core wants to load. Passed to ModuleLoader::load().
-struct ModuleDescriptor {
-    std::string name;
-    std::string path;                      // path to the module binary/bundle/wasm/etc.
-    std::string format;                    // "qt-plugin", "wasm", "" (empty = default)
-    std::vector<std::string> dependencies;
-    std::string instancePersistencePath;   // empty if not configured
-    std::vector<std::string> modulesDirs;  // directories siblings are looked up in
-    nlohmann::json rawMetadata;            // metadata parsed from manifest.json
-    nlohmann::json loaderConfig;           // optional: {"id":"docker","image":"..."}, etc.
-
-    // Per-module transport set, serialized as JSON (see
-    // logos-cpp-sdk/cpp/logos_transport_config_json.h for the wire
-    // shape). Empty = inherit the global default (LocalSocket only).
-    // Threaded through to the child subprocess by ModuleLoader
-    // implementations so its LogosAPIProvider binds every transport
-    // in the set rather than only the global default.
-    std::string transportSetJson;
-};
-
-// A handle to a successfully loaded module. Stored in ModuleRegistry (ModuleInfo).
-struct LoadedModuleHandle {
-    std::string name;
-    int64_t pid = -1;      // -1 when not process-based (in-proc, wasm, remote, etc.)
-    std::string endpoint;  // transport-specific URI, e.g. "qtro+unix://my_module"
-    std::any opaque;       // loader-private state (optional)
-};
 
 // Abstract base: one instance per loader kind, shared across all modules it manages.
 // All implementations must be Qt-free at the interface level.

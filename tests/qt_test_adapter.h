@@ -12,12 +12,7 @@
 
 #include "module_manager.h"
 #include "module_registry.h"
-#include "containers/subprocess/subprocess_manager.h"
-#include "containers/subprocess/token_receiver.h"
-
-#include <QByteArray>
-#include <QLocalServer>
-#include <QString>
+#include "subprocess_manager.h"
 
 #include <cstdint>
 #include <cstring>
@@ -162,12 +157,6 @@ inline int logos_core_start_process(const char* name,
                                            noopCallbacks) ? 1 : 0;
 }
 
-inline int logos_core_send_token(const char* name, const char* token)
-{
-    if (!name || !token) return 0;
-    return SubprocessManager::sendTokenToProcess(std::string(name), std::string(token)) ? 1 : 0;
-}
-
 inline int logos_core_has_process(const char* name)
 {
     if (!name) return 0;
@@ -189,38 +178,4 @@ inline void logos_core_terminate_process(const char* name)
 inline void logos_core_clear_processes()
 {
     SubprocessManager::clearAll();
-}
-
-// ---------------------------------------------------------------------------
-// Token receiver
-// ---------------------------------------------------------------------------
-
-inline char* logos_core_receive_auth_token(const char* module_name)
-{
-    if (!module_name) {
-        char* empty = new char[1];
-        empty[0] = '\0';
-        return empty;
-    }
-    std::string token = QtTokenReceiver::receiveAuthToken(std::string(module_name));
-    char* result = new char[token.size() + 1];
-    memcpy(result, token.c_str(), token.size() + 1);
-    return result;
-}
-
-inline void logos_core_create_stale_token_socket(const char* module_name)
-{
-    if (!module_name) return;
-    // Must match the scheme in QtTokenReceiver / SubprocessManager: the socket
-    // name is scoped by LOGOS_INSTANCE_ID when it is set.
-    const QByteArray instanceId = qgetenv("LOGOS_INSTANCE_ID");
-    QString socketName = instanceId.isEmpty()
-        ? QString("logos_token_%1").arg(QString::fromUtf8(module_name))
-        : QString("logos_token_%1_%2")
-              .arg(QString::fromUtf8(module_name))
-              .arg(QString::fromUtf8(instanceId));
-    QLocalServer::removeServer(socketName);
-    QLocalServer server;
-    server.listen(socketName);
-    server.close();
 }

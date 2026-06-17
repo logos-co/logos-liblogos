@@ -18,9 +18,6 @@ find_package(nlohmann_json REQUIRED)
 # OpenSSL needed transitively by logos_sdk (plain-C++ TCP+SSL transport)
 find_package(OpenSSL REQUIRED)
 
-# Find CLI11
-find_package(CLI11 REQUIRED)
-
 # Find spdlog
 find_package(spdlog REQUIRED)
 
@@ -59,19 +56,14 @@ include(GoogleTest)
 # Add tests subdirectory
 add_subdirectory(tests)
 
-# Install rules
-install(TARGETS logos_core logos_host_qt
+# Install rules. The logos_host_qt binary (and its logos_host symlink) now live
+# in logos-module-loader-qt; liblogos installs only the core library here, and
+# bin.nix re-exports the host binary from that package so frontends are
+# unaffected.
+install(TARGETS logos_core
     LIBRARY DESTINATION lib
-    RUNTIME DESTINATION bin
     ARCHIVE DESTINATION lib
 )
-
-# Compatibility symlink: logos_host -> logos_host_qt so downstream consumers keep working
-install(CODE "
-  execute_process(COMMAND \${CMAKE_COMMAND} -E create_symlink
-    logos_host_qt
-    \${CMAKE_INSTALL_PREFIX}/bin/logos_host)
-")
 
 # Install headers
 install(FILES src/logos_core/logos_core.h

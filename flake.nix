@@ -13,10 +13,22 @@
     logos-capability-module.url = "github:logos-co/logos-capability-module";
     logos-module.url = "github:logos-co/logos-module";
     process-stats.url = "github:logos-co/process-stats";
+    logos-container.url = "github:logos-co/logos-container/abstract_container";
+    logos-container-subprocess.url = "github:logos-co/logos-container-subprocess/abstract_container";
+    logos-container-subprocess.inputs.logos-container.follows = "logos-container";
+    logos-module-loader.url = "github:logos-co/logos-module-loader/abstract_module_loader";
+    logos-module-loader.inputs.logos-container.follows = "logos-container";
+    logos-module-loader-qt.url = "github:logos-co/logos-module-loader-qt/abstract_module_loader";
+    logos-module-loader-qt.inputs.logos-container.follows = "logos-container";
+    logos-module-loader-qt.inputs.logos-module-loader.follows = "logos-module-loader";
+    logos-module-loader-qt.inputs.logos-cpp-sdk.follows = "logos-cpp-sdk";
+    logos-module-loader-qt.inputs.logos-protocol.follows = "logos-protocol";
+    logos-module-loader-qt.inputs.logos-qt-sdk.follows = "logos-qt-sdk";
+    logos-module-loader-qt.inputs.logos-module.follows = "logos-module";
     logos-package-manager.url = "github:logos-co/logos-package-manager";
   };
 
-  outputs = { self, nixpkgs, logos-nix, logos-cpp-sdk, logos-protocol, logos-qt-sdk, logos-capability-module, logos-module, logos-package-manager, process-stats }:
+  outputs = { self, nixpkgs, logos-nix, logos-cpp-sdk, logos-protocol, logos-qt-sdk, logos-capability-module, logos-module, logos-package-manager, process-stats, logos-container, logos-container-subprocess, logos-module-loader, logos-module-loader-qt }:
 
     let
       systems = [ "aarch64-darwin" "x86_64-darwin" "aarch64-linux" "x86_64-linux" ];
@@ -29,17 +41,21 @@
         capabilityModule = logos-capability-module.packages.${system}.default;
         logosModule = logos-module.packages.${system}.default;
         processStats = process-stats.packages.${system}.default;
+        logosContainer = logos-container.packages.${system}.default;
+        logosContainerSubprocess = logos-container-subprocess.packages.${system}.default;
+        logosModuleLoader = logos-module-loader.packages.${system}.default;
+        logosModuleLoaderQt = logos-module-loader-qt.packages.${system}.default;
         logosPackageManager = logos-package-manager.packages.${system}.lib;
         logosPackageManagerPortable = logos-package-manager.packages.${system}.lib-portable;
       });
     in
     {
-      packages = forAllSystems ({ pkgs, system, logosSdk, logosProtocolPkg, logosQtSdk, capabilityModule, logosModule, processStats, logosPackageManager, logosPackageManagerPortable }:
+      packages = forAllSystems ({ pkgs, system, logosSdk, logosProtocolPkg, logosQtSdk, capabilityModule, logosModule, processStats, logosContainer, logosContainerSubprocess, logosModuleLoader, logosModuleLoaderQt, logosPackageManager, logosPackageManagerPortable }:
         let
           # Common configuration (dev, default)
-          common = import ./nix/default.nix { inherit pkgs logosSdk logosProtocolPkg logosQtSdk logosModule processStats logosPackageManager; };
+          common = import ./nix/default.nix { inherit pkgs logosSdk logosProtocolPkg logosQtSdk logosModule processStats logosContainer logosContainerSubprocess logosModuleLoader logosModuleLoaderQt logosPackageManager; };
           # Common configuration (portable)
-          commonPortable = import ./nix/default.nix { inherit pkgs logosSdk logosProtocolPkg logosQtSdk logosModule processStats; logosPackageManager = logosPackageManagerPortable; portableBuild = true; };
+          commonPortable = import ./nix/default.nix { inherit pkgs logosSdk logosProtocolPkg logosQtSdk logosModule processStats logosContainer logosContainerSubprocess logosModuleLoader logosModuleLoaderQt; logosPackageManager = logosPackageManagerPortable; portableBuild = true; };
           src = ./.;
 
           # Shared build that compiles everything (dev)
@@ -52,13 +68,13 @@
           lib = import ./nix/lib.nix { inherit pkgs common build; };
           modules = import ./nix/modules.nix { inherit pkgs common capabilityModule; };
           modulesPortable = import ./nix/modules.nix { inherit pkgs capabilityModule; common = commonPortable; portableBuild = true; };
-          bin = import ./nix/bin.nix { inherit pkgs common build lib modules; };
+          bin = import ./nix/bin.nix { inherit pkgs common build lib modules logosModuleLoaderQt; };
           include = import ./nix/include.nix { inherit pkgs common src logosSdk; inherit logosProtocolPkg logosQtSdk; };
           tests = import ./nix/tests.nix { inherit pkgs common build; };
 
           # Portable package components
           libPortable = import ./nix/lib.nix { inherit pkgs; common = commonPortable; build = buildPortable; };
-          binPortable = import ./nix/bin.nix { inherit pkgs; common = commonPortable; build = buildPortable; lib = libPortable; modules = modulesPortable; };
+          binPortable = import ./nix/bin.nix { inherit pkgs; common = commonPortable; build = buildPortable; lib = libPortable; modules = modulesPortable; logosModuleLoaderQt = logosModuleLoaderQt; };
           includePortable = import ./nix/include.nix { inherit pkgs src logosSdk; inherit logosProtocolPkg logosQtSdk; common = commonPortable; };
 
           # Combined package (dev)
