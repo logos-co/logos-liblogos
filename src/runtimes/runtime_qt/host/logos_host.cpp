@@ -140,6 +140,23 @@ void installCrashHandler(const char* moduleName)
 
 int main(int argc, char *argv[])
 {
+#ifndef _WIN32
+    // Isolate this module subprocess into its own session/process group, up
+    // front. The host is spawned in the daemon's process group, which is in turn
+    // the group of whatever launched the daemon (a shell, a script). Leaving the
+    // module tree in that shared group means tearing it down on shutdown — or any
+    // process-group signal aimed at the daemon — leaks into the launcher and can
+    // kill the shell driving it (a script's teardown step dies with exit -15 on
+    // Linux). The daemon itself deliberately stays in the foreground / its
+    // launcher's group so process managers (systemd, Docker) and shells keep
+    // managing it normally; only its workers detach. A freshly forked child is
+    // never a group leader, so setsid() succeeds; on the off chance it doesn't,
+    // setpgid() still gives us an isolated group.
+    if (::setsid() == -1 && errno != EPERM) {
+        ::setpgid(0, 0);
+    }
+#endif
+
     ModuleArgs args = parseCommandLineArgs(argc, argv);
     if (!args.valid) {
         return 1;
