@@ -9,9 +9,13 @@
 #include <csignal>
 #include <cstddef>
 #include <cstdint>
+#include <thread>
 
 #include <execinfo.h>
 #include <unistd.h>
+#ifdef __linux__
+#include <sys/prctl.h>
+#endif
 
 namespace {
 
@@ -154,6 +158,40 @@ int main(int argc, char *argv[])
     // setpgid() still gives us an isolated group.
     if (::setsid() == -1 && errno != EPERM) {
         ::setpgid(0, 0);
+    }
+#endif
+
+#ifndef _WIN32
+    // Tie this worker's lifetime to the daemon's. If the daemon (our parent)
+    // dies WITHOUT cleaning us up — i.e. it crashes — make sure we don't linger
+    // as an orphaned process. This is the explicit replacement for the
+    // controlling-terminal SIGHUP that setsid() above intentionally detached us
+    // from: graceful shutdown still kills us per-PID from the daemon, and now a
+    // daemon *crash* cleans us up too.
+    {
+        const pid_t daemon_pid = ::getppid();
+#ifdef __linux__
+        // Kernel-level + immediate. PR_SET_PDEATHSIG is delivered when the
+        // thread that forked us exits; here that is the daemon's long-lived
+        // event-loop/io thread, so it only fires on real daemon death.
+        ::prctl(PR_SET_PDEATHSIG, SIGKILL);
+#endif
+        // Race guard: if the daemon died during/just before the setup above, our
+        // parent has already changed (we've been reparented) — exit now. We
+        // compare against the daemon's actual pid, NOT pid 1, so a daemon that is
+        // itself PID 1 (e.g. in a container) is handled correctly.
+        if (::getppid() != daemon_pid) {
+            _exit(0);
+        }
+        // Portable watchdog (covers platforms without PR_SET_PDEATHSIG, e.g.
+        // macOS, and backs it up elsewhere): if our parent changes — the daemon
+        // died and the OS reparented us — exit so we never leak.
+        std::thread([daemon_pid] {
+            while (::getppid() == daemon_pid) {
+                ::sleep(1);
+            }
+            _exit(0);
+        }).detach();
     }
 #endif
 
