@@ -1,7 +1,7 @@
 #include "command_line_parser.h"
 #include "module_initializer.h"
 #include "qt/qt_app.h"
-#include <logos_container_subprocess/token_receiver.h>
+#include "token_source.h"
 #include "logos_api.h"
 #include "interface.h"
 
@@ -149,10 +149,13 @@ int main(int argc, char *argv[])
 
     QtApp::init(argc, argv);
 
-    // Container concern: receive auth token via subprocess IPC (Unix socket).
-    // A different container (Docker, in-process) would deliver the token
-    // through its own channel; the runtime/loader doesn't care how it arrives.
-    std::string authToken = SubprocessTokenReceiver::receive(args.name);
+    // Read the auth token from the channel our container designated via
+    // --token-source (default: stdin). The host is deliberately agnostic to
+    // which container spawned it — it just reads bytes from an OS handle, so it
+    // depends on no container implementation. The subprocess container writes
+    // the token to our stdin; a Docker/sandbox container could pass fd:<n> or
+    // file:<path> instead, with no change here.
+    std::string authToken = TokenSource::read(args.tokenSource);
     if (authToken.empty()) {
         return 1;
     }

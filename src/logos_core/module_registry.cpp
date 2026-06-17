@@ -1,5 +1,5 @@
 #include "module_registry.h"
-#include <logos_container/module_name_validation.h>
+#include "module_name_validation.h"
 #include <spdlog/spdlog.h>
 #include <cassert>
 #include <deque>

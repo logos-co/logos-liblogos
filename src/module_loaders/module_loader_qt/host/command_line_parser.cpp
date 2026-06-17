@@ -17,6 +17,8 @@ ModuleArgs parseCommandLineArgs(int argc, char *argv[])
         "Instance persistence directory for the module");
     app.add_option("--transport-set", result.transportSetJson,
         "Per-module transport set as JSON (logos-cpp-sdk shape); empty = global default");
+    app.add_option("--token-source", result.tokenSource,
+        "Where to read the auth token from: stdin (default), fd:<n>, or file:<path>");
 
     try {
         app.parse(argc, argv);
