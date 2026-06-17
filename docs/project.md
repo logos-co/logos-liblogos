@@ -21,7 +21,6 @@ logos-liblogos/
 │       ├── module_registry.h/cpp        # In-memory registry of discovered/loaded modules
 │       ├── dependency_resolver.h/cpp    # Topological sort with circular dependency detection
 │       ├── module_loader.h              # Abstract ModuleLoader base (Qt-free)
-│       ├── module_name_validation.h     # logos::isValidModuleName allowlist (registry/RPC/persistence)
 │       ├── composite_module_loader.h/cpp # Pairs a container + format loader into a ModuleLoader
 │       └── module_loader_registry.h/cpp  # Registry of ModuleLoader implementations
 │   (the Qt-plugin loader + logos_host_qt binary now live in the external
@@ -83,8 +82,8 @@ it consumes `process-stats`.
   - `logos_host_qt` binary — the child-side host (`logos_host`, `command_line_parser`, `module_initializer`, `qt_app`, `token_source`), linking the full SDK stack + Qt. liblogos no longer builds it; `bin.nix` re-exports it from this package so frontends are unaffected.
 
 The `ModuleLoader` base, the `CompositeModuleLoader` / `ModuleLoaderRegistry`
-orchestration, the `module_name_validation` allowlist, and the `logos_log`
-logging foundation are core concerns and remain in `logos-liblogos`
+orchestration, the `isValidModuleName` allowlist (in `module_registry`), and the
+`logos_log` logging foundation are core concerns and remain in `logos-liblogos`
 (`src/logos_core/` and `src/logging/`).
 
 A test-only `SubprocessManager` shim (`tests/subprocess_manager.h`) composes the
@@ -169,7 +168,7 @@ on a specific container.
 
 **Purpose:** In-memory registry of discovered and loaded modules. Single source of truth for the dependency graph: stores module paths, forward dependencies, and the derived reverse edges (dependents). All public methods are thread-safe: mutating methods acquire a `std::unique_lock` on an internal `std::shared_mutex`; read-only methods acquire a `std::shared_lock`, allowing concurrent reads.
 
-**Trust boundary — module name validation:** A module's name comes verbatim from its (untrusted) embedded plugin metadata and is later used as this map's key, as the RPC target, and as a filesystem path segment for the instance-persistence directory. Prevents this attack (CWE-22): a malicious installed module declares `name='../<x>'`; the `/` or `..` escapes the intended directory when used as a path segment, or collides with another module's registry key / RPC identity. `processModuleInternal()` validates the name with `logos::isValidModuleName` (`src/logos_core/module_name_validation.h`, allowlist `[A-Za-z0-9_-]`, ≤64 bytes, rejects `/`, `..`, etc.) and skips any module whose name is unsafe, so an unsafe name never enters the registry.
+**Trust boundary — module name validation:** A module's name comes verbatim from its (untrusted) embedded plugin metadata and is later used as this map's key, as the RPC target, and as a filesystem path segment for the instance-persistence directory. Prevents this attack (CWE-22): a malicious installed module declares `name='../<x>'`; the `/` or `..` escapes the intended directory when used as a path segment, or collides with another module's registry key / RPC identity. `processModuleInternal()` validates the name with `logos::isValidModuleName` (declared in `src/logos_core/module_registry.h`, allowlist `[A-Za-z0-9_-]`, ≤64 bytes, rejects `/`, `..`, etc.) and skips any module whose name is unsafe, so an unsafe name never enters the registry.
 
 **Data:**
 - `ModuleInfo` struct — holds `path`, `dependencies` (`std::vector<std::string>`), `dependents` (`std::vector<std::string>`, reverse-edge cache), `loaded` flag, `loader` (`std::shared_ptr<ModuleLoader>`), `handle` (`LoadedModuleHandle`)

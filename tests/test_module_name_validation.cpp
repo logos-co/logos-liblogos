@@ -8,15 +8,9 @@
 // containing '/' or ".." would escape the intended directory or collide with
 // another module, so ModuleRegistry::processModuleInternal rejects any name
 // that is not a safe identifier at the trust boundary.
-//
-// (The token handoff no longer derives a filesystem path from the name — it is
-// delivered over the child's stdin pipe by the subprocess container — so the
-// old socket-path Sender/Receiver tests are gone. The allowlist still matters
-// for the registry key / RPC target / persistence path, which is what these
-// tests pin.)
 // =============================================================================
 #include <gtest/gtest.h>
-#include "module_name_validation.h"
+#include "module_registry.h"
 
 #include <string>
 

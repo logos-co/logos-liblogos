@@ -8,6 +8,19 @@
 #include <unordered_map>
 #include <shared_mutex>
 
+namespace logos {
+
+// Allowlist validator for an untrusted module name. The name comes verbatim
+// from plugin metadata and becomes the registry map key, the LogosAPI RPC
+// target, and the instance-persistence directory segment
+// (basePath + "/" + name + "/" + instanceId). Rule: non-empty, <= 64 bytes,
+// every byte in [A-Za-z0-9_-] — so '/', '\\', '.', "..", NUL and whitespace
+// are all rejected, preventing path traversal (CWE-22) and key collision.
+// Enforced at the trust boundary in ModuleRegistry::processModuleInternal.
+bool isValidModuleName(const std::string& name);
+
+}  // namespace logos
+
 struct ModuleInfo {
     std::string path;
     std::vector<std::string> dependencies;

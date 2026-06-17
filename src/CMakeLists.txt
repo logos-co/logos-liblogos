@@ -194,7 +194,6 @@ set(LOGOS_CORE_SOURCES
     logos_core/logos_core.h
     logos_core/module_registry.cpp
     logos_core/module_registry.h
-    logos_core/module_name_validation.h
     logos_core/dependency_resolver.cpp
     logos_core/dependency_resolver.h
     logos_core/access_policy.cpp

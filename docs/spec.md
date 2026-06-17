@@ -144,7 +144,7 @@ A module's `name` originates from its embedded plugin metadata, which is **untru
 
 **The attack (CWE-22):** a malicious module declares `name='../<x>'`. The `/` or `..` escapes the intended directory when the name is used as a path segment (e.g. instance persistence), or collides with another module's registry key / RPC identity.
 
-The core therefore validates the name against an allowlist **at the registry trust boundary** (`ModuleRegistry::processModuleInternal`), so every downstream consumer inherits the guarantee and an unsafe name never enters the registry in the first place. The rule (`logos::isValidModuleName` in `module_name_validation.h`):
+The core therefore validates the name against an allowlist **at the registry trust boundary** (`ModuleRegistry::processModuleInternal`), so every downstream consumer inherits the guarantee and an unsafe name never enters the registry in the first place. The rule (`logos::isValidModuleName`, declared in `module_registry.h`):
 
 - non-empty and at most 64 bytes;
 - every byte is `[A-Za-z0-9_-]` — rejecting `/`, `\`, whitespace, NUL, `.` and any other separator;
@@ -166,7 +166,7 @@ A module whose name fails validation is dropped during discovery (logged and ski
 6. Multiple module directories can be configured
 
 The module **name** comes from untrusted plugin JSON metadata and later becomes the registry key, the RPC target, and a filesystem path segment for the instance-persistence directory. It is therefore validated against an allowlist at the trust
-boundary: during processing (`ModuleRegistry::processModuleInternal`) a module whose name is not a valid identifier — empty, `.`, `..`, longer than 64 bytes, or containing any byte outside `[A-Za-z0-9_-]` (so any path separator, whitespace or embedded NUL) — is rejected and never added to the registry. This prevents a crafted name such as `seg/../victim` from escaping the persistence directory or colliding with another module's identity. See `logos::isValidModuleName` (`src/logos_core/module_name_validation.h`) and the [Module name validation](#module-name-validation) section.
+boundary: during processing (`ModuleRegistry::processModuleInternal`) a module whose name is not a valid identifier — empty, `.`, `..`, longer than 64 bytes, or containing any byte outside `[A-Za-z0-9_-]` (so any path separator, whitespace or embedded NUL) — is rejected and never added to the registry. This prevents a crafted name such as `seg/../victim` from escaping the persistence directory or colliding with another module's identity. See `logos::isValidModuleName` (declared in `src/logos_core/module_registry.h`, defined in `module_registry.cpp`) and the [Module name validation](#module-name-validation) section.
 
 #### Loading
 
