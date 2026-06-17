@@ -86,6 +86,30 @@ orchestration, the `isValidModuleName` allowlist (in `module_registry`), and the
 `logos_log` logging foundation are core concerns and remain in `logos-liblogos`
 (`src/logos_core/` and `src/logging/`).
 
+The core names **no concrete** container or loader — not in its C++ and not in
+its CMake. It builds its default by calling the contract factory seams
+`LogosCore::makeContainer()` (`<logos_container/container_factory.h>`) and
+`LogosCore::makeFormatLoader()` (`<logos_module_loader/format_loader_factory.h>`)
+and composing the results into a `CompositeModuleLoader`. Each seam's
+*definition* is provided by whichever implementation library is linked in:
+`logos-container-subprocess` defines `makeContainer()` → `SubprocessContainer`,
+`logos-module-loader-qt` defines `makeFormatLoader()` → `QtPluginFormatLoader`.
+
+**Which implementation is the default is chosen in nix**, not in the source.
+Each implementation package ships a generic **CMake config package** —
+`LogosContainerImpl` (from `logos-container-subprocess`) and
+`LogosFormatLoaderImpl` (from `logos-module-loader-qt`) — that defines an
+imported target (`LogosContainerImpl::impl` / `LogosFormatLoaderImpl::impl`)
+carrying its static library *and its own transitive deps* (Boost, spdlog, …).
+`src/CMakeLists.txt` just does `find_package(LogosContainerImpl REQUIRED)` and
+links the target; it knows neither the library name nor the dependencies.
+`nix/default.nix` puts the `containerImpl` / `formatLoaderImpl` packages in
+`buildInputs` (so they land on `CMAKE_PREFIX_PATH`) — no impl flags at all; the
+packages are chosen in `flake.nix` (default `logos-container-subprocess` /
+`logos-module-loader-qt`). Swapping to a different container (Docker, in-process)
+is a one-line change in `flake.nix` pointing at a package that provides the same
+config + factory symbol — no C++, CMake, or nix-flag edit.
+
 A test-only `SubprocessManager` shim (`tests/subprocess_manager.h`) composes the
 external `SubprocessContainer` with `QtPluginFormatLoader` so test code that
 references the old name keeps compiling. It lives in `tests/` (not `src/`)
@@ -297,7 +321,7 @@ A test-only `SubprocessManager` header (`tests/subprocess_manager.h`) inherits f
 
 **Files:** `src/logos_core/composite_module_loader.h`, `src/logos_core/composite_module_loader.cpp`
 
-**Purpose:** Implements the `ModuleLoader` interface by pairing a `ModuleContainer` (where/how to run) with a `ModuleFormatLoader` (what to load). The default registration in `ModuleManager` creates `CompositeModuleLoader(SubprocessContainer, QtPluginFormatLoader)` — both from external packages. `id()` returns `"qt-plugin+subprocess"`.
+**Purpose:** Implements the `ModuleLoader` interface by pairing a `ModuleContainer` (where/how to run) with a `ModuleFormatLoader` (what to load). The default registration in `ModuleManager` composes `CompositeModuleLoader(makeContainer(), makeFormatLoader())` — the two contract factory seams, whose concrete implementations are bound at link time (subprocess + Qt-plugin by default). The core never names the concrete types. `id()` returns `"qt-plugin+subprocess"`.
 
 ### ProcessStats (external dependency)
 

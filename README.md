@@ -113,10 +113,13 @@ as inputs the same way `process-stats` is. To build against local checkouts:
 ```bash
 nix build \
   --override-input logos-container path:../logos-container \
-  --override-input logos-container-subprocess path:../logos-container-subprocess \
   --override-input logos-module-loader path:../logos-module-loader \
-  --override-input logos-module-loader-qt path:../logos-module-loader-qt
+  --override-input default-container path:../logos-container-subprocess \
+  --override-input default-module-loader path:../logos-module-loader-qt
 ```
+
+(`default-container` / `default-module-loader` are the input *slots* for the
+built-in default implementations; they point at the subprocess / qt-plugin repos.)
 
 ## Library API
 
@@ -187,6 +190,36 @@ Build the portable variant with `nix build '.#portable'`.
 ## Supported Platforms
 - macOS (aarch64-darwin, x86_64-darwin)
 - Linux (aarch64-linux, x86_64-linux)
+
+## Building with a different container or module loader
+
+The container and format-loader are selected by which package liblogos links —
+not by its C++ or CMake. To use your own, build a package that:
+
+- implements the contract interface (`LogosCore::ModuleContainer` from
+  `logos-container`, or `LogosCore::ModuleFormatLoader` from `logos-module-loader`),
+- defines the factory symbol (`LogosCore::makeContainer()` /
+  `LogosCore::makeFormatLoader()`), and
+- ships the generic CMake config (`LogosContainerImpl` / `LogosFormatLoaderImpl`,
+  exposing the `…::impl` target).
+
+(Copy the structure from `logos-container-subprocess` / `logos-module-loader-qt`.)
+Then point liblogos at it by overriding the input slot:
+
+```bash
+# different container
+nix build '.#logos-liblogos' --override-input default-container <flake-ref>
+# different format loader
+nix build '.#logos-liblogos' --override-input default-module-loader <flake-ref>
+```
+
+`<flake-ref>` is e.g. `github:you/your-impl` or `path:../your-impl`; it must expose
+`packages.<system>.default` carrying that config + factory symbol. For a permanent
+default, add it as an input and set `containerImpl` / `formatLoaderImpl` in
+`flake.nix`. Container and loader are independent — swap either or both.
+
+Note: the format-loader package also provides the `logos_host` binary that
+`bin.nix` re-exports, so a replacement loader must ship its own host binary.
 
 ## Disclaimer
 This repository is part of an experimental development environment. Components are under active development and may be incomplete, unstable, modified or discontinued at any time.

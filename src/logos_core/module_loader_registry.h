@@ -28,6 +28,12 @@ public:
     // Fan-out terminateAll() to every registered loader.
     void terminateAll();
 
+    // Terminate a single module by name: calls terminate(name) on the first
+    // registered loader that reports hasModule(name). Returns true if one
+    // matched. Used by the unload path when no loader was recorded for the
+    // module (e.g. loaded via markLoaded(name) directly).
+    bool terminate(const std::string& name);
+
     // Aggregate getAllPids() across all loaders. Later-registered loaders win on
     // name collision (should not happen in practice).
     std::unordered_map<std::string, int64_t> getAllPids() const;

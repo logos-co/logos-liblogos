@@ -14,13 +14,18 @@
     logos-module.url = "github:logos-co/logos-module";
     process-stats.url = "github:logos-co/process-stats";
     logos-container.url = "github:logos-co/logos-container";
-    logos-container-subprocess.url = "github:logos-co/logos-container-subprocess";
     logos-module-loader.url = "github:logos-co/logos-module-loader";
-    logos-module-loader-qt.url = "github:logos-co/logos-module-loader-qt";
+    # The built-in default container + format-loader implementations. Named for
+    # their ROLE rather than the backing repo, so `--override-input
+    # default-container <other>` reads clearly. They point at the subprocess /
+    # qt-plugin repos by default; swap the url (or override the input) to change
+    # the default implementation.
+    default-container.url = "github:logos-co/logos-container-subprocess";
+    default-module-loader.url = "github:logos-co/logos-module-loader-qt";
     logos-package-manager.url = "github:logos-co/logos-package-manager";
   };
 
-  outputs = { self, nixpkgs, logos-nix, logos-cpp-sdk, logos-protocol, logos-qt-sdk, logos-capability-module, logos-module, logos-package-manager, process-stats, logos-container, logos-container-subprocess, logos-module-loader, logos-module-loader-qt }:
+  outputs = { self, nixpkgs, logos-nix, logos-cpp-sdk, logos-protocol, logos-qt-sdk, logos-capability-module, logos-module, logos-package-manager, process-stats, logos-container, default-container, logos-module-loader, default-module-loader }:
 
     let
       systems = [ "aarch64-darwin" "x86_64-darwin" "aarch64-linux" "x86_64-linux" ];
@@ -34,20 +39,34 @@
         logosModule = logos-module.packages.${system}.default;
         processStats = process-stats.packages.${system}.default;
         logosContainer = logos-container.packages.${system}.default;
-        logosContainerSubprocess = logos-container-subprocess.packages.${system}.default;
         logosModuleLoader = logos-module-loader.packages.${system}.default;
-        logosModuleLoaderQt = logos-module-loader-qt.packages.${system}.default;
+        defaultContainer = default-container.packages.${system}.default;
+        defaultModuleLoader = default-module-loader.packages.${system}.default;
         logosPackageManager = logos-package-manager.packages.${system}.lib;
         logosPackageManagerPortable = logos-package-manager.packages.${system}.lib-portable;
       });
     in
     {
-      packages = forAllSystems ({ pkgs, system, logosSdk, logosProtocolPkg, logosQtSdk, capabilityModule, logosModule, processStats, logosContainer, logosContainerSubprocess, logosModuleLoader, logosModuleLoaderQt, logosPackageManager, logosPackageManagerPortable }:
+      packages = forAllSystems ({ pkgs, system, logosSdk, logosProtocolPkg, logosQtSdk, capabilityModule, logosModule, processStats, logosContainer, logosModuleLoader, defaultContainer, defaultModuleLoader, logosPackageManager, logosPackageManagerPortable }:
         let
+          # The built-in default container + format-loader implementations — the
+          # single place the default is chosen. Each is just the package; it
+          # ships a generic CMake config (LogosContainerImpl / LogosFormatLoaderImpl)
+          # that carries its library and deps, which liblogos find_package's. Swap
+          # an entry to change the default — no C++, CMake, or nix-flag change.
+          containerImpl = defaultContainer;
+          formatLoaderImpl = defaultModuleLoader;
+
           # Common configuration (dev, default)
-          common = import ./nix/default.nix { inherit pkgs logosSdk logosProtocolPkg logosQtSdk logosModule processStats logosContainer logosContainerSubprocess logosModuleLoader logosModuleLoaderQt logosPackageManager; };
+          common = import ./nix/default.nix {
+            inherit pkgs logosSdk logosProtocolPkg logosQtSdk logosModule processStats logosContainer logosModuleLoader logosPackageManager containerImpl formatLoaderImpl;
+          };
           # Common configuration (portable)
-          commonPortable = import ./nix/default.nix { inherit pkgs logosSdk logosProtocolPkg logosQtSdk logosModule processStats logosContainer logosContainerSubprocess logosModuleLoader logosModuleLoaderQt; logosPackageManager = logosPackageManagerPortable; portableBuild = true; };
+          commonPortable = import ./nix/default.nix {
+            inherit pkgs logosSdk logosProtocolPkg logosQtSdk logosModule processStats logosContainer logosModuleLoader containerImpl formatLoaderImpl;
+            logosPackageManager = logosPackageManagerPortable;
+            portableBuild = true;
+          };
           src = ./.;
 
           # Shared build that compiles everything (dev)
@@ -60,13 +79,13 @@
           lib = import ./nix/lib.nix { inherit pkgs common build; };
           modules = import ./nix/modules.nix { inherit pkgs common capabilityModule; };
           modulesPortable = import ./nix/modules.nix { inherit pkgs capabilityModule; common = commonPortable; portableBuild = true; };
-          bin = import ./nix/bin.nix { inherit pkgs common build lib modules logosModuleLoaderQt; };
+          bin = import ./nix/bin.nix { inherit pkgs common build lib modules formatLoaderImpl; };
           include = import ./nix/include.nix { inherit pkgs common src logosSdk; inherit logosProtocolPkg logosQtSdk; };
           tests = import ./nix/tests.nix { inherit pkgs common build; };
 
           # Portable package components
           libPortable = import ./nix/lib.nix { inherit pkgs; common = commonPortable; build = buildPortable; };
-          binPortable = import ./nix/bin.nix { inherit pkgs; common = commonPortable; build = buildPortable; lib = libPortable; modules = modulesPortable; logosModuleLoaderQt = logosModuleLoaderQt; };
+          binPortable = import ./nix/bin.nix { inherit pkgs formatLoaderImpl; common = commonPortable; build = buildPortable; lib = libPortable; modules = modulesPortable; };
           includePortable = import ./nix/include.nix { inherit pkgs src logosSdk; inherit logosProtocolPkg logosQtSdk; common = commonPortable; };
 
           # Combined package (dev)
