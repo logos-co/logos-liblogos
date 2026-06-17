@@ -13,18 +13,10 @@
     logos-capability-module.url = "github:logos-co/logos-capability-module";
     logos-module.url = "github:logos-co/logos-module";
     process-stats.url = "github:logos-co/process-stats";
-    logos-container.url = "github:logos-co/logos-container/abstract_container";
-    logos-container-subprocess.url = "github:logos-co/logos-container-subprocess/abstract_container";
-    logos-container-subprocess.inputs.logos-container.follows = "logos-container";
-    logos-module-loader.url = "github:logos-co/logos-module-loader/abstract_module_loader";
-    logos-module-loader.inputs.logos-container.follows = "logos-container";
-    logos-module-loader-qt.url = "github:logos-co/logos-module-loader-qt/abstract_module_loader";
-    logos-module-loader-qt.inputs.logos-container.follows = "logos-container";
-    logos-module-loader-qt.inputs.logos-module-loader.follows = "logos-module-loader";
-    logos-module-loader-qt.inputs.logos-cpp-sdk.follows = "logos-cpp-sdk";
-    logos-module-loader-qt.inputs.logos-protocol.follows = "logos-protocol";
-    logos-module-loader-qt.inputs.logos-qt-sdk.follows = "logos-qt-sdk";
-    logos-module-loader-qt.inputs.logos-module.follows = "logos-module";
+    logos-container.url = "github:logos-co/logos-container";
+    logos-container-subprocess.url = "github:logos-co/logos-container-subprocess";
+    logos-module-loader.url = "github:logos-co/logos-module-loader";
+    logos-module-loader-qt.url = "github:logos-co/logos-module-loader-qt";
     logos-package-manager.url = "github:logos-co/logos-package-manager";
   };
 
