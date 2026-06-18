@@ -22,18 +22,22 @@ add_executable(logos_core_tests
 )
 
 # Imported container/loader targets the tests drive via SubprocessManager /
-# CompositeModuleLoader: logos_container (contract), logos_container_subprocess
-# (parent container), logos_module_loader (format-loader contract),
-# logos_module_loader_qt (QtPluginFormatLoader lib). Pulled in transitively via
-# logos_core but linked explicitly for the helpers the tests call. The Qt-plugin
-# loader tests and the TokenSource tests now live in logos-module-loader-qt.
+# CompositeModuleLoader: logos_container + logos_module_loader (the contracts),
+# and the build-selected implementation targets LogosContainerImpl::impl /
+# LogosFormatLoaderImpl::impl (default subprocess + qt — the test shim
+# subprocess_manager.h includes their concrete headers, which the impl configs'
+# include dirs provide). The find_package calls are repeated here because the
+# imported targets created in src/ are not visible in this sibling directory;
+# each config guards with `if(NOT TARGET ...)` so this is safe.
+find_package(LogosContainerImpl REQUIRED)
+find_package(LogosFormatLoaderImpl REQUIRED)
 target_link_libraries(logos_core_tests PRIVATE
     logos_core
     process_stats
     logos_container
-    logos_container_subprocess
+    LogosContainerImpl::impl
     logos_module_loader
-    logos_module_loader_qt
+    LogosFormatLoaderImpl::impl
     GTest::gtest
     Qt${QT_VERSION_MAJOR}::Core
     Qt${QT_VERSION_MAJOR}::Network

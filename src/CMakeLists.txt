@@ -111,34 +111,17 @@ else()
   message(FATAL_ERROR "LOGOS_CONTAINER_ROOT not set or ${LOGOS_CONTAINER_ROOT}/include does not exist")
 endif()
 
-# Find logos-container-subprocess (the process-isolation ModuleContainer).
-# A single Qt-free static lib (the parent-side container) linked into
-# logos_core. There is no child-side library: the child just reads its token
-# from stdin, handled by logos_host's own TokenSource.
-if(DEFINED LOGOS_CONTAINER_SUBPROCESS_ROOT AND EXISTS "${LOGOS_CONTAINER_SUBPROCESS_ROOT}/lib")
-  message(STATUS "Using logos-container-subprocess at ${LOGOS_CONTAINER_SUBPROCESS_ROOT}")
-
-  find_library(LOGOS_CONTAINER_SUBPROCESS_LIBRARY
-    NAMES logos_container_subprocess
-    PATHS "${LOGOS_CONTAINER_SUBPROCESS_ROOT}/lib"
-    NO_DEFAULT_PATH
-  )
-
-  if(NOT LOGOS_CONTAINER_SUBPROCESS_LIBRARY)
-    message(FATAL_ERROR "logos_container_subprocess library not found in ${LOGOS_CONTAINER_SUBPROCESS_ROOT}/lib")
-  endif()
-
-  # Declare the dependency on the header-only contract and on spdlog/Boost so
-  # CMake orders the link correctly for GNU ld and pulls them in.
-  add_library(logos_container_subprocess STATIC IMPORTED GLOBAL)
-  set_target_properties(logos_container_subprocess PROPERTIES
-    IMPORTED_LOCATION "${LOGOS_CONTAINER_SUBPROCESS_LIBRARY}"
-    INTERFACE_INCLUDE_DIRECTORIES "${LOGOS_CONTAINER_SUBPROCESS_ROOT}/include"
-    INTERFACE_LINK_LIBRARIES "logos_container;Boost::process;spdlog::spdlog"
-  )
-else()
-  message(FATAL_ERROR "LOGOS_CONTAINER_SUBPROCESS_ROOT not set or ${LOGOS_CONTAINER_SUBPROCESS_ROOT}/lib does not exist")
-endif()
+# Container implementation — selected by the BUILD, not named here.
+#
+# The chosen implementation package ships a generic CMake config package
+# (LogosContainerImpl) that defines the imported target LogosContainerImpl::impl,
+# carrying its static library AND its own transitive deps (Boost, spdlog, ...).
+# liblogos just asks for "the container implementation" by that generic name and
+# links the target — it knows neither the library name nor the dependencies. nix
+# puts the chosen package on CMAKE_PREFIX_PATH (default logos-container-subprocess);
+# switching to another container (Docker, ...) means a package that provides the
+# same config — no edit to this file, the nix flags, or any C++.
+find_package(LogosContainerImpl REQUIRED)
 
 # Find logos-module-loader (the header-only ModuleFormatLoader contract).
 if(DEFINED LOGOS_MODULE_LOADER_ROOT AND EXISTS "${LOGOS_MODULE_LOADER_ROOT}/include")
@@ -153,40 +136,23 @@ else()
   message(FATAL_ERROR "LOGOS_MODULE_LOADER_ROOT not set or ${LOGOS_MODULE_LOADER_ROOT}/include does not exist")
 endif()
 
-# Find logos-module-loader-qt (the QtPluginFormatLoader parent-side lib). The
-# logos_host_qt binary also lives in that package; liblogos only links the lib
-# (into logos_core) and re-exports the binary via bin.nix.
-if(DEFINED LOGOS_MODULE_LOADER_QT_ROOT AND EXISTS "${LOGOS_MODULE_LOADER_QT_ROOT}/lib")
-  message(STATUS "Using logos-module-loader-qt at ${LOGOS_MODULE_LOADER_QT_ROOT}")
-
-  find_library(LOGOS_MODULE_LOADER_QT_LIBRARY
-    NAMES logos_module_loader_qt
-    PATHS "${LOGOS_MODULE_LOADER_QT_ROOT}/lib"
-    NO_DEFAULT_PATH
-  )
-
-  if(NOT LOGOS_MODULE_LOADER_QT_LIBRARY)
-    message(FATAL_ERROR "logos_module_loader_qt library not found in ${LOGOS_MODULE_LOADER_QT_ROOT}/lib")
-  endif()
-
-  add_library(logos_module_loader_qt STATIC IMPORTED GLOBAL)
-  set_target_properties(logos_module_loader_qt PROPERTIES
-    IMPORTED_LOCATION "${LOGOS_MODULE_LOADER_QT_LIBRARY}"
-    INTERFACE_INCLUDE_DIRECTORIES "${LOGOS_MODULE_LOADER_QT_ROOT}/include"
-    INTERFACE_LINK_LIBRARIES "logos_module_loader;Boost::filesystem;spdlog::spdlog"
-  )
-else()
-  message(FATAL_ERROR "LOGOS_MODULE_LOADER_QT_ROOT not set or ${LOGOS_MODULE_LOADER_QT_ROOT}/lib does not exist")
-endif()
+# Format-loader implementation — selected by the BUILD (mirrors the container).
+# The chosen package ships a generic CMake config package (LogosFormatLoaderImpl)
+# defining the imported target LogosFormatLoaderImpl::impl with its own deps.
+# Default: logos-module-loader-qt (which also ships the logos_host_qt binary,
+# re-exported via bin.nix — independent of this lib link).
+find_package(LogosFormatLoaderImpl REQUIRED)
 
 
 # Define the library sources.
 # The container contract (ModuleContainer + descriptor value types) lives in
-# logos-container, the subprocess container in logos-container-subprocess, the
-# ModuleFormatLoader contract in logos-module-loader, and the Qt-plugin loader +
-# host binary in logos-module-loader-qt — all linked as imported targets below.
-# The ModuleLoader base, the composite/registry orchestration, and the logging
-# foundation are core concerns and stay here.
+# logos-container and the ModuleFormatLoader contract in logos-module-loader.
+# The concrete container + format-loader implementations are NOT named here:
+# they are linked through the build-selected `LogosContainerImpl::impl` /
+# `LogosFormatLoaderImpl::impl` targets found via find_package above (default
+# subprocess + qt, chosen in nix/default.nix). The ModuleLoader base, the
+# composite/registry orchestration, and the logging foundation are core concerns
+# and stay here.
 set(LOGOS_CORE_SOURCES
     logging/logos_log.cpp
     logging/logos_log.h
@@ -207,10 +173,11 @@ set(LOGOS_CORE_SOURCES
     logos_core/module_loader_registry.h
 )
 
-# The Qt-plugin format loader (QtPluginFormatLoader) and the logos_host_qt host
-# binary now live in logos-module-loader-qt; the ModuleFormatLoader interface
-# lives in logos-module-loader. liblogos links the loader lib (imported below)
-# and re-exports the host binary from that package via bin.nix.
+# The format-loader implementation and the logos_host_qt host binary live in the
+# package the build selects (default logos-module-loader-qt); the
+# ModuleFormatLoader interface lives in logos-module-loader. liblogos links the
+# implementation lib via the find_package'd `LogosFormatLoaderImpl::impl` target
+# and re-exports the host binary from the same package via bin.nix.
 
 # Create the logos core library
 add_library(logos_core SHARED ${LOGOS_CORE_SOURCES})
@@ -251,9 +218,11 @@ else()
 endif()
 
 # Link Qt libraries, SDK, module library, and package-manager library.
-# logos_container_subprocess (the parent-side ModuleContainer) and
-# logos_container (the contract + logging foundation it and logos_core share)
-# are linked here; Boost::process/spdlog satisfy their transitive symbols.
+# The container/format-loader implementations are linked through the generic,
+# build-selected `LogosContainerImpl::impl` / `LogosFormatLoaderImpl::impl`
+# targets (each comes from a find_package config that carries its own deps);
+# `logos_container` is the shared contract. liblogos names no specific
+# implementation here.
 target_link_libraries(logos_core PUBLIC
     Qt${QT_VERSION_MAJOR}::Core
     Qt${QT_VERSION_MAJOR}::RemoteObjects
@@ -261,8 +230,8 @@ target_link_libraries(logos_core PUBLIC
     logos_module
     process_stats
     logos_container
-    logos_container_subprocess
-    logos_module_loader_qt
+    LogosContainerImpl::impl
+    LogosFormatLoaderImpl::impl
     package_manager_lib
     nlohmann_json::nlohmann_json
     Boost::process

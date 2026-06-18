@@ -38,6 +38,18 @@ void ModuleLoaderRegistry::terminateAll()
         loader->terminateAll();
 }
 
+bool ModuleLoaderRegistry::terminate(const std::string& name)
+{
+    std::lock_guard lock(m_mutex);
+    for (const auto& loader : m_loaders) {
+        if (loader->hasModule(name)) {
+            loader->terminate(name);
+            return true;
+        }
+    }
+    return false;
+}
+
 std::unordered_map<std::string, int64_t> ModuleLoaderRegistry::getAllPids() const
 {
     std::lock_guard lock(m_mutex);

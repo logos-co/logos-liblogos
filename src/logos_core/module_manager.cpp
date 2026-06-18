@@ -4,8 +4,8 @@
 #include "dependency_resolver.h"
 #include "module_loader_registry.h"
 #include "composite_module_loader.h"
-#include <logos_container_subprocess/subprocess_container.h>
-#include <logos_module_loader_qt/qt_plugin_format_loader.h>
+#include <logos_container/container_factory.h>
+#include <logos_module_loader/format_loader_factory.h>
 #include <spdlog/spdlog.h>
 #include <nlohmann/json.hpp>
 #include <algorithm>
@@ -70,23 +70,19 @@ namespace {
     const std::vector<std::string> kExemptTargets =
         {"capability_module", "core", "core_service"};
 
-    // Built-in default loader: subprocess container + module format loader.
-    // This is the one place the core names a *specific* container, and the only
-    // reason liblogos build-depends on logos-container-subprocess (for now).
-    //
-    // Frontends can register additional loaders today via
-    // ModuleManager::loaders().registerLoader(...). To remove this default
-    // entirely (core depends only on the logos-container contract; frontends
-    // own all registration): start empty here, drop the static
-    // SubprocessContainer fallback in unloadModuleInternal below, and move this
-    // construction into each frontend's startup.
+    // Built-in default loader, composed from the container + format-loader the
+    // build linked in. The concrete implementations are chosen at link time via
+    // the contract factory seams (LogosCore::makeContainer / makeFormatLoader);
+    // the core names no specific container or loader. Frontends can still
+    // register additional loaders via ModuleManager::loaders().registerLoader().
     LogosCore::ModuleLoaderRegistry& loaderRegistry() {
         static LogosCore::ModuleLoaderRegistry reg;
         static std::once_flag initFlag;
         std::call_once(initFlag, []() {
-            auto container = std::make_shared<SubprocessContainer>();
-            auto loader    = std::make_shared<QtPluginFormatLoader>();
-            reg.registerLoader(std::make_shared<LogosCore::CompositeModuleLoader>(container, loader));
+            auto container = LogosCore::makeContainer();
+            auto loader    = LogosCore::makeFormatLoader();
+            if (container && loader)
+                reg.registerLoader(std::make_shared<LogosCore::CompositeModuleLoader>(container, loader));
         });
         return reg;
     }
@@ -365,13 +361,14 @@ namespace {
             }
             loader->terminate(name);
         } else {
-            // Fallback: module was loaded via markLoaded(name) directly
-            // (test scenarios or external setup). Use SubprocessContainer directly.
-            if (!SubprocessContainer::hasProcess(name)) {
-                spdlog::warn("No process found for module: {}", name);
+            // Fallback: module was loaded via markLoaded(name) directly (test
+            // scenarios or external setup), so no loader was recorded. Ask the
+            // registered loaders to terminate it by name — no specific container
+            // is named here.
+            if (!loaderRegistry().terminate(name)) {
+                spdlog::warn("No live module entry found for module: {}", name);
                 return false;
             }
-            SubprocessContainer::terminateProcess(name);
         }
 
         registryInstance().markUnloaded(name);
