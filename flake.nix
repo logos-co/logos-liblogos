@@ -22,6 +22,14 @@
     # the default implementation.
     default-container.url = "github:logos-co/logos-container-subprocess";
     default-module-loader.url = "github:logos-co/logos-module-loader-qt";
+    # The host transport (logos_host_qt) must be built against the SAME
+    # logos-protocol as liblogos_core; otherwise the QtRO capability-token
+    # handshake fails across the host<->plugin boundary. Pin it via follows so a
+    # protocol bump here rebuilds the bundled host instead of leaving it on a
+    # stale rev.
+    default-module-loader.inputs.logos-protocol.follows = "logos-protocol";
+    default-module-loader.inputs.logos-cpp-sdk.follows = "logos-cpp-sdk";
+    default-module-loader.inputs.logos-qt-sdk.follows = "logos-qt-sdk";
     logos-package-manager.url = "github:logos-co/logos-package-manager";
   };
 
