@@ -671,6 +671,17 @@ namespace ModuleManager {
             getDependents(std::string(name), recursive));
     }
 
+    std::string getModulesInfoJson() {
+        return registryInstance().allModulesInfo().dump();
+    }
+
+    char* getModulesInfoCStr() {
+        std::string json = getModulesInfoJson();
+        char* result = new char[json.size() + 1];
+        strcpy(result, json.c_str());
+        return result;
+    }
+
     std::vector<std::string> computeDerivedAllowedCallers(const std::string& target) {
         std::lock_guard lock(loadMutex());
         return computeDerivedAllowedCallersLocked(target);

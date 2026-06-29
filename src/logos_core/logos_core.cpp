@@ -67,6 +67,10 @@ char** logos_core_get_module_dependents(const char* module_name, bool recursive)
     return ModuleManager::getDependentsCStr(module_name, recursive);
 }
 
+char* logos_core_get_modules_info() {
+    return ModuleManager::getModulesInfoCStr();
+}
+
 char* logos_core_process_module(const char* module_path) {
     if (!module_path) { logos::logger("core").critical("logos_core_process_module: module_path must not be null"); std::abort(); }
     return ModuleManager::processModuleCStr(module_path);

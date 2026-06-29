@@ -96,6 +96,13 @@ namespace ModuleManager {
     // array, matching the C API contract used by the other getters.
     char** getDependenciesCStr(const char* name, bool recursive);
     char** getDependentsCStr(const char* name, bool recursive);
+
+    // JSON (string) describing every known module: name, path, loaded flag,
+    // direct dependencies, direct dependents, and full embedded metadata.
+    // See ModuleRegistry::allModulesInfo for the shape.
+    std::string getModulesInfoJson();
+    // char* variant. Caller owns the returned string. Never null.
+    char* getModulesInfoCStr();
 }
 
 #endif // MODULE_MANAGER_H

@@ -1,6 +1,7 @@
 #include "module_registry.h"
 #include <spdlog/spdlog.h>
 #include <cassert>
+#include <ctime>
 #include <deque>
 #include <mutex>
 #include <shared_mutex>
@@ -165,6 +166,7 @@ std::string ModuleRegistry::processModuleInternal(const std::string& modulePath,
     // (and any other state that lives on ModuleInfo).
     ModuleInfo& info = m_modules[name];
     info.path = modulePath;
+    info.metadataJson = ModuleLib::LogosModule::getRawMetadataJson(modulePath);
     info.dependencies.clear();
     for (const auto& d : ModuleLib::LogosModule::getModuleDependencies(modulePath)) {
         info.dependencies.push_back(d);
@@ -182,6 +184,33 @@ std::string ModuleRegistry::modulePath(const std::string& name) const {
     std::shared_lock lock(m_mutex);
     auto it = m_modules.find(name);
     return it != m_modules.end() ? it->second.path : std::string{};
+}
+
+nlohmann::json ModuleRegistry::allModulesInfo() const {
+    std::shared_lock lock(m_mutex);
+    nlohmann::json modules = nlohmann::json::array();
+    for (const auto& [name, info] : m_modules) {
+        nlohmann::json entry;
+        entry["name"]         = name;
+        entry["path"]         = info.path;
+        entry["loaded"]       = info.loaded;
+        // Unix-seconds timestamp of the current load (0 when not loaded).
+        // Callers compute uptime as now - loaded_at while loaded.
+        entry["loaded_at"]    = info.loadedAt;
+        entry["dependencies"] = info.dependencies;
+        entry["dependents"]   = info.dependents;
+        // Parse the cached metadata JSON back into structured form. Tolerate a
+        // missing/garbled blob by reporting null rather than aborting the call.
+        if (info.metadataJson.empty()) {
+            entry["metadata"] = nlohmann::json(nullptr);
+        } else {
+            nlohmann::json meta = nlohmann::json::parse(
+                info.metadataJson, nullptr, /*allow_exceptions=*/false);
+            entry["metadata"] = meta.is_discarded() ? nlohmann::json(nullptr) : meta;
+        }
+        modules.push_back(std::move(entry));
+    }
+    return modules;
 }
 
 std::vector<std::string> ModuleRegistry::moduleDependencies(const std::string& name,
@@ -322,9 +351,18 @@ bool ModuleRegistry::isLoaded(const std::string& name) const {
     return it != m_modules.end() && it->second.loaded;
 }
 
+// Current wall-clock time in unix seconds. Stamped on load so callers can
+// derive a module's uptime; a free function so both markLoaded overloads
+// agree on the source.
+static int64_t nowUnixSeconds() {
+    return static_cast<int64_t>(std::time(nullptr));
+}
+
 void ModuleRegistry::markLoaded(const std::string& name) {
     std::unique_lock lock(m_mutex);
-    m_modules[name].loaded = true;
+    auto& info = m_modules[name];
+    info.loaded = true;
+    info.loadedAt = nowUnixSeconds();
 }
 
 void ModuleRegistry::markLoaded(const std::string& name,
@@ -333,6 +371,7 @@ void ModuleRegistry::markLoaded(const std::string& name,
     std::unique_lock lock(m_mutex);
     auto& info = m_modules[name];
     info.loaded = true;
+    info.loadedAt = nowUnixSeconds();
     info.loader = std::move(loader);
     info.handle = std::move(handle);
 }
@@ -348,8 +387,10 @@ ModuleRegistry::loaderFor(const std::string& name) const {
 void ModuleRegistry::markUnloaded(const std::string& name) {
     std::unique_lock lock(m_mutex);
     auto it = m_modules.find(name);
-    if (it != m_modules.end())
+    if (it != m_modules.end()) {
         it->second.loaded = false;
+        it->second.loadedAt = 0;
+    }
 }
 
 std::vector<std::string> ModuleRegistry::loadedModuleNames() const {

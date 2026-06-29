@@ -146,6 +146,66 @@ TEST_F(ModuleManagerTest, GetKnownModules_ReturnsCorrectHash) {
     freeStringArray(result);
 }
 
+// logos_core_get_modules_info returns one rich JSON entry per known module:
+// name, path, loaded flag, direct dependencies, direct dependents, and the
+// embedded metadata. (Registered fake modules have no plugin file, so their
+// metadata is null — the real-plugin metadata is covered separately.)
+TEST_F(ModuleManagerTest, GetModulesInfo_ReturnsRichEntryPerModule) {
+    logos_core_register_module("module_a", "/path/to/module_a.dylib");
+    logos_core_register_module("module_b", "/path/to/module_b.dylib");
+    const char* depsA[] = {"module_b"};
+    logos_core_register_module_dependencies("module_a", depsA, 1);
+    logos_core_mark_module_loaded("module_b");
+
+    char* json = logos_core_get_modules_info();
+    ASSERT_NE(json, nullptr);
+    nlohmann::json info = nlohmann::json::parse(json, nullptr, /*allow_exceptions=*/false);
+    free(json);
+
+    ASSERT_TRUE(info.is_array());
+    ASSERT_EQ(info.size(), 2u);
+
+    auto find = [&](const std::string& n) -> nlohmann::json {
+        for (const auto& e : info)
+            if (e.value("name", std::string{}) == n) return e;
+        return nlohmann::json();
+    };
+
+    nlohmann::json a = find("module_a");
+    ASSERT_FALSE(a.is_null());
+    EXPECT_EQ(a.value("path", std::string{}), "/path/to/module_a.dylib");
+    EXPECT_FALSE(a.value("loaded", true));
+    // Not loaded ⇒ loaded_at is 0.
+    EXPECT_EQ(a.value("loaded_at", int64_t{-1}), 0);
+    ASSERT_TRUE(a["dependencies"].is_array());
+    ASSERT_EQ(a["dependencies"].size(), 1u);
+    EXPECT_EQ(a["dependencies"][0].get<std::string>(), "module_b");
+    EXPECT_TRUE(a["dependents"].is_array());
+    EXPECT_TRUE(a["dependents"].empty());
+    // metadata key is always present; null for a registered (un-processed) module.
+    ASSERT_TRUE(a.contains("metadata"));
+    EXPECT_TRUE(a["metadata"].is_null());
+
+    nlohmann::json b = find("module_b");
+    ASSERT_FALSE(b.is_null());
+    EXPECT_TRUE(b.value("loaded", false));
+    // Loaded ⇒ loaded_at is a real timestamp (stamped at markLoaded).
+    EXPECT_GT(b.value("loaded_at", int64_t{0}), 0);
+    // module_a depends on module_b ⇒ module_b lists module_a as a dependent.
+    ASSERT_TRUE(b["dependents"].is_array());
+    ASSERT_EQ(b["dependents"].size(), 1u);
+    EXPECT_EQ(b["dependents"][0].get<std::string>(), "module_a");
+}
+
+TEST_F(ModuleManagerTest, GetModulesInfo_EmptyWhenNoModules) {
+    char* json = logos_core_get_modules_info();
+    ASSERT_NE(json, nullptr);
+    nlohmann::json info = nlohmann::json::parse(json, nullptr, /*allow_exceptions=*/false);
+    free(json);
+    ASSERT_TRUE(info.is_array());
+    EXPECT_TRUE(info.empty());
+}
+
 TEST_F(ModuleManagerTest, IsModuleLoaded_ReturnsFalseForUnloaded) {
     EXPECT_EQ(logos_core_is_module_loaded("nonexistent_module"), 0);
 }
@@ -624,6 +684,33 @@ TEST_F(RealModuleRegistryTest, ProcessModule_RegistersRealModule) {
     EXPECT_EQ(logos_core_is_module_known(name), 1);
     EXPECT_EQ(logos_core_is_module_loaded(name), 0);
     delete[] name;
+}
+
+// For a real plugin, get_modules_info must carry the embedded metadata parsed
+// straight from the binary (via ModuleLib::LogosModule) — name + version.
+TEST_F(RealModuleRegistryTest, GetModulesInfo_PopulatesEmbeddedMetadata) {
+    char* name = logos_core_process_module(modulePath.c_str());
+    ASSERT_NE(name, nullptr) << "process_module failed for " << modulePath;
+    std::string moduleName(name);
+    delete[] name;
+
+    char* json = logos_core_get_modules_info();
+    ASSERT_NE(json, nullptr);
+    nlohmann::json info = nlohmann::json::parse(json, nullptr, /*allow_exceptions=*/false);
+    free(json);
+
+    ASSERT_TRUE(info.is_array());
+    nlohmann::json entry;
+    for (const auto& e : info)
+        if (e.value("name", std::string{}) == moduleName) { entry = e; break; }
+    ASSERT_FALSE(entry.is_null()) << "processed module absent from modules-info";
+
+    EXPECT_FALSE(entry.value("path", std::string{}).empty());
+    ASSERT_TRUE(entry["metadata"].is_object())
+        << "real plugin must yield a non-null metadata object";
+    EXPECT_EQ(entry["metadata"].value("name", std::string{}), moduleName);
+    EXPECT_FALSE(entry["metadata"].value("version", std::string{}).empty())
+        << "built test modules declare a version in metadata.json";
 }
 
 // =============================================================================
