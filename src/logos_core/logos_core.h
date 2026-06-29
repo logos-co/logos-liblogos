@@ -70,6 +70,18 @@ LOGOS_CORE_EXPORT char** logos_core_get_module_dependencies(const char* module_n
 // Returns a null-terminated array of module names that must be freed by the caller.
 LOGOS_CORE_EXPORT char** logos_core_get_module_dependents(const char* module_name, bool recursive);
 
+// Get information about all known modules as a JSON string.
+// Returns a JSON array; each element is an object with:
+//   "name"         module name
+//   "path"         path to the module binary
+//   "loaded"       bool — whether the module is currently loaded
+//   "dependencies" array of direct dependency names
+//   "dependents"   array of direct dependent names
+//   "metadata"     the module's full embedded metadata object (name, version,
+//                  type, description, dependencies, …), or null if unreadable
+// The returned string must be freed by the caller.
+LOGOS_CORE_EXPORT char* logos_core_get_modules_info();
+
 // Process a module file and add it to known modules
 // Returns the module name if successful, NULL if failed
 LOGOS_CORE_EXPORT char* logos_core_process_module(const char* module_path);

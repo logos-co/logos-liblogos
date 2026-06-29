@@ -23,6 +23,10 @@ bool isValidModuleName(const std::string& name);
 
 struct ModuleInfo {
     std::string path;
+    // The module's full embedded metadata as a compact JSON string, read once
+    // at discovery time via ModuleLib::LogosModule (no plugin instantiation).
+    // Empty when the plugin exposes no readable metadata.
+    std::string metadataJson;
     std::vector<std::string> dependencies;
     // Direct reverse edges — names of modules whose `dependencies` list
     // includes this module. Kept in sync with `dependencies` across every
@@ -46,6 +50,11 @@ public:
 
     bool isKnown(const std::string& name) const;
     std::string modulePath(const std::string& name) const;
+    // A JSON array describing every known module: one object per module with
+    // its name, path, loaded flag, direct dependencies, direct dependents, and
+    // full embedded metadata (parsed from the cached metadata JSON; null when
+    // unreadable). This is the data backing logos_core_get_modules_info.
+    nlohmann::json allModulesInfo() const;
     // Forward-edge accessor. `recursive=false` returns the direct
     // dependencies stored on ModuleInfo. `recursive=true` walks the forward
     // graph breadth-first and returns every transitive dependency. Unknown

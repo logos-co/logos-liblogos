@@ -165,6 +165,7 @@ std::string ModuleRegistry::processModuleInternal(const std::string& modulePath,
     // (and any other state that lives on ModuleInfo).
     ModuleInfo& info = m_modules[name];
     info.path = modulePath;
+    info.metadataJson = ModuleLib::LogosModule::getRawMetadataJson(modulePath);
     info.dependencies.clear();
     for (const auto& d : ModuleLib::LogosModule::getModuleDependencies(modulePath)) {
         info.dependencies.push_back(d);
@@ -182,6 +183,30 @@ std::string ModuleRegistry::modulePath(const std::string& name) const {
     std::shared_lock lock(m_mutex);
     auto it = m_modules.find(name);
     return it != m_modules.end() ? it->second.path : std::string{};
+}
+
+nlohmann::json ModuleRegistry::allModulesInfo() const {
+    std::shared_lock lock(m_mutex);
+    nlohmann::json modules = nlohmann::json::array();
+    for (const auto& [name, info] : m_modules) {
+        nlohmann::json entry;
+        entry["name"]         = name;
+        entry["path"]         = info.path;
+        entry["loaded"]       = info.loaded;
+        entry["dependencies"] = info.dependencies;
+        entry["dependents"]   = info.dependents;
+        // Parse the cached metadata JSON back into structured form. Tolerate a
+        // missing/garbled blob by reporting null rather than aborting the call.
+        if (info.metadataJson.empty()) {
+            entry["metadata"] = nlohmann::json(nullptr);
+        } else {
+            nlohmann::json meta = nlohmann::json::parse(
+                info.metadataJson, nullptr, /*allow_exceptions=*/false);
+            entry["metadata"] = meta.is_discarded() ? nlohmann::json(nullptr) : meta;
+        }
+        modules.push_back(std::move(entry));
+    }
+    return modules;
 }
 
 std::vector<std::string> ModuleRegistry::moduleDependencies(const std::string& name,
