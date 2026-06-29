@@ -75,6 +75,8 @@ LOGOS_CORE_EXPORT char** logos_core_get_module_dependents(const char* module_nam
 //   "name"         module name
 //   "path"         path to the module binary
 //   "loaded"       bool — whether the module is currently loaded
+//   "loaded_at"    unix-seconds timestamp of the current load, 0 when not
+//                  loaded (callers compute uptime as now - loaded_at)
 //   "dependencies" array of direct dependency names
 //   "dependents"   array of direct dependent names
 //   "metadata"     the module's full embedded metadata object (name, version,

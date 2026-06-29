@@ -34,6 +34,10 @@ struct ModuleInfo {
     // directly. Use ModuleRegistry::moduleDependents() for transitive walks.
     std::vector<std::string> dependents;
     bool loaded = false;
+    // Unix timestamp (seconds) of the most recent load, set by markLoaded and
+    // cleared to 0 by markUnloaded. 0 ⟺ not currently loaded. Callers derive a
+    // module's uptime from it (now - loadedAt), valid only while loaded.
+    int64_t loadedAt = 0;
     // Null when loaded directly via markLoaded(name) (test/external scenarios).
     std::shared_ptr<LogosCore::ModuleLoader> loader;
     LogosCore::LoadedModuleHandle handle;
@@ -51,8 +55,9 @@ public:
     bool isKnown(const std::string& name) const;
     std::string modulePath(const std::string& name) const;
     // A JSON array describing every known module: one object per module with
-    // its name, path, loaded flag, direct dependencies, direct dependents, and
-    // full embedded metadata (parsed from the cached metadata JSON; null when
+    // its name, path, loaded flag, load timestamp (loaded_at, unix seconds; 0
+    // when not loaded), direct dependencies, direct dependents, and full
+    // embedded metadata (parsed from the cached metadata JSON; null when
     // unreadable). This is the data backing logos_core_get_modules_info.
     nlohmann::json allModulesInfo() const;
     // Forward-edge accessor. `recursive=false` returns the direct

@@ -175,6 +175,8 @@ TEST_F(ModuleManagerTest, GetModulesInfo_ReturnsRichEntryPerModule) {
     ASSERT_FALSE(a.is_null());
     EXPECT_EQ(a.value("path", std::string{}), "/path/to/module_a.dylib");
     EXPECT_FALSE(a.value("loaded", true));
+    // Not loaded ⇒ loaded_at is 0.
+    EXPECT_EQ(a.value("loaded_at", int64_t{-1}), 0);
     ASSERT_TRUE(a["dependencies"].is_array());
     ASSERT_EQ(a["dependencies"].size(), 1u);
     EXPECT_EQ(a["dependencies"][0].get<std::string>(), "module_b");
@@ -187,6 +189,8 @@ TEST_F(ModuleManagerTest, GetModulesInfo_ReturnsRichEntryPerModule) {
     nlohmann::json b = find("module_b");
     ASSERT_FALSE(b.is_null());
     EXPECT_TRUE(b.value("loaded", false));
+    // Loaded ⇒ loaded_at is a real timestamp (stamped at markLoaded).
+    EXPECT_GT(b.value("loaded_at", int64_t{0}), 0);
     // module_a depends on module_b ⇒ module_b lists module_a as a dependent.
     ASSERT_TRUE(b["dependents"].is_array());
     ASSERT_EQ(b["dependents"].size(), 1u);

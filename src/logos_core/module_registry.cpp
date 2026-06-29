@@ -1,6 +1,7 @@
 #include "module_registry.h"
 #include <spdlog/spdlog.h>
 #include <cassert>
+#include <ctime>
 #include <deque>
 #include <mutex>
 #include <shared_mutex>
@@ -193,6 +194,9 @@ nlohmann::json ModuleRegistry::allModulesInfo() const {
         entry["name"]         = name;
         entry["path"]         = info.path;
         entry["loaded"]       = info.loaded;
+        // Unix-seconds timestamp of the current load (0 when not loaded).
+        // Callers compute uptime as now - loaded_at while loaded.
+        entry["loaded_at"]    = info.loadedAt;
         entry["dependencies"] = info.dependencies;
         entry["dependents"]   = info.dependents;
         // Parse the cached metadata JSON back into structured form. Tolerate a
@@ -347,9 +351,18 @@ bool ModuleRegistry::isLoaded(const std::string& name) const {
     return it != m_modules.end() && it->second.loaded;
 }
 
+// Current wall-clock time in unix seconds. Stamped on load so callers can
+// derive a module's uptime; a free function so both markLoaded overloads
+// agree on the source.
+static int64_t nowUnixSeconds() {
+    return static_cast<int64_t>(std::time(nullptr));
+}
+
 void ModuleRegistry::markLoaded(const std::string& name) {
     std::unique_lock lock(m_mutex);
-    m_modules[name].loaded = true;
+    auto& info = m_modules[name];
+    info.loaded = true;
+    info.loadedAt = nowUnixSeconds();
 }
 
 void ModuleRegistry::markLoaded(const std::string& name,
@@ -358,6 +371,7 @@ void ModuleRegistry::markLoaded(const std::string& name,
     std::unique_lock lock(m_mutex);
     auto& info = m_modules[name];
     info.loaded = true;
+    info.loadedAt = nowUnixSeconds();
     info.loader = std::move(loader);
     info.handle = std::move(handle);
 }
@@ -373,8 +387,10 @@ ModuleRegistry::loaderFor(const std::string& name) const {
 void ModuleRegistry::markUnloaded(const std::string& name) {
     std::unique_lock lock(m_mutex);
     auto it = m_modules.find(name);
-    if (it != m_modules.end())
+    if (it != m_modules.end()) {
         it->second.loaded = false;
+        it->second.loadedAt = 0;
+    }
 }
 
 std::vector<std::string> ModuleRegistry::loadedModuleNames() const {
