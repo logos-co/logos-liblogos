@@ -10,8 +10,16 @@ static void clearModuleState() {
 }
 
 int main(int argc, char** argv) {
-    logos_core_init(argc, argv);
     ::testing::InitGoogleTest(&argc, argv);
+    // When only listing tests (e.g. POST_BUILD test discovery), don't boot the
+    // full core — just enumerate. Booting Qt/subprocess/IOKit here can blow past
+    // the test-discovery timeout in sandboxed builds.
+    // GTEST_FLAG_GET already qualifies with ::testing:: internally and works
+    // with both the Abseil and non-Abseil gtest flag backends — do not prefix it.
+    if (GTEST_FLAG_GET(list_tests)) {
+        return RUN_ALL_TESTS();
+    }
+    logos_core_init(argc, argv);
     int result = RUN_ALL_TESTS();
     logos_core_cleanup();
     return result;
