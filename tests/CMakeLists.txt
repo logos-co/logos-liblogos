@@ -82,4 +82,4 @@ if(DEFINED LOGOS_PROTOCOL_ROOT AND EXISTS "${LOGOS_PROTOCOL_ROOT}/include")
   )
 endif()
 
-gtest_discover_tests(logos_core_tests)
+gtest_discover_tests(logos_core_tests DISCOVERY_MODE PRE_TEST)

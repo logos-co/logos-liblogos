@@ -10,8 +10,14 @@ static void clearModuleState() {
 }
 
 int main(int argc, char** argv) {
-    logos_core_init(argc, argv);
     ::testing::InitGoogleTest(&argc, argv);
+    // When only listing tests (e.g. POST_BUILD test discovery), don't boot the
+    // full core — just enumerate. Booting Qt/subprocess/IOKit here can blow past
+    // the test-discovery timeout in sandboxed builds.
+    if (::testing::GTEST_FLAG(list_tests)) {
+        return RUN_ALL_TESTS();
+    }
+    logos_core_init(argc, argv);
     int result = RUN_ALL_TESTS();
     logos_core_cleanup();
     return result;
