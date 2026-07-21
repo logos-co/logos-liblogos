@@ -596,15 +596,19 @@ namespace ModuleManager {
         if (!registryInstance().isKnown("capability_module"))
             return false;
 
+        // Drop any cached core->capability client BEFORE (re)loading. On a
+        // respawn it is latched onto the dead subprocess's socket, and
+        // loadModuleInternal itself RPCs to capability_module
+        // (notifyCapabilityModule for its own token, via capabilityModuleClient),
+        // so a stale client would make that call hang on the dead socket. The
+        // next capabilityModuleClient() rebuilds it against the fresh subprocess.
+        // No-op at first boot (the client doesn't exist yet).
+        resetCapabilityModuleClient();
+
         if (!loadModuleInternal("capability_module")) {
             spdlog::warn("Failed to load capability module");
             return false;
         }
-
-        // A respawned capability_module is a brand-new subprocess on the same
-        // registry URL, so any cached core->capability client is latched onto
-        // the dead socket. Drop it before we RPC to the fresh one.
-        resetCapabilityModuleClient();
 
         // Register restrictions: explicit entries, then derived for anything
         // already loaded (on first boot only capability_module is up, so the
@@ -664,6 +668,13 @@ namespace ModuleManager {
         constexpr int kMaxRestarts = 3;
         constexpr auto kWindow = seconds(60);
 
+        std::lock_guard lock(loadMutex());
+        // A concurrent explicit (re)load may have already brought it back — check
+        // BEFORE recording an attempt so a no-op restart doesn't consume one of
+        // the limited attempts and trip the circuit breaker early.
+        if (registryInstance().isLoaded("capability_module"))
+            return;
+
         auto& history = capabilityRestartHistory();
         const auto now = steady_clock::now();
         while (!history.empty() && now - history.front() > kWindow)
@@ -676,11 +687,6 @@ namespace ModuleManager {
             return;
         }
         history.push_back(now);
-
-        std::lock_guard lock(loadMutex());
-        // A concurrent explicit (re)load may have already brought it back.
-        if (registryInstance().isLoaded("capability_module"))
-            return;
 
         spdlog::warn("capability_module exited unexpectedly — auto-restarting "
                      "(attempt {} of {} within {}s)",
