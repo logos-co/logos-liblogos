@@ -9,11 +9,17 @@
 #include <spdlog/spdlog.h>
 #include <nlohmann/json.hpp>
 #include <algorithm>
+#include <atomic>
+#include <chrono>
+#include <deque>
 #include <mutex>
 #include <cassert>
 #include <cstring>
 #include <optional>
 #include <unordered_set>
+#include <QCoreApplication>
+#include <QObject>
+#include <QPointer>
 #include <boost/uuid/uuid.hpp>
 #include <boost/uuid/uuid_generators.hpp>
 #include <boost/uuid/uuid_io.hpp>
@@ -25,6 +31,13 @@
 #include "logos_transport_config_json.h"
 #include "token_manager.h"
 #include "instance_persistence.h"
+
+namespace ModuleManager {
+    // Defined later in this TU (in namespace ModuleManager). Forward-declared
+    // here so the loader's onTerminated hook — installed from the anonymous
+    // namespace's loadModuleInternal — can reach the capability crash supervisor.
+    void maybeScheduleCapabilityRestart(const std::string& name);
+}
 
 namespace {
     ModuleRegistry& registryInstance() {
@@ -70,6 +83,46 @@ namespace {
     const std::vector<std::string> kExemptTargets =
         {"capability_module", "core", "core_service"};
 
+    // ── capability_module crash supervisor ──────────────────────────────────
+    //
+    // capability_module is the token authority: every inter-module call needs a
+    // token minted/validated by it. If its subprocess dies (it crashed with a
+    // QtRO SIGSEGV in one incident) and nothing brings it back, ALL token
+    // exchange is dead system-wide until the app restarts. The supervisor below
+    // detects an *unexpected* exit of capability_module and re-provisions it
+    // (respawn + re-teach every loaded module's token). It is deliberately
+    // scoped to capability_module only — ordinary user modules (e.g. a module
+    // with a deterministic panic) must NOT be auto-restarted, or we would just
+    // replay their crash and hide the real bug.
+    bool isAutoRestartTarget(const std::string& name) {
+        return name == "capability_module";
+    }
+
+    // Set during logos_core_cleanup / clear() / terminateAll() so a subprocess
+    // exit that races our own teardown never schedules a respawn into a
+    // tearing-down process tree.
+    std::atomic<bool>& shuttingDown() {
+        static std::atomic<bool> s{false};
+        return s;
+    }
+
+    // NOTE on crash-vs-deliberate-unload: the loader's onTerminated fires ONLY
+    // for spontaneous exits. A deliberate unload/terminate sets the container
+    // entry's `cancelled` flag, and the container gates the onFinished/onError
+    // callback on `!cancelled` (subprocess_container.cpp) — so a user unload of
+    // capability_module never reaches the crash hook below. Combined with the
+    // shuttingDown() latch (set during clear()/terminateAll()/cleanup), that
+    // covers every deliberate teardown without a separate bookkeeping set.
+
+    // Main-thread QObject used to hop the respawn off the loader's background
+    // thread and onto the frontend's Qt event loop, where all QtRO / loadMutex
+    // work is safe. Created on the logos_core_start thread in
+    // initializeCapabilityModule(). Null in a headless test with no event loop.
+    QPointer<QObject>& restartDispatcher() {
+        static QPointer<QObject> d;
+        return d;
+    }
+
     // Built-in default loader, composed from the container + format-loader the
     // build linked in. The concrete implementations are chosen at link time via
     // the contract factory seams (LogosCore::makeContainer / makeFormatLoader);
@@ -109,8 +162,28 @@ namespace {
     // default (LocalSocket). Needed because the single-arg getClient()
     // always uses the global default, which hangs against a tcp-only
     // capability_module that never bound a LocalSocket.
-    LogosAPIClient* capabilityModuleClient() {
+    // The long-lived "core" LogosAPI used to dial capability_module. Held in a
+    // resettable slot so a capability respawn can drop the cached client — its
+    // QRemoteObjectNode is latched onto the DEAD subprocess's socket and would
+    // otherwise 20s-time-out against the fresh one. Only ever touched under
+    // loadMutex() (capabilityModuleClient callers) or on the main thread during
+    // reprovision, so no extra synchronisation is needed.
+    LogosAPI*& coreApiSlot() {
         static LogosAPI* s_coreApi = nullptr;
+        return s_coreApi;
+    }
+
+    // Drop the cached core->capability client so the next capabilityModuleClient()
+    // rebuilds it (fresh consumer + node) against the respawned subprocess.
+    void resetCapabilityModuleClient() {
+        LogosAPI* old = coreApiSlot();
+        coreApiSlot() = nullptr;
+        if (old)
+            old->deleteLater();  // defer: may be reached from a call stack that still unwinds through it
+    }
+
+    LogosAPIClient* capabilityModuleClient() {
+        LogosAPI*& s_coreApi = coreApiSlot();
         if (!s_coreApi)
             s_coreApi = new LogosAPI(std::string("core"));
 
@@ -316,8 +389,15 @@ namespace {
             return false;
         }
 
+        // Fires on the loader's background (asio) thread when the module's
+        // subprocess exits — but ONLY for unexpected exits: a deliberate
+        // terminate() is suppressed upstream by the container's cancelled gate.
+        // Keep the work here cheap and background-safe: markUnloaded (registry
+        // has its own mutex) plus a non-blocking hop to the main thread for the
+        // capability_module respawn. Do NO loadMutex / QtRO work here.
         auto onTerminated = [](const std::string& n) {
             registryInstance().markUnloaded(n);
+            ModuleManager::maybeScheduleCapabilityRestart(n);
         };
 
         LogosCore::LoadedModuleHandle handle;
@@ -507,9 +587,12 @@ namespace ModuleManager {
         return allSucceeded;
     }
 
-    bool initializeCapabilityModule() {
-        std::lock_guard lock(loadMutex());
-
+    // Load (or respawn) capability_module and re-establish ALL of its runtime
+    // state. Assumes loadMutex() is held. One code path for both first boot and
+    // crash recovery, so a respawn is guaranteed to end up in the same state as
+    // a fresh start. Returns false if capability_module is unknown or fails to
+    // load.
+    bool reprovisionCapabilityLocked() {
         if (!registryInstance().isKnown("capability_module"))
             return false;
 
@@ -518,14 +601,122 @@ namespace ModuleManager {
             return false;
         }
 
-        // Register restrictions before any other module can call out: explicit
-        // entries, then derived for anything already loaded (usually nothing —
-        // only the exempt capability_module is up here).
+        // A respawned capability_module is a brand-new subprocess on the same
+        // registry URL, so any cached core->capability client is latched onto
+        // the dead socket. Drop it before we RPC to the fresh one.
+        resetCapabilityModuleClient();
+
+        // Register restrictions: explicit entries, then derived for anything
+        // already loaded (on first boot only capability_module is up, so the
+        // loop is a no-op; on a respawn every previously-loaded module is here).
         pushAccessRestrictionsToCapabilityModule();
         for (const auto& loaded : registryInstance().loadedModuleNames())
             pushDerivedRestrictionForTarget(loaded);
 
+        // Re-teach every already-loaded module's token. A freshly respawned
+        // capability_module starts with an EMPTY in-memory token store, so
+        // without this the outage would survive the restart: every peer's
+        // requestModule handshake keeps failing. loadModuleInternal above
+        // already taught capability its own token; teach the rest here. No-op on
+        // first boot. TokenManager is the durable source of truth (tokens are
+        // saved there at each module's load), never capability's wiped map.
+        for (const auto& name : registryInstance().loadedModuleNames()) {
+            if (name == "capability_module")
+                continue;
+            notifyCapabilityModule(name, TokenManager::instance().getToken(name));
+        }
+
         return true;
+    }
+
+    bool initializeCapabilityModule() {
+        // A fresh start clears the shutdown latch so a prior clear()/cleanup in
+        // the same process (tests, daemon restart) doesn't suppress recovery.
+        shuttingDown().store(false);
+
+        // Create the main-thread dispatcher used to marshal a crash-triggered
+        // respawn off the loader's background thread. logos_core_start (our
+        // caller) runs on the frontend's Qt thread, so this QObject gets the
+        // right thread affinity. Harmless when there is no event loop (headless
+        // tests): the queued respawn simply never runs.
+        if (!restartDispatcher())
+            restartDispatcher() = new QObject();
+
+        std::lock_guard lock(loadMutex());
+        return reprovisionCapabilityLocked();
+    }
+
+    // Sliding-window crash-loop guard. Touched only on the main thread inside
+    // performCapabilityRestart, so no locking needed.
+    std::deque<std::chrono::steady_clock::time_point>& capabilityRestartHistory() {
+        static std::deque<std::chrono::steady_clock::time_point> h;
+        return h;
+    }
+
+    // Runs on the main thread (posted from the crash hook). Respawns
+    // capability_module, bounded by a crash-loop circuit breaker so a
+    // deterministically-crashing capability can't fork-bomb.
+    void performCapabilityRestart() {
+        using namespace std::chrono;
+        if (shuttingDown().load())
+            return;
+
+        constexpr int kMaxRestarts = 3;
+        constexpr auto kWindow = seconds(60);
+
+        auto& history = capabilityRestartHistory();
+        const auto now = steady_clock::now();
+        while (!history.empty() && now - history.front() > kWindow)
+            history.pop_front();
+        if (static_cast<int>(history.size()) >= kMaxRestarts) {
+            spdlog::critical(
+                "capability_module crashed {} times within {}s — auto-restart "
+                "DISABLED, token exchange is DEGRADED; restart the application",
+                kMaxRestarts, duration_cast<seconds>(kWindow).count());
+            return;
+        }
+        history.push_back(now);
+
+        std::lock_guard lock(loadMutex());
+        // A concurrent explicit (re)load may have already brought it back.
+        if (registryInstance().isLoaded("capability_module"))
+            return;
+
+        spdlog::warn("capability_module exited unexpectedly — auto-restarting "
+                     "(attempt {} of {} within {}s)",
+                     history.size(), kMaxRestarts,
+                     duration_cast<seconds>(kWindow).count());
+        if (reprovisionCapabilityLocked())
+            spdlog::info("capability_module auto-restart succeeded; token "
+                         "exchange restored");
+        else
+            spdlog::error("capability_module auto-restart failed");
+    }
+
+    // Runs on the loader's background (asio) thread from onTerminated. Decides
+    // whether an exit warrants a respawn and, if so, hops it to the main thread.
+    // Kept cheap and non-blocking: NO loadMutex, NO QtRO here.
+    void maybeScheduleCapabilityRestart(const std::string& name) {
+        if (!isAutoRestartTarget(name))
+            return;
+        if (shuttingDown().load())
+            return;
+        // Deliberate unloads never reach here (the container's cancelled gate
+        // suppresses onTerminated for them), so any exit we see is a crash /
+        // unexpected self-exit worth recovering from.
+
+        QObject* dispatcher = restartDispatcher();
+        if (!dispatcher || !QCoreApplication::instance()) {
+            spdlog::error("capability_module exited but no event loop is "
+                          "available to auto-restart it — token exchange is "
+                          "DEGRADED until the application restarts");
+            return;
+        }
+
+        // Non-blocking hop to the main thread. Must NOT block: this runs on the
+        // shared loader io thread that also pumps every module's stdout.
+        QMetaObject::invokeMethod(dispatcher, []() { performCapabilityRestart(); },
+                                  Qt::QueuedConnection);
     }
 
     bool unloadModule(const char* moduleName) {
@@ -599,12 +790,16 @@ namespace ModuleManager {
     }
 
     void terminateAll() {
+        // Suppress capability auto-restart: the terminations below are ours, not
+        // crashes. (initializeCapabilityModule clears the latch on next boot.)
+        shuttingDown().store(true);
         std::lock_guard lock(loadMutex());
         loaderRegistry().terminateAll();
         registryInstance().clearLoaded();
     }
 
     void clear() {
+        shuttingDown().store(true);  // see terminateAll(): don't respawn during our own teardown
         std::lock_guard lock(loadMutex());
         loaderRegistry().terminateAll();
         registryInstance().clear();
