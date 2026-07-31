@@ -32,6 +32,7 @@ OUTPUT_DIR="./outputs"
 SPECS=(
   "liblogos-module-runtime.test.yaml"
   "liblogos-as-a-library.test.yaml"
+  "liblogos-capability-crash-recovery.test.yaml"
 )
 
 # Build the doc-test against THIS repo's current commit rather than the latest

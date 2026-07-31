@@ -1,0 +1,172 @@
+name: "Recovering From a capability_module Crash"
+output: liblogos-capability-crash-recovery.md
+release: ""
+
+intro: |
+  `capability_module` is the token authority the host loads first: every module
+  load and every cross-module call is brokered through it. If its subprocess
+  dies and nothing brings it back, all inter-module token exchange is dead until
+  the whole app restarts — which is exactly what happened in the field after a
+  mid-session module crash.
+
+  **This** liblogos commit adds a supervisor for that case. When
+  `capability_module`'s subprocess exits unexpectedly, liblogos detects it,
+  respawns the module, and re-teaches every loaded module's token — bounded by a
+  crash-loop circuit breaker so a module that crashes on every boot can't
+  fork-bomb.
+
+  This doc-test proves it end to end: it runs a real `logoscore` daemon on this
+  liblogos, loads a module, then **`kill -9`s `capability_module`'s subprocess**
+  and confirms the supervisor brings it straight back — no daemon restart.
+
+what_you_build: "A `logoscore` daemon on this liblogos with a module loaded, whose `capability_module` broker is killed mid-session and automatically respawned by the supervisor."
+
+what_you_learn:
+  - Why capability_module is a single point of failure for token exchange
+  - How the liblogos supervisor detects an unexpected capability_module exit and respawns it
+  - How to observe the recovery in the daemon log and confirm the module is loaded again
+
+prerequisites:
+  - |
+    **Nix** with flakes enabled. Install from [nixos.org](https://nixos.org/download.html), then enable flakes:
+
+    ```bash
+    mkdir -p ~/.config/nix
+    echo 'experimental-features = nix-command flakes' >> ~/.config/nix/nix.conf
+    ```
+
+    Verify: `nix flake --help >/dev/null 2>&1 && echo "Flakes enabled"`
+  - "**git** — to clone the module repository."
+  - "A Linux or macOS machine."
+
+sections:
+  - title: "Build logoscore against this liblogos"
+    step: true
+    text: |
+      Build the `logoscore` CLI from its published flake, **overriding its
+      `logos-liblogos` input** so the host, module loader, and — crucially — the
+      capability supervisor all come from the commit under test.
+    steps:
+      - title: "Build the CLI with the liblogos override"
+        run: "nix build 'github:logos-co/logos-logoscore-cli/b92ade06cdbd3cdf48c8de5b8375cbcc3a6088cf' --override-input logos-liblogos 'github:logos-co/logos-liblogos{release}' --out-link ./logos"
+        code_block: |
+          nix build 'github:logos-co/logos-logoscore-cli/b92ade06cdbd3cdf48c8de5b8375cbcc3a6088cf' \
+            --override-input logos-liblogos 'github:logos-co/logos-liblogos' \
+            --out-link ./logos
+        check_file: "logos/bin/logoscore"
+        post_text: |
+          The build produces `logos/bin/logoscore` plus a `logos/modules/`
+          directory with the built-in `capability_module`. `follows` propagates
+          the override, so the whole closure is rebuilt against this liblogos.
+
+  - title: "Build the lgpm package manager and a module"
+    step: true
+    text: |
+      We need one ordinary module loaded so the supervisor has a token to
+      re-teach on recovery. We reuse `accounts_module` — any module works.
+    steps:
+      - title: "Build lgpm"
+        run: "nix build 'github:logos-co/logos-package-manager#cli' -o lgpm"
+        check_file: "lgpm/bin/lgpm"
+
+      - title: "Clone and build the module's .lgx"
+        run: "git clone --depth 1 https://github.com/logos-co/logos-accounts-module.git"
+        check_file: "logos-accounts-module/flake.nix"
+
+      - title: "Build the .lgx"
+        run: "nix build 'path:./logos-accounts-module#lgx' -o accounts-lgx"
+        extra_run:
+          run: "ls accounts-lgx/*.lgx"
+
+      - title: "Seed the modules directory with the bundled capability module"
+        text: |
+          The modules directory needs the `capability_module` that ships with
+          `logoscore` (the broker) alongside the module we install.
+        run: |
+          mkdir -p modules
+          cp -RL ./logos/modules/. ./modules/
+        check_file: "modules/capability_module/manifest.json"
+
+      - title: "Install the module"
+        run: "./lgpm/bin/lgpm --modules-dir ./modules --allow-unsigned install --file accounts-lgx/*.lgx"
+        expect_contains:
+          - "Installed to:"
+
+  - title: "Run the daemon and load a module"
+    step: true
+    text: |
+      Start the daemon, load `accounts_module` (its load is brokered by
+      `capability_module`), and confirm both are up. Daemon output goes to
+      `logs.txt`.
+    steps:
+      - title: "Start the daemon"
+        run: "sh -c './logos/bin/logoscore -D -m ./modules > logs.txt 2>&1 &'"
+        code_block: "logoscore -D -m ./modules > logs.txt &"
+
+      - run: "sleep 3"
+
+      - title: "capability_module and accounts_module are loaded"
+        run: "./logos/bin/logoscore load-module accounts_module && ./logos/bin/logoscore list-modules --loaded"
+        code_block: |
+          logoscore load-module accounts_module
+          logoscore list-modules --loaded
+        expect_contains:
+          - "capability_module"
+          - "accounts_module"
+
+  - title: "Crash capability_module and watch it recover"
+    step: true
+    text: |
+      Now simulate the failure: find `capability_module`'s subprocess and
+      `kill -9` it — an unrecoverable crash from the process's point of view. The
+      supervisor in this liblogos should detect the exit and respawn it.
+    steps:
+      - title: "Kill the capability_module subprocess"
+        text: |
+          Each module runs in its own `logos_host` subprocess. We match on the
+          plugin path so we hit `capability_module`'s host and not the daemon:
+        run: |
+          CAP_PID=$(pgrep -f 'capability_module_plugin' | head -1)
+          echo "capability_module subprocess PID: $CAP_PID"
+          kill -9 "$CAP_PID"
+        code_block: |
+          CAP_PID=$(pgrep -f 'capability_module_plugin' | head -1)
+          kill -9 "$CAP_PID"
+        expect_contains:
+          - "capability_module subprocess PID:"
+
+      - title: "Give the supervisor a moment"
+        run: "sleep 6"
+
+      - title: "The daemon log shows the supervisor recovering it"
+        text: |
+          The supervisor logs the crash, the restart attempt, and success —
+          re-provisioning `capability_module` and re-teaching the loaded modules'
+          tokens, all without restarting the daemon:
+        run: "grep -iE 'crashed|auto-restart' logs.txt"
+        expect_contains:
+          - "Module process crashed: capability_module"
+          - "capability_module exited unexpectedly — auto-restarting"
+          - "auto-restart succeeded; token exchange restored"
+
+      - title: "capability_module is loaded again"
+        text: |
+          Despite the `kill -9`, `capability_module` is back — a fresh subprocess,
+          brought up by the supervisor:
+        run: "./logos/bin/logoscore list-modules --loaded"
+        code_block: "logoscore list-modules --loaded"
+        expect_contains:
+          - "capability_module"
+
+      - title: "Token exchange still works — call the module"
+        text: |
+          A call through the daemon is still brokered end to end, confirming the
+          capability layer is live after the recovery:
+        run: "./logos/bin/logoscore call accounts_module createRandomMnemonic 12"
+        code_block: "logoscore call accounts_module createRandomMnemonic 12"
+        expect_contains:
+          - '"result"'
+
+      - title: "Stop the daemon"
+        run: "./logos/bin/logoscore stop"
+        code_block: "logoscore stop"
