@@ -56,10 +56,19 @@ pkgs.runCommand "${common.pname}-modules-${common.version}"
     suffix="${suffix}"
 
     # Create manifest.json for plugin discovery
+    # "type" is REQUIRED, not decorative. PackageManagerLib::getInstalledModules
+    # enumerates manifests with `types = {"core"}` and skips -- silently, with
+    # no diagnostic -- every manifest whose type does not match. Without this
+    # field the directory scans clean, the module never enters the registry,
+    # and the only symptom is a later "Module not found in known modules:
+    # capability_module" from whoever tried to load it. It matches the "core"
+    # in logos-capability-module/metadata.json, which is what the lgx-bundled
+    # manifest carries.
     cat > $out/modules/capability_module/manifest.json <<EOF
     {
       "name": "capability_module",
       "version": "1.0.0",
+      "type": "core",
       "main": {
         "$platform-$arch$suffix": "$pluginFile",
         "$platform-amd64$suffix": "$pluginFile",

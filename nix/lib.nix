@@ -45,4 +45,44 @@ pkgs.runCommand "${common.pname}-lib-${common.version}"
         cp -L "$f" $out/lib/
       fi
     done
+
+    ${pkgs.lib.optionalString pkgs.stdenv.hostPlatform.isWindows ''
+      # Windows only: libpackage_manager_lib's OWN dependency, liblgx.
+      #
+      # An ELF or Mach-O consumer never needs this -- the copied
+      # libpackage_manager_lib carries an RPATH/install-name pointing back at
+      # the store path liblgx lives in, so the loader finds it there. PE has no
+      # rpath: an import table carries the DLL BASE NAME and Windows resolves
+      # it from the loading executable's directory. Whatever bundles this lib
+      # output can only stage what is IN it, so a dependency left behind here
+      # is a dependency that cannot be staged later.
+      #
+      # Measured, and the reason this exists: logosctl.exe with every other DLL
+      # correctly beside it exited 53 with NO OUTPUT AT ALL -- the loader
+      # failing on liblgx.dll before main() ran. Nothing in the build, the
+      # package, or the run says which DLL is missing.
+      #
+      # Every DLL the package-manager output carries, not just liblgx: liblgx
+      # has its own imports (libsodium, ICU, zlib), and package-manager stages
+      # that whole closure for exactly this reason. Copying the set rather than
+      # naming members keeps it transitive instead of a list that rots.
+      #
+      # Explicit `for` + `-f` rather than a nullglob array: nullglob only drops
+      # patterns that CONTAIN a wildcard, so a fully interpolated literal path
+      # survives into the array and a guard over it passes vacuously.
+      lgx=0
+      for f in ${logosPackageManagerRoot}/lib/*.dll ${logosPackageManagerRoot}/lib/*.dll.a; do
+        [ -f "$f" ] || continue
+        [ -e "$out/lib/$(basename "$f")" ] && continue
+        cp -L "$f" $out/lib/
+        case "$(basename "$f")" in liblgx.dll) lgx=$((lgx + 1));; esac
+      done
+      if [ "$lgx" -eq 0 ] && [ ! -f "$out/lib/liblgx.dll" ]; then
+        echo "Error: liblgx.dll not found under ${logosPackageManagerRoot}/lib;" >&2
+        echo "       libpackage_manager_lib.dll imports it, so any .exe loading" >&2
+        echo "       liblogos_core.dll would fail with no diagnostic." >&2
+        ls -la ${logosPackageManagerRoot}/lib >&2 || true
+        exit 1
+      fi
+    ''}
   ''
