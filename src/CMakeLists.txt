@@ -185,6 +185,16 @@ add_library(logos_core SHARED ${LOGOS_CORE_SOURCES})
 # Set the LOGOS_CORE_LIBRARY definition for the library
 target_compile_definitions(logos_core PRIVATE LOGOS_CORE_LIBRARY)
 
+# PE export table. LOGOS_CORE_EXPORT expands to __attribute__((visibility(...)))
+# which mingw-gcc accepts and ignores, so nothing in this image is explicitly
+# exported and GNU ld's auto-export would normally apply. Asking ld directly is
+# the belt-and-braces version used by the sibling repos: WINDOWS_EXPORT_ALL_SYMBOLS
+# is NOT equivalent -- under this cross toolchain CMake emits no .def file and
+# says nothing, silently exporting nothing.
+if(WIN32)
+    target_link_options(logos_core PRIVATE -Wl,--export-all-symbols)
+endif()
+
 # Portable build: selects portable LGX variants instead of dev variants
 option(LOGOS_PORTABLE_BUILD "Build for portable variant selection" OFF)
 if(LOGOS_PORTABLE_BUILD)
@@ -213,6 +223,15 @@ if(DEFINED LOGOS_PACKAGE_MANAGER_ROOT AND EXISTS "${LOGOS_PACKAGE_MANAGER_ROOT}/
     IMPORTED_LOCATION "${LOGOS_PACKAGE_MANAGER_LIBRARY}"
     INTERFACE_INCLUDE_DIRECTORIES "${LOGOS_PACKAGE_MANAGER_ROOT}/include"
   )
+  # On Windows a SHARED IMPORTED target links through its IMPORT library, and
+  # CMake hard-errors at generate time when IMPORTED_IMPLIB is unset. find_library
+  # returns libpackage_manager_lib.dll.a there (CMAKE_FIND_LIBRARY_SUFFIXES for
+  # MinGW is .dll.a;.a), which is exactly the import library to link.
+  if(WIN32)
+    set_target_properties(package_manager_lib PROPERTIES
+      IMPORTED_IMPLIB "${LOGOS_PACKAGE_MANAGER_LIBRARY}"
+    )
+  endif()
 else()
   message(FATAL_ERROR "LOGOS_PACKAGE_MANAGER_ROOT not set or ${LOGOS_PACKAGE_MANAGER_ROOT}/lib does not exist")
 endif()
