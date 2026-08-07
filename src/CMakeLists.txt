@@ -185,15 +185,17 @@ add_library(logos_core SHARED ${LOGOS_CORE_SOURCES})
 # Set the LOGOS_CORE_LIBRARY definition for the library
 target_compile_definitions(logos_core PRIVATE LOGOS_CORE_LIBRARY)
 
-# PE export table. LOGOS_CORE_EXPORT expands to __attribute__((visibility(...)))
-# which mingw-gcc accepts and ignores, so nothing in this image is explicitly
-# exported and GNU ld's auto-export would normally apply. Asking ld directly is
-# the belt-and-braces version used by the sibling repos: WINDOWS_EXPORT_ALL_SYMBOLS
-# is NOT equivalent -- under this cross toolchain CMake emits no .def file and
-# says nothing, silently exporting nothing.
-if(WIN32)
-    target_link_options(logos_core PRIVATE -Wl,--export-all-symbols)
-endif()
+# PE export table: nothing to do here. LOGOS_CORE_EXPORT now expands to
+# __declspec(dllexport) on Windows (see logos_core/logos_core.h), which both
+# exports the C API and, because GNU ld disables auto-export image-wide once any
+# symbol is dllexported, stops the internal C++ surface leaking.
+#
+# This deliberately REPLACES an earlier `-Wl,--export-all-symbols`. That did
+# export the C API, but it also exported all 13,252 symbols in the image --
+# LogosAPI's among them -- so any consumer linking both liblogos_core and the
+# qt-sdk static library failed with "multiple definition of `LogosAPI::LogosAPI'".
+# Do not reinstate it; if the C API ever stops being exported, the cause is a
+# missing LOGOS_CORE_EXPORT on a declaration, not a missing linker flag.
 
 # Portable build: selects portable LGX variants instead of dev variants
 option(LOGOS_PORTABLE_BUILD "Build for portable variant selection" OFF)
