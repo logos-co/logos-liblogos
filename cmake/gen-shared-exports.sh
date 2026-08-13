@@ -4,7 +4,9 @@
 # the LogosResult stream operators).
 #
 # WHY a generated .def rather than __declspec(dllexport) in the headers: the
-# definitions live in liblogos_protocol.a / liblogos_qt_sdk.a, which are also
+# definitions live in liblogos_protocol.a / liblogos_qt_host.a (the Qt half was
+# liblogos_qt_sdk.a until the host runtime moved into logos-qt-host; same
+# objects, new home), which are also
 # linked by logos_host.exe, ui-host.exe, every module plugin and every native
 # platform. Annotating them for export would mean a second, Windows-only,
 # export-annotated build of both archives, kept in sync forever, to solve a
@@ -15,7 +17,7 @@
 # WHY the whole archive and not a curated class list: ld chooses archive members
 # by object file, for reasons that have nothing to do with our symbols. Measured
 # on this build, main_ui referenced std::string's move constructor and ld
-# satisfied it out of liblogos_qt_sdk.a's logos_api.cpp.obj — which then dragged
+# satisfied it out of the Qt archive's logos_api.cpp.obj — which then dragged
 # LogosAPI, LogosAPIClient and TokenManager in behind it. The consumers
 # therefore link an EMPTY archive (logos-basecamp/cmake/LogosSharedFromDll.cmake)
 # and take everything from the DLL, which only works if the DLL really does
