@@ -211,12 +211,38 @@ target_compile_definitions(logos_core PRIVATE LOGOS_CORE_LIBRARY)
 # Full rationale, including why the consumer-side __declspec(dllimport) is the
 # load-bearing half rather than the export, lives in
 # logos-protocol/cpp/logos_shared_api.h.
-if(WIN32 AND TARGET logos-protocol::logos_protocol AND TARGET logos-qt-sdk::logos_qt_sdk)
+if(WIN32)
+    # The two archives that make up the shared C++ runtime. The Qt half used to
+    # be logos-qt-sdk::logos_qt_sdk; it is logos-qt-host::logos_qt_host now --
+    # logos-qt-sdk kept the name and the public surface but handed the CODE to
+    # logos-qt-host, so its target is an INTERFACE library with no archive at
+    # all and $<TARGET_FILE:> on it does not resolve. find_package(logos-qt-sdk)
+    # above pulls logos-qt-host in as a dependency, so the target is here.
+    #
+    # A missing target is FATAL rather than a skipped block, for the same reason
+    # a missing `nm` is fatal below: every failure mode of this block is silent.
+    # The old guard had the target tests in the `if`, so the day one of them was
+    # renamed, liblogos_core.dll would have been built with no export list and
+    # no diagnostic -- and the split-brain it exists to prevent (one
+    # TokenManager per image, tokens written into one and read from another)
+    # shows up much later as refused calls in an app, not as a build failure.
+    foreach(_logos_shared_target logos-protocol::logos_protocol logos-qt-host::logos_qt_host)
+        if(NOT TARGET ${_logos_shared_target})
+            message(FATAL_ERROR
+                "${_logos_shared_target} is not a target, so liblogos_core.dll cannot "
+                "be given the shared-runtime export list. Windows requires it: PE has no "
+                "symbol interposition, so without this every in-process image links its "
+                "own copy of TokenManager and cross-module calls are refused at runtime. "
+                "Check that find_package(logos-qt-sdk) resolved, and that it still "
+                "carries logos-qt-host.")
+        endif()
+    endforeach()
+
     # Ask the imported targets where their archives actually are rather than
     # rebuilding the path by hand, so a rename or a layout change fails at
     # generate time instead of producing an empty export list.
     set(_logos_protocol_archive "$<TARGET_FILE:logos-protocol::logos_protocol>")
-    set(_logos_qt_sdk_archive   "$<TARGET_FILE:logos-qt-sdk::logos_qt_sdk>")
+    set(_logos_qt_host_archive  "$<TARGET_FILE:logos-qt-host::logos_qt_host>")
 
     # --whole-archive, i.e. the whole of both libraries goes into the DLL even
     # where liblogos itself never calls it.
@@ -233,7 +259,7 @@ if(WIN32 AND TARGET logos-protocol::logos_protocol AND TARGET logos-qt-sdk::logo
     target_link_options(logos_core PRIVATE
         "-Wl,--whole-archive"
         "${_logos_protocol_archive}"
-        "${_logos_qt_sdk_archive}"
+        "${_logos_qt_host_archive}"
         "-Wl,--no-whole-archive")
 
     # CMAKE_NM is normally set by the toolchain file; fall back to the
@@ -255,9 +281,9 @@ if(WIN32 AND TARGET logos-protocol::logos_protocol AND TARGET logos-qt-sdk::logo
                 "${CMAKE_CURRENT_SOURCE_DIR}/../cmake/gen-shared-exports.sh"
                 "${_logos_nm}" "${_logos_shared_def}"
                 "${_logos_protocol_archive}" "*"
-                "${_logos_qt_sdk_archive}"   "*"
+                "${_logos_qt_host_archive}"  "*"
         DEPENDS "${CMAKE_CURRENT_SOURCE_DIR}/../cmake/gen-shared-exports.sh"
-                "${_logos_protocol_archive}" "${_logos_qt_sdk_archive}"
+                "${_logos_protocol_archive}" "${_logos_qt_host_archive}"
         COMMENT "Generating liblogos_core shared-runtime export definition"
         VERBATIM
     )
