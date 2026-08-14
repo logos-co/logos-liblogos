@@ -420,20 +420,49 @@ namespace ModuleManager {
             moduleTransportsMap()[moduleName] = transportSetJson;
     }
 
+    // THE deny-by-default switch. `mode: "enforce"` is the whole flag: it is
+    // what turns the derived restrictions on (computeDerivedAllowedCallersLocked
+    // returns {} without it, so core registers nothing and capability_module
+    // leaves every target open). Anything else — no policy, empty policy,
+    // unparseable policy, a different mode — is OFF, i.e. exactly the behaviour
+    // of a host that never calls this at all.
+    //
+    // Every branch says out loud which side it landed on. Enforcement that
+    // silently failed to arm is the dangerous outcome: it looks identical to
+    // enforcement that is working and simply has nothing to deny, so an
+    // operator who mistyped `"mode":"enforced"` would otherwise get a
+    // wide-open runtime and a clean log.
     void setAccessPolicy(const std::string& policyJson) {
         std::lock_guard<std::mutex> g(loadMutex());  // guards the read at push time
         accessPolicyJson() = policyJson;
         // Cache the parse only in enforce mode; malformed/non-enforce stays empty.
         parsedEnforcePolicy().reset();
-        if (!policyJson.empty()) {
-            auto parsed = LogosCore::parseAccessPolicy(policyJson);
-            if (!parsed) {
-                spdlog::warn("logos_core_set_access_policy: policy is not valid JSON "
-                             "— no restrictions will be enforced");
-            } else if (parsed->enforce()) {
-                parsedEnforcePolicy() = std::move(parsed);
-            }
+
+        if (policyJson.empty()) {
+            spdlog::info("Inter-module access enforcement is OFF (no access policy set): "
+                         "any loaded module may call any other");
+            return;
         }
+
+        auto parsed = LogosCore::parseAccessPolicy(policyJson);
+        if (!parsed) {
+            spdlog::warn("logos_core_set_access_policy: policy is not valid JSON — "
+                         "inter-module access enforcement stays OFF");
+            return;
+        }
+        if (!parsed->enforce()) {
+            spdlog::warn("logos_core_set_access_policy: mode is \"{}\", not \"enforce\" — "
+                         "inter-module access enforcement stays OFF ({} restriction(s) "
+                         "parsed but not registered)",
+                         parsed->mode, parsed->restrictions.size());
+            return;
+        }
+
+        spdlog::info("Inter-module access enforcement is ON (mode=enforce): deny-by-default — "
+                     "a module may only call the modules it declares as dependencies; "
+                     "{} explicit restriction(s) override the derived allow-list",
+                     parsed->restrictions.size());
+        parsedEnforcePolicy() = std::move(parsed);
     }
 
     void discoverInstalledModules() {
