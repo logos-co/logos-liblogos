@@ -1297,3 +1297,82 @@ TEST_F(DerivedRestrictionsManagerTest, TrustedDependentNotDuplicated) {
     auto callers = ModuleManager::computeDerivedAllowedCallers("b");
     EXPECT_EQ(std::count(callers.begin(), callers.end(), std::string("core")), 1);
 }
+
+// ── The deny-by-default switch, both directions ─────────────────────────────
+//
+// These two are the contract for the operator-facing flag (`mode: "enforce"`,
+// reached as `logoscore --access-policy enforce` / `LogosBasecamp
+// --access-policy enforce`). They share one scenario deliberately: the SAME
+// undeclared pair must be allowed with the flag off and denied with it on, and
+// the declared pair must survive the flip. A change that denied everything
+// would pass the "denied" half on its own, so the declared-caller assertion is
+// the one carrying the weight.
+class DenyByDefaultFlagTest : public DerivedRestrictionsManagerTest {
+protected:
+    // target        — the module being reached
+    // declared      — loaded, and declares `target` as a dependency
+    // undeclared    — loaded, declares nothing (the shape D-a found in this
+    //                 tree: counter_qml calling package_manager with
+    //                 "dependencies": [])
+    void SetUp() override {
+        DerivedRestrictionsManagerTest::SetUp();
+        reg("target", {});
+        reg("declared", {"target"});
+        reg("undeclared", {});
+        logos_core_mark_module_loaded("target");
+        logos_core_mark_module_loaded("declared");
+        logos_core_mark_module_loaded("undeclared");
+    }
+};
+
+TEST_F(DenyByDefaultFlagTest, FlagOff_UndeclaredCallerStaysUnrestricted) {
+    // No policy installed — the default every host has today. Core derives
+    // nothing, so it registers NO restriction for `target`, and
+    // capability_module's unrestricted-target path leaves `undeclared ->
+    // target` working exactly as before.
+    EXPECT_TRUE(derived("target").empty());
+
+    // Same for a policy that isn't in enforce mode: still off, still open.
+    ModuleManager::setAccessPolicy(
+        "{\"version\":1,\"mode\":\"audit\",\"restrictions\":{}}");
+    EXPECT_TRUE(derived("target").empty());
+}
+
+TEST_F(DenyByDefaultFlagTest, FlagOn_DeclaredCallerAllowed_UndeclaredRefused) {
+    ModuleManager::setAccessPolicy(enforceEnvelope());
+
+    const auto callers = derived("target");
+    // A restriction IS registered now — that is what makes the target closed.
+    ASSERT_FALSE(callers.empty());
+    // The declared dependent keeps working…
+    EXPECT_TRUE(callers.count("declared"))
+        << "enforce must not break a caller that declared the target";
+    // …and the undeclared caller is not on the list, so capability_module
+    // refuses to mint it a token.
+    EXPECT_FALSE(callers.count("undeclared"))
+        << "enforce must refuse a caller that never declared the target";
+}
+
+TEST_F(DenyByDefaultFlagTest, FlagOn_ExplicitPolicyCanReadmitAnUndeclaredCaller) {
+    // The escape hatch an operator needs when a real deployment has a caller
+    // that legitimately can't declare its target (out-of-process ui_qml
+    // plugins, for one): an explicit entry replaces the derived list verbatim.
+    ModuleManager::setAccessPolicy(
+        "{\"version\":1,\"mode\":\"enforce\",\"restrictions\":{"
+        "\"target\":{\"allowedCallers\":[\"declared\",\"undeclared\"]}}}");
+
+    const auto callers = derived("target");
+    EXPECT_TRUE(callers.count("declared"));
+    EXPECT_TRUE(callers.count("undeclared"));
+}
+
+TEST_F(DenyByDefaultFlagTest, FlagIsReversible) {
+    // Clearing the policy must restore today's behaviour byte-for-byte, not
+    // leave a latched restriction behind (hosts call setAccessPolicy once per
+    // boot, but a restart in the same process must not inherit enforcement).
+    ModuleManager::setAccessPolicy(enforceEnvelope());
+    ASSERT_FALSE(derived("target").empty());
+
+    ModuleManager::setAccessPolicy("");
+    EXPECT_TRUE(derived("target").empty());
+}
