@@ -6,7 +6,22 @@
     nixpkgs.follows = "logos-nix/nixpkgs";
     logos-cpp-sdk.url = "github:logos-co/logos-cpp-sdk";
     logos-cpp-sdk.inputs.logos-protocol.follows = "logos-protocol";
-    logos-protocol.url = "github:logos-co/logos-protocol";
+    # Pinned to a rev, not master, and the rev is not arbitrary: it is the SAME
+    # logos-protocol every in-process consumer links (logos-basecamp pins it
+    # too). One process holds liblogos_core plus the app image plus every UI
+    # plugin, and they share TokenManager -- so "one protocol rev" is not tidiness,
+    # it is the single-provider invariant itself. Two revs across that boundary
+    # give two TokenManager generations, hence two token stores, hence
+    # "ModuleProxy: rejecting unauthorized call ... auth token not recognized".
+    #
+    # Concretely, master (03842db) has a TokenManager with only instance() and
+    # m_tokens, while logos-qt-host's logos_api.cpp calls TokenManager::forIdentity
+    # and ::isolateIdentity. Building this repo against master is not a subtle
+    # ABI skew, it is three hard compile errors in logos_api.cpp.
+    #
+    # Drop the rev once feat/per-client-token-store merges -- together with the
+    # logos-plugin-qt rev below, which needs it.
+    logos-protocol.url = "github:logos-co/logos-protocol/c8bab12834dbf92155b483546875e6078d17c74e";
     logos-qt-sdk.url = "github:logos-co/logos-qt-sdk";
     logos-qt-sdk.inputs.logos-protocol.follows = "logos-protocol";
     logos-qt-sdk.inputs.logos-cpp-sdk.follows = "logos-cpp-sdk";
