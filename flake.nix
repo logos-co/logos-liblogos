@@ -45,7 +45,30 @@
     # Pinned to a rev rather than the branch head because logos-qt-host does not
     # exist on logos-plugin-qt's master yet (it arrives with B1). Drop the rev
     # once that merges.
-    logos-plugin-qt.url = "github:logos-co/logos-plugin-qt/8ccb1fc81642ee52e843b69ac3f90a1ec7084299";
+    #
+    # Raised 8ccb1fc -> cc24fa1c (tip of logos-plugin-qt's
+    # feat/b4-qt-host-windows-target, now on origin). Two reasons, and the first
+    # is not optional:
+    #
+    #   * 8ccb1fc keyed `packages` off forAllSystems, so it had no
+    #     x86_64-windows attribute at all -- and this flake reaches for
+    #     logos-plugin-qt.packages.x86_64-windows.logos-qt-host from
+    #     forAllTargets. That was an EVALUATION failure ("attribute
+    #     'x86_64-windows' missing"), not a link-time one. cc24fa1c is the rev
+    #     that gives logos-qt-host a Windows target.
+    #
+    #   * It is the SAME rev logos-qt-sdk pins. That matters because this flake
+    #     deliberately does not make logos-qt-sdk's logos-plugin-qt follow this
+    #     one, so a different rev on either side would put two logos-qt-host
+    #     builds in one closure -- two LogosAPI/TokenManager copies in the
+    #     process, which is the split-brain the .def block in src/CMakeLists.txt
+    #     exists to prevent.
+    #
+    # The sibling branch feat/b4-qt-host-windows-target-8ccb1fc (989f6ae) is a
+    # reduced re-baselining of the same work; its nix/qt-host.nix is identical,
+    # so it builds the same runtime, but it is NOT what logos-qt-sdk pins. Pick
+    # cc24fa1c so there is one qt-host, not two.
+    logos-plugin-qt.url = "github:logos-co/logos-plugin-qt/cc24fa1c0c43b2d96c1dc165ee545a0321318b59";
     logos-plugin-qt.inputs.logos-nix.follows = "logos-nix";
     logos-plugin-qt.inputs.nixpkgs.follows = "nixpkgs";
     logos-plugin-qt.inputs.logos-protocol.follows = "logos-protocol";
