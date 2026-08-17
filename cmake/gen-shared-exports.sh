@@ -69,10 +69,30 @@ while [ "$#" -gt 0 ]; do
         # cannot be exported at all (that includes the function-local statics
         # themselves — we export the ACCESSOR so callers reach ours).
         if (typ != "T" && typ != "D" && typ != "R" && typ != "B") next
-        # Itanium-mangled C++ only. Keeps toolchain bookkeeping such as
+        # Itanium-mangled C++ (^_Z), PLUS the logos-protocol C ABI (^lp_).
+        #
+        # The ^_Z test alone keeps toolchain bookkeeping such as
         # qt_version_tag_6_11_used — which every image legitimately defines —
-        # out of the export table.
-        if (name !~ /^_Z/) next
+        # out of the export table. But `lp_*` is `extern "C"`, so it is
+        # UNMANGLED and the same test silently dropped the entire C ABI.
+        #
+        # That was invisible until B5: before it, only C++ callers reached the
+        # shared runtime. B5 re-emits every Qt-typed dependency wrapper as a
+        # VENEER over the lp path, so a consumer that compiles such a wrapper —
+        # logos-basecamp compiles package_manager_api.cpp into its own exe —
+        # now calls lp_invoke / lp_client_create / lp_token_save directly. With
+        # them absent from the .def the exe cannot import them, and the link
+        # fails with plain `undefined reference to 'lp_invoke'`.
+        #
+        # Exporting is the correct fix rather than letting the consumer link
+        # liblogos_protocol.a itself: lp_token_save and friends operate on the
+        # TokenManager singleton, so a static copy in the exe would reinstate
+        # exactly the split-brain token store this whole .def scheme exists to
+        # prevent. Module plugins are separate processes and keep their own
+        # per-image copy by design (see logos_module_grant_host_services).
+        #
+        # The prefix is deliberately tight: `lp_` only, not "anything unmangled".
+        if (name !~ /^_Z/ && name !~ /^lp_/) next
         seenmem[mem] = 1
         k++; recmem[k] = mem; rectyp[k] = typ; recnam[k] = name
     }
