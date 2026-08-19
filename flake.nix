@@ -6,22 +6,25 @@
     nixpkgs.follows = "logos-nix/nixpkgs";
     logos-cpp-sdk.url = "github:logos-co/logos-cpp-sdk";
     logos-cpp-sdk.inputs.logos-protocol.follows = "logos-protocol";
-    # Pinned to a rev, not master, and the rev is not arbitrary: it is the SAME
-    # logos-protocol every in-process consumer links (logos-basecamp pins it
-    # too). One process holds liblogos_core plus the app image plus every UI
-    # plugin, and they share TokenManager -- so "one protocol rev" is not tidiness,
-    # it is the single-provider invariant itself. Two revs across that boundary
+    # Tracks master again. The rev pin here (c8bab12) existed only because
+    # logos-qt-host's logos_api.cpp calls TokenManager::forIdentity and
+    # ::isolateIdentity, and master's TokenManager had neither -- three hard
+    # compile errors, not a subtle ABI skew. logos-protocol#59 ("per-client token
+    # store, the host-services C ABI, and a container shape-check") MERGED and
+    # closed that gap: master carries forIdentity/isolateIdentity in
+    # cpp/token_manager.h and lp_grant_host_services/lp_token_keys in
+    # cpp/logos_protocol.h. Note #59 was SQUASH-merged, so the old rev is not an
+    # ancestor of master even though every line of it is in master -- check files,
+    # not `git merge-base --is-ancestor`.
+    #
+    # What has NOT changed is why every in-process consumer must agree on ONE
+    # logos-protocol: a single process holds liblogos_core plus the app image plus
+    # every UI plugin, and they share TokenManager. Two revs across that boundary
     # give two TokenManager generations, hence two token stores, hence
     # "ModuleProxy: rejecting unauthorized call ... auth token not recognized".
-    #
-    # Concretely, master (03842db) has a TokenManager with only instance() and
-    # m_tokens, while logos-qt-host's logos_api.cpp calls TokenManager::forIdentity
-    # and ::isolateIdentity. Building this repo against master is not a subtle
-    # ABI skew, it is three hard compile errors in logos_api.cpp.
-    #
-    # Drop the rev once feat/per-client-token-store merges -- together with the
-    # logos-plugin-qt rev below, which needs it.
-    logos-protocol.url = "github:logos-co/logos-protocol/c8bab12834dbf92155b483546875e6078d17c74e";
+    # That invariant is now maintained by the `follows` lines below rather than by
+    # a rev, so keep them.
+    logos-protocol.url = "github:logos-co/logos-protocol";
     logos-qt-sdk.url = "github:logos-co/logos-qt-sdk";
     logos-qt-sdk.inputs.logos-protocol.follows = "logos-protocol";
     logos-qt-sdk.inputs.logos-cpp-sdk.follows = "logos-cpp-sdk";
@@ -42,33 +45,25 @@
     # src/CMakeLists.txt exists to prevent. logos-nix/nixpkgs follow so the Qt
     # the host runtime is compiled against is the Qt liblogos_core links.
     #
-    # Pinned to a rev rather than the branch head because logos-qt-host does not
-    # exist on logos-plugin-qt's master yet (it arrives with B1). Drop the rev
-    # once that merges.
+    # Tracks master again. This was pinned to cc24fa1c (a branch tip) for two
+    # reasons, and logos-plugin-qt#19 ("the Qt host runtime and cdylib-glue
+    # generator") MERGED as 9b2c64e retired both:
     #
-    # Raised 8ccb1fc -> cc24fa1c (tip of logos-plugin-qt's
-    # feat/b4-qt-host-windows-target, now on origin). Two reasons, and the first
-    # is not optional:
+    #   * logos-qt-host did not exist on master at all. It does now -- master's
+    #     flake.nix publishes it (9 references) out of nix/qt-host.nix.
     #
-    #   * 8ccb1fc keyed `packages` off forAllSystems, so it had no
-    #     x86_64-windows attribute at all -- and this flake reaches for
+    #   * master keyed `packages` off forAllSystems, so it had no x86_64-windows
+    #     attribute, and this flake reaches for
     #     logos-plugin-qt.packages.x86_64-windows.logos-qt-host from
-    #     forAllTargets. That was an EVALUATION failure ("attribute
-    #     'x86_64-windows' missing"), not a link-time one. cc24fa1c is the rev
-    #     that gives logos-qt-host a Windows target.
+    #     forAllTargets -- an EVALUATION failure ("attribute 'x86_64-windows'
+    #     missing"), not a link-time one. master now keys `packages` off
+    #     forAllTargets, so that attribute resolves.
     #
-    #   * It is the SAME rev logos-qt-sdk pins. That matters because this flake
-    #     deliberately does not make logos-qt-sdk's logos-plugin-qt follow this
-    #     one, so a different rev on either side would put two logos-qt-host
-    #     builds in one closure -- two LogosAPI/TokenManager copies in the
-    #     process, which is the split-brain the .def block in src/CMakeLists.txt
-    #     exists to prevent.
-    #
-    # The sibling branch feat/b4-qt-host-windows-target-8ccb1fc (989f6ae) is a
-    # reduced re-baselining of the same work; its nix/qt-host.nix is identical,
-    # so it builds the same runtime, but it is NOT what logos-qt-sdk pins. Pick
-    # cc24fa1c so there is one qt-host, not two.
-    logos-plugin-qt.url = "github:logos-co/logos-plugin-qt/cc24fa1c0c43b2d96c1dc165ee545a0321318b59";
+    # The old note about matching whatever rev logos-qt-sdk pins is obsolete:
+    # logos-qt-sdk's master (c6be61d0) has no logos-plugin-qt input at all, so
+    # there is no second logos-qt-host to collide with. #19 was SQUASH-merged, so
+    # cc24fa1c is not an ancestor of master; the files are what settle it.
+    logos-plugin-qt.url = "github:logos-co/logos-plugin-qt";
     logos-plugin-qt.inputs.logos-nix.follows = "logos-nix";
     logos-plugin-qt.inputs.nixpkgs.follows = "nixpkgs";
     logos-plugin-qt.inputs.logos-protocol.follows = "logos-protocol";
