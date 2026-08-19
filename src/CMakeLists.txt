@@ -8,33 +8,43 @@ endif()
 get_filename_component(LOGOS_CPP_SDK_ROOT "${LOGOS_CPP_SDK_ROOT}" ABSOLUTE)
 
 # The SDK stack since the Qt split: logos-protocol (transports + lp_* C
-# ABI), logos-qt-sdk (LogosAPI + provider glue — what this runtime's Qt
-# side uses), logos-cpp-sdk (Qt-free std headers). The `logos_sdk` alias
+# ABI), logos-qt-host (LogosAPI + provider glue — the Qt HOST RUNTIME this
+# library links), logos-cpp-sdk (Qt-free std headers). The `logos_sdk` alias
 # is kept so the rest of this file (and the host targets) stay unchanged;
-# it now points at logos-qt-sdk, whose link interface chains
-# logos-protocol and its OpenSSL/Boost/nlohmann deps.
+# it points at logos-qt-host, whose link interface chains logos-protocol
+# and its OpenSSL/Boost/nlohmann deps.
+#
+# The host runtime used to be COMPILED INTO logos-qt-sdk and reached here as
+# logos-qt-sdk::logos_qt_sdk. The code now lives in logos-plugin-qt, which
+# publishes it as logos-qt-host::logos_qt_host. logos-qt-sdk keeps only the
+# developer layer (the UI plugin context, the LpBridge/wire headers, the Qt
+# generator) — none of which this library compiles against — so the host
+# runtime is found DIRECTLY here rather than arriving as a transitive
+# dependency of find_package(logos-qt-sdk). This repo still consumes
+# logos-qt-sdk as a nix input, but only to re-export those developer headers
+# from nix/include.nix; nothing in this CMake build needs it.
 if(NOT DEFINED LOGOS_PROTOCOL_ROOT AND DEFINED ENV{LOGOS_PROTOCOL_ROOT})
   set(LOGOS_PROTOCOL_ROOT "$ENV{LOGOS_PROTOCOL_ROOT}")
 endif()
-if(NOT DEFINED LOGOS_QT_SDK_ROOT AND DEFINED ENV{LOGOS_QT_SDK_ROOT})
-  set(LOGOS_QT_SDK_ROOT "$ENV{LOGOS_QT_SDK_ROOT}")
+if(NOT DEFINED LOGOS_QT_HOST_ROOT AND DEFINED ENV{LOGOS_QT_HOST_ROOT})
+  set(LOGOS_QT_HOST_ROOT "$ENV{LOGOS_QT_HOST_ROOT}")
 endif()
 
 if(EXISTS "${LOGOS_PROTOCOL_ROOT}/lib/cmake/logos-protocol"
-   AND EXISTS "${LOGOS_QT_SDK_ROOT}/lib/cmake/logos-qt-sdk")
+   AND EXISTS "${LOGOS_QT_HOST_ROOT}/lib/cmake/logos-qt-host")
   message(STATUS "Using logos-protocol at ${LOGOS_PROTOCOL_ROOT}")
-  message(STATUS "Using logos-qt-sdk at ${LOGOS_QT_SDK_ROOT}")
+  message(STATUS "Using logos-qt-host at ${LOGOS_QT_HOST_ROOT}")
   find_package(logos-protocol REQUIRED
     PATHS "${LOGOS_PROTOCOL_ROOT}/lib/cmake/logos-protocol" NO_DEFAULT_PATH)
-  find_package(logos-qt-sdk REQUIRED
-    PATHS "${LOGOS_QT_SDK_ROOT}/lib/cmake/logos-qt-sdk" NO_DEFAULT_PATH)
+  find_package(logos-qt-host REQUIRED
+    PATHS "${LOGOS_QT_HOST_ROOT}/lib/cmake/logos-qt-host" NO_DEFAULT_PATH)
   if(NOT TARGET logos_sdk)
     add_library(logos_sdk INTERFACE IMPORTED)
-    target_link_libraries(logos_sdk INTERFACE logos-qt-sdk::logos_qt_sdk)
+    target_link_libraries(logos_sdk INTERFACE logos-qt-host::logos_qt_host)
   endif()
 else()
-  message(FATAL_ERROR "logos-protocol / logos-qt-sdk not found. Set "
-                      "LOGOS_PROTOCOL_ROOT and LOGOS_QT_SDK_ROOT to built packages.")
+  message(FATAL_ERROR "logos-protocol / logos-qt-host not found. Set "
+                      "LOGOS_PROTOCOL_ROOT and LOGOS_QT_HOST_ROOT to built packages.")
 endif()
 
 # Qt-free base SDK headers (logos_module_context.h etc.) — header-only.
@@ -211,12 +221,40 @@ target_compile_definitions(logos_core PRIVATE LOGOS_CORE_LIBRARY)
 # Full rationale, including why the consumer-side __declspec(dllimport) is the
 # load-bearing half rather than the export, lives in
 # logos-protocol/cpp/logos_shared_api.h.
-if(WIN32 AND TARGET logos-protocol::logos_protocol AND TARGET logos-qt-sdk::logos_qt_sdk)
+if(WIN32)
+    # The two archives that make up the shared C++ runtime. The Qt half used to
+    # be logos-qt-sdk::logos_qt_sdk; it is logos-qt-host::logos_qt_host now --
+    # logos-qt-sdk handed the CODE to logos-qt-host, so it is logos-qt-host that
+    # owns liblogos_qt_host.a and $<TARGET_FILE:> only resolves on that target.
+    # find_package(logos-qt-host) at the top of this file imports it DIRECTLY,
+    # so the target is unconditionally here -- it is not inherited through
+    # logos-qt-sdk, and does not depend on logos-qt-sdk keeping a dependency on
+    # the host runtime.
+    #
+    # A missing target is FATAL rather than a skipped block, for the same reason
+    # a missing `nm` is fatal below: every failure mode of this block is silent.
+    # The old guard had the target tests in the `if`, so the day one of them was
+    # renamed, liblogos_core.dll would have been built with no export list and
+    # no diagnostic -- and the split-brain it exists to prevent (one
+    # TokenManager per image, tokens written into one and read from another)
+    # shows up much later as refused calls in an app, not as a build failure.
+    foreach(_logos_shared_target logos-protocol::logos_protocol logos-qt-host::logos_qt_host)
+        if(NOT TARGET ${_logos_shared_target})
+            message(FATAL_ERROR
+                "${_logos_shared_target} is not a target, so liblogos_core.dll cannot "
+                "be given the shared-runtime export list. Windows requires it: PE has no "
+                "symbol interposition, so without this every in-process image links its "
+                "own copy of TokenManager and cross-module calls are refused at runtime. "
+                "Check that find_package(logos-qt-host) resolved -- i.e. that "
+                "LOGOS_QT_HOST_ROOT points at a built logos-qt-host prefix.")
+        endif()
+    endforeach()
+
     # Ask the imported targets where their archives actually are rather than
     # rebuilding the path by hand, so a rename or a layout change fails at
     # generate time instead of producing an empty export list.
     set(_logos_protocol_archive "$<TARGET_FILE:logos-protocol::logos_protocol>")
-    set(_logos_qt_sdk_archive   "$<TARGET_FILE:logos-qt-sdk::logos_qt_sdk>")
+    set(_logos_qt_host_archive  "$<TARGET_FILE:logos-qt-host::logos_qt_host>")
 
     # --whole-archive, i.e. the whole of both libraries goes into the DLL even
     # where liblogos itself never calls it.
@@ -233,7 +271,7 @@ if(WIN32 AND TARGET logos-protocol::logos_protocol AND TARGET logos-qt-sdk::logo
     target_link_options(logos_core PRIVATE
         "-Wl,--whole-archive"
         "${_logos_protocol_archive}"
-        "${_logos_qt_sdk_archive}"
+        "${_logos_qt_host_archive}"
         "-Wl,--no-whole-archive")
 
     # CMAKE_NM is normally set by the toolchain file; fall back to the
@@ -255,9 +293,9 @@ if(WIN32 AND TARGET logos-protocol::logos_protocol AND TARGET logos-qt-sdk::logo
                 "${CMAKE_CURRENT_SOURCE_DIR}/../cmake/gen-shared-exports.sh"
                 "${_logos_nm}" "${_logos_shared_def}"
                 "${_logos_protocol_archive}" "*"
-                "${_logos_qt_sdk_archive}"   "*"
+                "${_logos_qt_host_archive}"  "*"
         DEPENDS "${CMAKE_CURRENT_SOURCE_DIR}/../cmake/gen-shared-exports.sh"
-                "${_logos_protocol_archive}" "${_logos_qt_sdk_archive}"
+                "${_logos_protocol_archive}" "${_logos_qt_host_archive}"
         COMMENT "Generating liblogos_core shared-runtime export definition"
         VERBATIM
     )

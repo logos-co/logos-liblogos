@@ -170,6 +170,52 @@ char* logos_core_get_token(const char* key);
 
 See `src/logos_core/logos_core.h` for the full API.
 
+### Inter-module access enforcement (off by default)
+
+By default a loaded module may call any other loaded module. Enforcement is
+opt-in, and `mode` in the access policy is the switch:
+
+```jsonc
+{"version": 1, "mode": "enforce"}
+```
+
+Installing that document (via `logos_core_set_access_policy`, before
+`logos_core_start()`) turns on **deny-by-default**: for every loaded target,
+core derives the allowed callers from the declared dependency graph — the
+target's loaded dependents, plus the trusted `core` / `core_service` — and
+registers them with capability_module. A module that never declared the target
+as a dependency is refused a token, so its call can never proceed, and
+capability_module logs the refusal with both names:
+
+```
+[capability_module] access policy denies 'caller_module' -> 'target_module'
+```
+
+Anything other than `mode: "enforce"` — no policy, `NULL`, `""`, unparseable
+JSON, a different mode — leaves enforcement **off**, which is the pre-existing
+behaviour. Core says which side it landed on at startup, so a mistyped mode is
+visible rather than silently permissive:
+
+```
+Inter-module access enforcement is ON (mode=enforce): deny-by-default — ...
+Inter-module access enforcement is OFF (no access policy set): ...
+```
+
+A `restrictions` entry overrides the derived list for that target verbatim,
+which is the escape hatch for callers that legitimately cannot declare their
+target (out-of-process `ui_qml` plugins are not tracked as dependents, so they
+need an explicit entry):
+
+```jsonc
+{"version": 1, "mode": "enforce",
+ "restrictions": {"accounts_module": {"allowedCallers": ["accounts_ui"]}}}
+```
+
+`capability_module`, `core` and `core_service` are never restricted as targets.
+
+Hosts expose this as `--access-policy` — see the logoscore CLI and Basecamp
+READMEs.
+
 ### Thread safety
 
 Module load/unload operations (`logos_core_load_module`, `logos_core_unload_module`) are serialised internally by a single mutex. It is safe to call them concurrently from multiple threads, including rapid and repeated load/unload cycles on the same module — each call waits for its turn and the process management layer handles teardown cleanly before the next launch. `logos_core_unload_module` with `with_dependents=true` in particular holds the lock for its entire leaves-first teardown so a late-arriving load can't interleave between tearing down a dependent and its parent.
