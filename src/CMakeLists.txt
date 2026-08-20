@@ -221,7 +221,14 @@ target_compile_definitions(logos_core PRIVATE LOGOS_CORE_LIBRARY)
 # Full rationale, including why the consumer-side __declspec(dllimport) is the
 # load-bearing half rather than the export, lives in
 # logos-protocol/cpp/logos_shared_api.h.
-if(WIN32)
+# The single-provider block runs on EVERY platform. PE has no interposition at
+# all; Mach-O's two-level namespace gives none either once a consumer image
+# defines its own copy (measured in logos-basecamp: one reference to
+# LogosAPI::forIdentity pulled logos_api.cpp.o into the exe and produced 31
+# refused calls). ELF does collapse duplicates, but including everything here
+# unconditionally is what lets the consumers empty their archives on all three
+# platforms and lets the symbol gate assert ONE rule everywhere. Only the PE
+# .def below is Windows-specific.
     # The two archives that make up the shared C++ runtime. The Qt half used to
     # be logos-qt-sdk::logos_qt_sdk; it is logos-qt-host::logos_qt_host now --
     # logos-qt-sdk handed the CODE to logos-qt-host, so it is logos-qt-host that
@@ -242,9 +249,10 @@ if(WIN32)
         if(NOT TARGET ${_logos_shared_target})
             message(FATAL_ERROR
                 "${_logos_shared_target} is not a target, so liblogos_core.dll cannot "
-                "be given the shared-runtime export list. Windows requires it: PE has no "
-                "symbol interposition, so without this every in-process image links its "
-                "own copy of TokenManager and cross-module calls are refused at runtime. "
+                "be given the shared-runtime contents. Every platform requires it: neither "
+                "PE nor Mach-O interposes symbols, so without this every in-process image "
+                "links its own copy of TokenManager and cross-module calls are refused at "
+                "runtime. "
                 "Check that find_package(logos-qt-host) resolved -- i.e. that "
                 "LOGOS_QT_HOST_ROOT points at a built logos-qt-host prefix.")
         endif()
@@ -268,11 +276,24 @@ if(WIN32)
     # fall back on, anything the DLL failed to include becomes an undefined
     # reference in a downstream repo. Linking normally would include only the
     # objects liblogos happens to reference, which is a moving target.
-    target_link_options(logos_core PRIVATE
-        "-Wl,--whole-archive"
-        "${_logos_protocol_archive}"
-        "${_logos_qt_host_archive}"
-        "-Wl,--no-whole-archive")
+    # GNU ld brackets the archives; ld64 has no --whole-archive and takes one
+    # -force_load per archive instead. Getting this wrong is silent: the link
+    # succeeds having included only what liblogos itself referenced.
+    if(APPLE)
+        target_link_options(logos_core PRIVATE
+            "-Wl,-force_load,${_logos_protocol_archive}"
+            "-Wl,-force_load,${_logos_qt_host_archive}")
+    else()
+        target_link_options(logos_core PRIVATE
+            "-Wl,--whole-archive"
+            "${_logos_protocol_archive}"
+            "${_logos_qt_host_archive}"
+            "-Wl,--no-whole-archive")
+    endif()
+
+# The PE export table is Windows-only: a .def has no meaning for ELF or Mach-O,
+# which export non-hidden symbols from a shared library by default.
+if(WIN32)
 
     # CMAKE_NM is normally set by the toolchain file; fall back to the
     # cross-prefixed binary so a plain `cmake -DCMAKE_TOOLCHAIN_FILE=...` still
