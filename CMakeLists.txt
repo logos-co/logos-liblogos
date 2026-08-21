@@ -44,11 +44,24 @@ endif()
 # The INSTALLED liblogos_core is covered separately by INSTALL_RPATH $ORIGIN in
 # src/CMakeLists.txt plus staging both libraries beside it (nix/lib.nix); this
 # entry is what makes the BUILD tree -- tests especially -- resolve them.
+# BUILD_RPATH covers binaries run from the build tree; INSTALL_RPATH covers the
+# ones that get installed and run from $out -- which is what the test derivation
+# actually executes. Both are needed, and only Linux says so: on macOS the
+# installed test binary resolved the libraries anyway and the suite passed, while
+# the same commit on Linux died with
+#   error while loading shared libraries: liblogos_qt_host.so
+# A macOS-green test run is not evidence here.
+#
+# logos_core itself is unaffected by the INSTALL_RPATH lines: it sets its own
+# INSTALL_RPATH ($ORIGIN / @loader_path in src/CMakeLists.txt), which overrides
+# the directory-level default, and nix/lib.nix stages both libraries beside it.
 if(DEFINED LOGOS_PROTOCOL_ROOT)
     list(APPEND CMAKE_BUILD_RPATH "${LOGOS_PROTOCOL_ROOT}/lib")
+    list(APPEND CMAKE_INSTALL_RPATH "${LOGOS_PROTOCOL_ROOT}/lib")
 endif()
 if(DEFINED LOGOS_QT_HOST_ROOT)
     list(APPEND CMAKE_BUILD_RPATH "${LOGOS_QT_HOST_ROOT}/lib")
+    list(APPEND CMAKE_INSTALL_RPATH "${LOGOS_QT_HOST_ROOT}/lib")
 endif()
 
 # Build src first to ensure logos_core is built before modules
