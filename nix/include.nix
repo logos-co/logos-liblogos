@@ -8,6 +8,24 @@ pkgs.stdenv.mkDerivation {
   
   inherit src;
   inherit (common) meta;
+
+  # This output RE-EXPORTS the Qt host runtime headers, and two of them --
+  # logos_provider_object.h and logos_qt_arg_decode.h -- include
+  # <nlohmann/json.hpp>. So anything compiling against these includes needs
+  # nlohmann on its include path, whether or not it has ever heard of nlohmann.
+  #
+  # Consumers that go through find_package(logos-qt-host) already get it: that
+  # package find_dependency's logos-protocol, which PUBLIC-links nlohmann_json.
+  # Consumers that take the include directory DIRECTLY -- logos-module-viewer
+  # uses find_library + raw -I, and it is not alone in that -- bypass CMake's
+  # propagation entirely and fail with
+  #
+  #     fatal error: nlohmann/json.hpp: No such file or directory
+  #
+  # in a repo that never mentions nlohmann. Propagating it here fixes both
+  # shapes at the source rather than adding a dependency to each consumer that
+  # trips over it, which is a list that only grows.
+  propagatedBuildInputs = [ pkgs.nlohmann_json ];
   
   # No build phase needed, just install headers
   dontBuild = true;
