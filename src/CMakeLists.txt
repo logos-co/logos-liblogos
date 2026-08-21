@@ -40,7 +40,16 @@ if(EXISTS "${LOGOS_PROTOCOL_ROOT}/lib/cmake/logos-protocol"
     PATHS "${LOGOS_QT_HOST_ROOT}/lib/cmake/logos-qt-host" NO_DEFAULT_PATH)
   if(NOT TARGET logos_sdk)
     add_library(logos_sdk INTERFACE IMPORTED)
-    target_link_libraries(logos_sdk INTERFACE logos-qt-host::logos_qt_host)
+    # The SHARED Qt host runtime, not the static archive. This is the line that
+    # replaces the whole-archive + generated-.def block further down: it makes
+    # liblogos_core a CONSUMER of the runtime rather than its provider, so
+    # TokenManager / LogosAPIClient / LogosAPI each have exactly one definition
+    # in the process because there is exactly one library defining them.
+    #
+    # logos_qt_host_shared itself PUBLIC-links logos_protocol_shared, so the
+    # protocol half arrives transitively and correctly layered -- it is asserted
+    # in logos-plugin-qt by checks.shared-runtime-layering.
+    target_link_libraries(logos_sdk INTERFACE logos-qt-host::logos_qt_host_shared)
   endif()
 else()
   message(FATAL_ERROR "logos-protocol / logos-qt-host not found. Set "
@@ -207,106 +216,41 @@ target_compile_definitions(logos_core PRIVATE LOGOS_CORE_LIBRARY)
 # Do not reinstate it; if the C API ever stops being exported, the cause is a
 # missing LOGOS_CORE_EXPORT on a declaration, not a missing linker flag.
 #
-# The C API is not the whole story, though. Narrowing the export table to it was
-# what made main_ui link again, but it also left every in-process image with its
+# The C API is not the whole story, and the rest of it is no longer solved here.
+#
+# Narrowing the export table to the C API left every in-process image with its
 # own statically linked copy of the shared C++ runtime -- and therefore its own
 # TokenManager singleton, so a capability token saved by the host was invisible
-# to the UI plugin and every cross-module call was refused. ELF and Mach-O
-# interpose these symbols across the process and get one instance for free; PE
-# does not. The block below closes that gap the only way PE allows: liblogos_core
-# publishes the shared types EXPLICITLY, and the in-process consumers import them
-# instead of re-linking them. Neither horn of the old dilemma -- export
-# everything and collide, or export nothing and duplicate -- is taken.
+# to the UI plugin and every cross-module call was refused. This file used to
+# close that gap by absorbing liblogos_protocol.a and liblogos_qt_host.a whole
+# (--whole-archive) and re-publishing their symbols through a generated .def, so
+# that liblogos_core became the single provider for types it does not own.
+#
+# It is not the provider any more. logos-protocol and logos-qt-host now ship
+# REAL SHARED LIBRARIES that own their own symbols -- liblogos_protocol exports
+# its table from a generated .def of its own (logos-protocol#65), and
+# liblogos_qt_host owns LogosAPI (logos-plugin-qt#22). liblogos_core links them
+# like any other dependency and IMPORTS the runtime instead of defining it.
+#
+# So this whole block is gone, along with cmake/gen-shared-exports.sh. What
+# replaces it is one line: logos_sdk carries logos_qt_host_shared rather than
+# the static archive, near the top of this file.
+#
+# WHAT DID NOT CHANGE is the invariant. The runtime must still exist exactly
+# once per process; it is now enforced by there being one shared library per
+# type rather than by one image absorbing everything. Consumers still empty
+# their static archives (logos-basecamp/cmake/LogosSharedFromDll.cmake) so ld
+# cannot pull an archive member that would redefine an imported symbol, and
+# logos-basecamp/nix/symbol-gate.nix still asserts the result.
+#
+# OUT-OF-PROCESS consumers are deliberately unaffected: module plugins and
+# ui_qml backends keep linking the STATIC archive, because each runs in its own
+# process where its own copy is the CORRECT per-process singleton, and because a
+# .lgx records an empty nix closure and could not carry a shared library anyway.
 #
 # Full rationale, including why the consumer-side __declspec(dllimport) is the
 # load-bearing half rather than the export, lives in
 # logos-protocol/cpp/logos_shared_api.h.
-if(WIN32)
-    # The two archives that make up the shared C++ runtime. The Qt half used to
-    # be logos-qt-sdk::logos_qt_sdk; it is logos-qt-host::logos_qt_host now --
-    # logos-qt-sdk handed the CODE to logos-qt-host, so it is logos-qt-host that
-    # owns liblogos_qt_host.a and $<TARGET_FILE:> only resolves on that target.
-    # find_package(logos-qt-host) at the top of this file imports it DIRECTLY,
-    # so the target is unconditionally here -- it is not inherited through
-    # logos-qt-sdk, and does not depend on logos-qt-sdk keeping a dependency on
-    # the host runtime.
-    #
-    # A missing target is FATAL rather than a skipped block, for the same reason
-    # a missing `nm` is fatal below: every failure mode of this block is silent.
-    # The old guard had the target tests in the `if`, so the day one of them was
-    # renamed, liblogos_core.dll would have been built with no export list and
-    # no diagnostic -- and the split-brain it exists to prevent (one
-    # TokenManager per image, tokens written into one and read from another)
-    # shows up much later as refused calls in an app, not as a build failure.
-    foreach(_logos_shared_target logos-protocol::logos_protocol logos-qt-host::logos_qt_host)
-        if(NOT TARGET ${_logos_shared_target})
-            message(FATAL_ERROR
-                "${_logos_shared_target} is not a target, so liblogos_core.dll cannot "
-                "be given the shared-runtime export list. Windows requires it: PE has no "
-                "symbol interposition, so without this every in-process image links its "
-                "own copy of TokenManager and cross-module calls are refused at runtime. "
-                "Check that find_package(logos-qt-host) resolved -- i.e. that "
-                "LOGOS_QT_HOST_ROOT points at a built logos-qt-host prefix.")
-        endif()
-    endforeach()
-
-    # Ask the imported targets where their archives actually are rather than
-    # rebuilding the path by hand, so a rename or a layout change fails at
-    # generate time instead of producing an empty export list.
-    set(_logos_protocol_archive "$<TARGET_FILE:logos-protocol::logos_protocol>")
-    set(_logos_qt_host_archive  "$<TARGET_FILE:logos-qt-host::logos_qt_host>")
-
-    # --whole-archive, i.e. the whole of both libraries goes into the DLL even
-    # where liblogos itself never calls it.
-    #
-    # This is not gold-plating; it is what makes "single provider" true rather
-    # than approximate. The consumers link an EMPTY stand-in for these archives
-    # (logos-basecamp/cmake/LogosSharedFromDll.cmake) because ld would otherwise
-    # pull members for incidental reasons -- it was observed pulling
-    # logos_api.cpp.obj to satisfy std::string's move constructor -- and each
-    # pulled object collides with our export. Once the consumer has no archive to
-    # fall back on, anything the DLL failed to include becomes an undefined
-    # reference in a downstream repo. Linking normally would include only the
-    # objects liblogos happens to reference, which is a moving target.
-    target_link_options(logos_core PRIVATE
-        "-Wl,--whole-archive"
-        "${_logos_protocol_archive}"
-        "${_logos_qt_host_archive}"
-        "-Wl,--no-whole-archive")
-
-    # CMAKE_NM is normally set by the toolchain file; fall back to the
-    # cross-prefixed binary so a plain `cmake -DCMAKE_TOOLCHAIN_FILE=...` still
-    # generates. A missing nm must fail here, loudly, rather than silently
-    # emitting an empty .def and restoring the split-brain.
-    set(_logos_nm "${CMAKE_NM}")
-    if(NOT _logos_nm)
-        find_program(_logos_nm NAMES "${CMAKE_CXX_COMPILER_TARGET}-nm" x86_64-w64-mingw32-nm nm)
-    endif()
-    if(NOT _logos_nm)
-        message(FATAL_ERROR "nm not found; cannot generate the liblogos_core export definition")
-    endif()
-
-    set(_logos_shared_def "${CMAKE_CURRENT_BINARY_DIR}/logos_core_shared_exports.def")
-    add_custom_command(
-        OUTPUT "${_logos_shared_def}"
-        COMMAND ${CMAKE_COMMAND} -E env sh
-                "${CMAKE_CURRENT_SOURCE_DIR}/../cmake/gen-shared-exports.sh"
-                "${_logos_nm}" "${_logos_shared_def}"
-                "${_logos_protocol_archive}" "*"
-                "${_logos_qt_host_archive}"  "*"
-        DEPENDS "${CMAKE_CURRENT_SOURCE_DIR}/../cmake/gen-shared-exports.sh"
-                "${_logos_protocol_archive}" "${_logos_qt_host_archive}"
-        COMMENT "Generating liblogos_core shared-runtime export definition"
-        VERBATIM
-    )
-    add_custom_target(logos_core_shared_exports DEPENDS "${_logos_shared_def}")
-    add_dependencies(logos_core logos_core_shared_exports)
-
-    # A .def passed to the link ADDS to the export table; the ~18
-    # __declspec(dllexport) logos_core_* C API entries survive alongside it.
-    target_link_options(logos_core PRIVATE "${_logos_shared_def}")
-    set_property(TARGET logos_core APPEND PROPERTY LINK_DEPENDS "${_logos_shared_def}")
-endif()
 
 # Portable build: selects portable LGX variants instead of dev variants
 option(LOGOS_PORTABLE_BUILD "Build for portable variant selection" OFF)

@@ -86,13 +86,21 @@ pkgs.stdenv.mkDerivation {
     ${pkgs.lib.optionalString pkgs.stdenv.isLinux ''
       # Fix RPATH on Linux to avoid /build/ references and include all dependencies.
       # spdlog links libfmt; both must be on RPATH because patchelf replaces the default search paths.
+      #
+      # THIS LIST IS THE WHOLE SEARCH PATH. `patchelf --set-rpath` REPLACES what
+      # CMake wrote, so CMAKE_BUILD_RPATH / CMAKE_INSTALL_RPATH have no effect on
+      # the installed binaries here -- anything missing from this string is
+      # missing at runtime, full stop. Measured: adding both to CMAKE_*_RPATH
+      # changed nothing and the suite still died with
+      #   error while loading shared libraries: liblogos_qt_host.so
+      # while the same commit passed on macOS, which does not go through here.
       # OpenSSL (libssl, libcrypto) is needed because the SDK's plain-C++ TLS
       # transport links it transitively — without this the wrapped binary
       # dies with `libssl.so.3: cannot open shared object`.
-      _rpath="$out/lib:${pkgs.boost}/lib:${common.env.LOGOS_PACKAGE_MANAGER_ROOT}/lib:${pkgs.gtest}/lib:${pkgs.qt6.qtbase}/lib:${pkgs.qt6.qtremoteobjects}/lib:${pkgs.spdlog}/lib:${pkgs.fmt}/lib:${pkgs.openssl.out}/lib:${pkgs.stdenv.cc.cc.lib}/lib"
+      _rpath="$out/lib:${common.env.LOGOS_PROTOCOL_ROOT}/lib:${common.env.LOGOS_QT_HOST_ROOT}/lib:${pkgs.boost}/lib:${common.env.LOGOS_PACKAGE_MANAGER_ROOT}/lib:${pkgs.gtest}/lib:${pkgs.qt6.qtbase}/lib:${pkgs.qt6.qtremoteobjects}/lib:${pkgs.spdlog}/lib:${pkgs.fmt}/lib:${pkgs.openssl.out}/lib:${pkgs.stdenv.cc.cc.lib}/lib"
       patchelf --set-rpath "$_rpath" $out/bin/logos_core_tests || true
       # Fix RPATH on liblogos_core.so so it can find its transitive deps (e.g. libboost_process, spdlog, fmt, libssl)
-      _rpath_lib="$out/lib:${pkgs.boost}/lib:${common.env.LOGOS_PACKAGE_MANAGER_ROOT}/lib:${pkgs.qt6.qtbase}/lib:${pkgs.qt6.qtremoteobjects}/lib:${pkgs.spdlog}/lib:${pkgs.fmt}/lib:${pkgs.openssl.out}/lib:${pkgs.stdenv.cc.cc.lib}/lib"
+      _rpath_lib="$out/lib:${common.env.LOGOS_PROTOCOL_ROOT}/lib:${common.env.LOGOS_QT_HOST_ROOT}/lib:${pkgs.boost}/lib:${common.env.LOGOS_PACKAGE_MANAGER_ROOT}/lib:${pkgs.qt6.qtbase}/lib:${pkgs.qt6.qtremoteobjects}/lib:${pkgs.spdlog}/lib:${pkgs.fmt}/lib:${pkgs.openssl.out}/lib:${pkgs.stdenv.cc.cc.lib}/lib"
       patchelf --set-rpath "$_rpath_lib" $out/lib/liblogos_core.so || true
     ''}
     
