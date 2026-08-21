@@ -31,6 +31,26 @@ if(DEFINED LOGOS_PACKAGE_MANAGER_ROOT)
     list(APPEND CMAKE_BUILD_RPATH "${LOGOS_PACKAGE_MANAGER_ROOT}/lib")
 endif()
 
+# The shared C++ runtime, which logos_core now IMPORTS rather than absorbing.
+# Both libraries carry an @rpath install name, so a consumer that does not know
+# where they live cannot load at all -- and the failure is at dyld time, before
+# main(), with no hint from the build.
+#
+# Measured before this existed: logos_core_tests aborted with
+#   dyld: Library not loaded: @rpath/liblogos_qt_host.dylib
+# while `nix build .#default` had already succeeded. The library builds and
+# installs whether or not anything can load it.
+#
+# The INSTALLED liblogos_core is covered separately by INSTALL_RPATH $ORIGIN in
+# src/CMakeLists.txt plus staging both libraries beside it (nix/lib.nix); this
+# entry is what makes the BUILD tree -- tests especially -- resolve them.
+if(DEFINED LOGOS_PROTOCOL_ROOT)
+    list(APPEND CMAKE_BUILD_RPATH "${LOGOS_PROTOCOL_ROOT}/lib")
+endif()
+if(DEFINED LOGOS_QT_HOST_ROOT)
+    list(APPEND CMAKE_BUILD_RPATH "${LOGOS_QT_HOST_ROOT}/lib")
+endif()
+
 # Build src first to ensure logos_core is built before modules
 add_subdirectory(src)
 
