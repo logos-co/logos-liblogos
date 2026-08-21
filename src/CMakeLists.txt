@@ -239,7 +239,9 @@ target_compile_definitions(logos_core PRIVATE LOGOS_CORE_LIBRARY)
 # WHAT DID NOT CHANGE is the invariant. The runtime must still exist exactly
 # once per process; it is now enforced by there being one shared library per
 # type rather than by one image absorbing everything. Consumers still empty
-# their static archives (logos-basecamp/cmake/LogosSharedFromDll.cmake) so ld
+# their static archives (that was logos-basecamp/cmake/LogosSharedFromDll.cmake,
+# deleted in logos-basecamp#348 and logos-logoscore-cli#98 once they linked the
+# shared libraries directly and had no second static copy left to suppress) so ld
 # cannot pull an archive member that would redefine an imported symbol, and
 # logos-basecamp/nix/symbol-gate.nix still asserts the result.
 #

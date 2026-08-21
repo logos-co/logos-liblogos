@@ -192,15 +192,31 @@
           includePortable = import ./nix/include.nix { inherit pkgs src logosSdk; inherit logosProtocolPkg logosQtSdk logosQtHost; common = commonPortable; };
 
           # Combined package (dev)
+          #
+          # propagatedBuildInputs is set HERE as well as on the headers output,
+          # and that is not redundant: symlinkJoin builds a NEW derivation and
+          # does not carry the propagation of the paths it joins. Consumers take
+          # this join, not the headers output, so setting it only there reaches
+          # nobody -- measured, logos-module-viewer still failed with
+          #     fatal error: nlohmann/json.hpp: No such file or directory
+          # until it was set on the join too.
+          #
+          # nlohmann is needed because this output re-exports the Qt host runtime
+          # headers, two of which (logos_provider_object.h, logos_qt_arg_decode.h)
+          # include <nlohmann/json.hpp>. Consumers going through
+          # find_package(logos-qt-host) get it transitively; consumers taking the
+          # include directory directly do not.
           liblogos = pkgs.symlinkJoin {
             name = "logos-liblogos";
             paths = [ bin lib include ];
+            propagatedBuildInputs = [ pkgs.nlohmann_json ];
           };
 
           # Combined package (portable)
           liblogosPortable = pkgs.symlinkJoin {
             name = "logos-liblogos-portable";
             paths = [ binPortable libPortable includePortable ];
+            propagatedBuildInputs = [ pkgs.nlohmann_json ];
           };
         in
         {
