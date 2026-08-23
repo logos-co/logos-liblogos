@@ -63,7 +63,7 @@ pkgs.stdenv.mkDerivation {
     #
     # Overwriting is the point, so this cp must stay after the qt-sdk one; the
     # qt-sdk copy above still supplies the headers qt-host does not ship at all
-    # (logos_ui_plugin_context.h, logos_qt_lp_bridge.h, logos_qt_wire.h).
+    # (logos_qt_lp_bridge.h, logos_qt_wire.h, logos_qt_host_core.h).
     #
     # `cp -rf` plus the chmod are load-bearing, not tidiness: everything copied
     # above came out of the nix store mode 0444, so a plain `cp -r` over it

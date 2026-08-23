@@ -28,6 +28,14 @@
     logos-qt-sdk.url = "github:logos-co/logos-qt-sdk";
     logos-qt-sdk.inputs.logos-protocol.follows = "logos-protocol";
     logos-qt-sdk.inputs.logos-cpp-sdk.follows = "logos-cpp-sdk";
+    # logos-plugin-qt MUST follow. logos-qt-sdk gained this input after the pin
+    # this repo carried until now (c6be61d0 had none), and logos-plugin-qt is
+    # where logos-qt-host lives -- so without this, the lock resolves TWO
+    # logos-plugin-qt revisions and the closure can carry two logos-qt-host
+    # prefixes. That is the split-brain this whole layer exists to prevent: a
+    # second TokenManager, and every cross-module call refused at runtime with
+    # no build diagnostic.
+    logos-qt-sdk.inputs.logos-plugin-qt.follows = "logos-plugin-qt";
     # The Qt HOST RUNTIME this library links: LogosAPI (the object handed to
     # initLogos), LogosAPIProvider, LogosProviderBase and the legacy
     # PluginInterface. It used to be compiled into logos-qt-sdk; the CODE now
@@ -35,9 +43,13 @@
     # takes it from there instead of through logos-qt-sdk's forwarding shim.
     #
     # logos-qt-sdk stays an input regardless: it still owns the DEVELOPER layer
-    # this repo re-exports through nix/include.nix (logos_ui_plugin_context.h,
-    # logos_qt_lp_bridge.h, logos_qt_wire.h) plus the Qt code generator. That
+    # this repo re-exports through nix/include.nix (logos_qt_lp_bridge.h,
+    # logos_qt_wire.h, logos_qt_host_core.h) plus the Qt code generator. That
     # dependency is about headers, not about the host runtime.
+    # (logos_ui_plugin_context.h was in that set until logos-qt-sdk#42 handed it
+    # to logos-view-module, which owns it alongside the view glue emitter it is
+    # a matched pair with. Nothing here consumed it: ui builds reach it through
+    # logos-module-builder's LOGOS_VIEW_INCLUDE_DIR.)
     #
     # logos-protocol MUST follow. logos_qt_host and liblogos_core share
     # TokenManager and the transport ABI in ONE process, so two protocol revs
@@ -59,10 +71,12 @@
     #     missing"), not a link-time one. master now keys `packages` off
     #     forAllTargets, so that attribute resolves.
     #
-    # The old note about matching whatever rev logos-qt-sdk pins is obsolete:
-    # logos-qt-sdk's master (c6be61d0) has no logos-plugin-qt input at all, so
-    # there is no second logos-qt-host to collide with. #19 was SQUASH-merged, so
-    # cc24fa1c is not an ancestor of master; the files are what settle it.
+    # logos-qt-sdk DOES have a logos-plugin-qt input again as of the pin above --
+    # it did not at c6be61d0, which is what the note here used to rely on. That
+    # is why the follows was added beside its url: without it the lock resolves a
+    # second logos-plugin-qt, and logos-plugin-qt is where logos-qt-host lives.
+    # #19 was SQUASH-merged, so cc24fa1c is not an ancestor of master; the files
+    # are what settle it.
     logos-plugin-qt.url = "github:logos-co/logos-plugin-qt";
     logos-plugin-qt.inputs.logos-nix.follows = "logos-nix";
     logos-plugin-qt.inputs.nixpkgs.follows = "nixpkgs";
