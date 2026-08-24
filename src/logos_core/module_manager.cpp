@@ -220,6 +220,9 @@ namespace {
 
         LogosAPIClient* client = capabilityModuleClient();
 
+        // INBOUND half of load-time identity: capability stores (name, token)
+        // so authorize can name the caller from the presented token rather
+        // than from a self-asserted fromModuleName.
         if (!client->informModuleToken(capabilityModuleToken, name, token)) {
             spdlog::warn("Failed to register token with capability module for: {}", name);
         }
@@ -324,6 +327,8 @@ namespace {
         if (!loader->load(desc, onTerminated, handle))
             return false;
 
+        // OUTBOUND half of load-time identity: mint a root token, send it into
+        // the child, and register it locally under the module's name.
         std::string authToken = boost::uuids::to_string(boost::uuids::random_generator()());
 
         if (!loader->sendToken(name, authToken)) {
