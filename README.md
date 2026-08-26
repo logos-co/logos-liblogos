@@ -224,6 +224,43 @@ Module load/unload operations (`logos_core_load_module`, `logos_core_unload_modu
 
 Read-only accessors (`logos_core_get_known_modules`, `logos_core_get_loaded_modules`) use that shared reader-writer lock and are safe to call concurrently with each other and with `logos_core_refresh_modules`.
 
+## Module lifecycle observer
+
+`src/logos_core/module_state_observer.h` turns lifecycle changes into
+structured, sequenced facts. Until it existed, load/unload/crash were
+`spdlog::info` lines and registry membership changes were silent, so every
+consumer polled — `logos-basecamp` runs a 2s `QTimer` and infers module state
+from package-install events.
+
+It reports; it does not drive anything. Transitions are handed to a **sink**,
+and with no sink installed `record()` early-outs before it allocates, so a host
+that consumes nothing pays essentially nothing. Wiring a sink that pushes to the
+`modules_state` module is a separate piece of work and lives elsewhere.
+
+States: `unloaded`, `loading`, `loaded`, `stopping`, `error`, plus the
+event-only `absent`, which names the two membership edges (`absent -> unloaded`
+on discovery, `unloaded -> absent` on prune).
+
+Two rules govern every call site, and both are load-bearing:
+
+- **Never dispatch under `loadMutex()`.** `record()` only buffers; `flush()`
+  dispatches, and the entry points declare a `ScopedModuleStateFlush` *before*
+  their lock guard so it is destroyed *after* it. A sink performing an RPC from
+  inside the load path while holding that lock is the shape of two failures
+  already paid for here: the ui-host startup token deadlock, and a ~417s
+  Basecamp startup stall caused by a synchronous call to an absent module.
+
+- **One `seq` counter, for deltas and snapshots alike.** Consumers apply a
+  transition only when its `seq` beats what they hold for that module, and keep
+  a seq tombstone for a departed one. Stamping snapshots from a second counter
+  makes that tombstone either unreachably high (a real later delta is dropped
+  forever) or trivially low (a stale delta resurrects a pruned module).
+
+`onTerminated` fires for both an orderly unload and a module that died, so
+teardown announces intent (`markExitExpected`) before calling `terminate()` and
+the callback consumes it. Host shutdown announces every loaded module first —
+without that, a clean exit reports the whole fleet as having crashed.
+
 ## Dev vs Portable Builds
 
 The library supports two build modes controlled by the `LOGOS_PORTABLE_BUILD` CMake flag:

@@ -1,4 +1,5 @@
 #include "module_registry.h"
+#include "module_state_observer.h"
 #include <spdlog/spdlog.h>
 #include <cassert>
 #include <ctime>
@@ -57,7 +58,35 @@ std::vector<std::string> ModuleRegistry::modulesDirs() const {
 }
 
 void ModuleRegistry::discoverInstalledModules() {
+    // ── THE MEMBERSHIP EDGES ─────────────────────────────────────────────────
+    //
+    // A scan is where the host's SET of known modules changes in bulk, and the
+    // only place a module can LEAVE it. `absent -> unloaded` is a module being
+    // discovered; `unloaded -> absent` is one being pruned because its files
+    // went away. (processModule() below is the other way IN — one module, no
+    // scan — and it emits the discovery edge too.)
+    //
+    // These two edges are the reason `absent` exists as an event-only state at
+    // all. Without them a consumer is back to inferring membership from
+    // package-install events plus a settle timer, which is what basecamp's
+    // PackageCoordinator does today.
+    //
+    // Declared before the lock so the batch dispatches after m_mutex is
+    // released — same rule as loadMutex() on the ModuleManager side.
+    logos::ScopedModuleStateFlush stateFlusher;
+
     std::unique_lock lock(m_mutex);
+
+    // Membership as it stood before this scan. Compared against the scan
+    // results below to derive the edges; cheap, and it avoids threading
+    // discovered/pruned reporting down through processModuleInternal, which is
+    // also reached from the single-module processModule() path.
+    std::unordered_set<std::string> knownBefore;
+    if (logos::ModuleStateObserver::instance().hasSink()) {
+        knownBefore.reserve(m_modules.size());
+        for (const auto& [name, info] : m_modules)
+            knownBefore.insert(name);
+    }
 
     PackageManagerLib& pm = packageManagerInstance();
     if (!m_modulesDirs.empty()) {
@@ -105,6 +134,21 @@ void ModuleRegistry::discoverInstalledModules() {
     }
     for (const std::string& name : toRemove) {
         m_modules.erase(name);
+        // Leaving the view. Only unloaded entries reach toRemove (a loaded
+        // module is preserved even when its files are gone), so the state it
+        // is leaving FROM is always `unloaded`.
+        logos::ModuleStateObserver::instance().record(
+            name, logos::module_state::kUnloaded, logos::module_state::kAbsent,
+            std::nullopt, std::nullopt, "module files are no longer on disk");
+    }
+
+    // Entering the view. Reported after the prune so a scan that both drops and
+    // re-adds a name emits the two edges in the order they happened.
+    for (const std::string& name : scannedNames) {
+        if (knownBefore.count(name) == 0) {
+            logos::ModuleStateObserver::instance().record(
+                name, logos::module_state::kAbsent, logos::module_state::kUnloaded);
+        }
     }
 
     // Graph has its final shape (upserts + prunes applied). Re-derive
@@ -114,12 +158,36 @@ void ModuleRegistry::discoverInstalledModules() {
 }
 
 std::string ModuleRegistry::processModule(const std::string& modulePath) {
+    // The OTHER membership edge. This is the raw host API — a module can become
+    // known through it without any discovery scan — so a consumer that only saw
+    // discoverInstalledModules' edges would miss it entirely and then be
+    // surprised by a `unloaded -> loading` for a module it had never heard of.
+    logos::ScopedModuleStateFlush stateFlusher;
+
     std::unique_lock lock(m_mutex);
+
+    // Whether this path UPSERTS or INSERTS is only knowable after
+    // processModuleInternal resolves the name out of the plugin's metadata, so
+    // membership has to be sampled first. Skipped entirely when nothing is
+    // listening.
+    const bool observing = logos::ModuleStateObserver::instance().hasSink();
+    std::unordered_set<std::string> knownBefore;
+    if (observing) {
+        knownBefore.reserve(m_modules.size());
+        for (const auto& [n, info] : m_modules)
+            knownBefore.insert(n);
+    }
+
     std::string name = processModuleInternal(modulePath);
     // A single module changed, but its new dependency list can invert edges
     // elsewhere in the graph (e.g. an upgrade that drops a dep). Full
     // rebuild is simpler and still O(N * avg_deps) — cheap at module scale.
     recomputeDependentsLocked();
+
+    if (observing && !name.empty() && knownBefore.count(name) == 0) {
+        logos::ModuleStateObserver::instance().record(
+            name, logos::module_state::kAbsent, logos::module_state::kUnloaded);
+    }
     return name;
 }
 

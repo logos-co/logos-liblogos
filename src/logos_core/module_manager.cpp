@@ -4,6 +4,7 @@
 #include "dependency_resolver.h"
 #include "module_loader_registry.h"
 #include "composite_module_loader.h"
+#include "module_state_observer.h"
 #include <logos_container/container_factory.h>
 #include <logos_module_loader/format_loader_factory.h>
 #include <spdlog/spdlog.h>
@@ -49,6 +50,57 @@ namespace {
     std::string& persistenceBasePath() {
         static std::string path;
         return path;
+    }
+
+    // ── Orderly teardown vs. death ───────────────────────────────────────────
+    //
+    // onTerminated fires for BOTH: an unload we asked for, and a module that
+    // exited on its own. The callback cannot tell them apart from its
+    // arguments, and they are different states — `stopping -> unloaded` versus
+    // `loaded -> error`. Reporting a crash as an orderly stop is the more
+    // damaging direction: it is precisely the event a consumer wants to react
+    // to, and it would silently never fire.
+    //
+    // So unloadModuleInternalLocked announces its intent here before calling
+    // terminate(), and the callback consumes it. A name NOT in this set died
+    // without being asked to.
+    //
+    // Guarded by its own mutex, not loadMutex(): the callback runs on the
+    // container's background asio thread and must never contend with — or
+    // worse, wait behind — a load in progress.
+    std::mutex& expectedExitMutex() {
+        static std::mutex m;
+        return m;
+    }
+
+    std::unordered_set<std::string>& expectedExits() {
+        static std::unordered_set<std::string> s;
+        return s;
+    }
+
+    void markExitExpected(const std::string& name) {
+        std::lock_guard<std::mutex> g(expectedExitMutex());
+        expectedExits().insert(name);
+    }
+
+    // Consumes the mark: returns true exactly once per announced teardown, so a
+    // module that is unloaded, reloaded and then CRASHES is reported as a crash
+    // rather than inheriting the earlier orderly exit.
+    bool consumeExpectedExit(const std::string& name) {
+        std::lock_guard<std::mutex> g(expectedExitMutex());
+        return expectedExits().erase(name) > 0;
+    }
+
+    // Host shutdown tears down EVERY loaded module at once, and each one
+    // triggers onTerminated. Without announcing them first, a clean shutdown
+    // reports the whole fleet as having crashed — `loaded -> error`, "module
+    // exited without being asked to", once per module — which is both wrong and
+    // the single most alarming thing this feed can say.
+    //
+    // Callers hold loadMutex(), so the loaded set cannot move underneath.
+    void markAllLoadedExitsExpected() {
+        for (const std::string& n : registryInstance().loadedModuleNames())
+            markExitExpected(n);
     }
 
     // Both guarded by loadMutex(). parsedEnforcePolicy is set only in enforce mode.
@@ -258,11 +310,29 @@ namespace {
         desc.dependencies = registryInstance().moduleDependencies(name);
         desc.modulesDirs  = registryInstance().modulesDirs();
 
+        // Hoisted out of the block below so the observer can carry it. The
+        // instance id is the host's PERSISTENCE identity and is stable across
+        // load/unload cycles (ResolveMode::ReuseOrCreate), which is exactly why
+        // a consumer needs the pid too: instance cannot tell you a module died
+        // and came back, and pid can.
+        std::optional<std::string> instanceId;
+
         if (!persistenceBasePath().empty()) {
             auto info = ModuleLib::InstancePersistence::resolveInstance(
                 persistenceBasePath(), name);
             desc.instancePersistencePath = info.persistencePath;
+            if (!info.instanceId.empty())
+                instanceId = info.instanceId;
         }
+
+        // The attempt starts here — everything above was a cheap reject that
+        // never touched the module. `loading` is the state the drafts fold into
+        // `loaded`; we keep it because it is the only way a consumer can tell
+        // "being brought up" from "up", and a load that hangs is otherwise
+        // indistinguishable from one that never started.
+        logos::ModuleStateObserver::instance().record(
+            name, logos::module_state::kUnloaded, logos::module_state::kLoading,
+            instanceId);
 
         // Per-module transport set, if the daemon registered one before
         // calling load. The loader threads it through to the child via
@@ -299,6 +369,10 @@ namespace {
                 "protocol majors",
                 name, moduleProtocolVersion, gate.moduleMajor,
                 LOGOS_PROTOCOL_VERSION_MAJOR, LOGOS_PROTOCOL_VERSION_STRING);
+            logos::ModuleStateObserver::instance().record(
+                name, logos::module_state::kLoading, logos::module_state::kError,
+                instanceId, std::nullopt,
+                "incompatible logos-protocol major: module " + moduleProtocolVersion);
             return false;
         case LogosCore::ProtocolGateDecision::AllowLegacy:
             spdlog::warn(
@@ -316,23 +390,59 @@ namespace {
         auto loader = loaderRegistry().select(desc);
         if (!loader) {
             spdlog::warn("No loader available to load module: {}", name);
+            logos::ModuleStateObserver::instance().record(
+                name, logos::module_state::kLoading, logos::module_state::kError,
+                instanceId, std::nullopt, "no loader available for this module format");
             return false;
         }
 
+        // Fires on the container's BACKGROUND asio thread, for both an orderly
+        // unload and a module that died. consumeExpectedExit() is what tells
+        // them apart; see its definition.
+        //
+        // This is the one seam that flushes inline: it is not under
+        // loadMutex(), so there is no lock to get out from under, and a crash
+        // is the transition a consumer most needs promptly.
         auto onTerminated = [](const std::string& n) {
             registryInstance().markUnloaded(n);
+
+            auto& observer = logos::ModuleStateObserver::instance();
+            if (consumeExpectedExit(n)) {
+                observer.record(n, logos::module_state::kStopping,
+                                logos::module_state::kUnloaded);
+            } else {
+                observer.record(n, logos::module_state::kLoaded,
+                                logos::module_state::kError, std::nullopt,
+                                std::nullopt, "module exited without being asked to");
+            }
+            observer.flush();
         };
 
         LogosCore::LoadedModuleHandle handle;
-        if (!loader->load(desc, onTerminated, handle))
+        if (!loader->load(desc, onTerminated, handle)) {
+            logos::ModuleStateObserver::instance().record(
+                name, logos::module_state::kLoading, logos::module_state::kError,
+                instanceId, std::nullopt, "loader failed to start the module");
             return false;
+        }
+
+        // Read before the handle is moved into the registry below.
+        const std::optional<int64_t> pid =
+            handle.pid >= 0 ? std::optional<int64_t>(handle.pid) : std::nullopt;
 
         // OUTBOUND half of load-time identity: mint a root token, send it into
         // the child, and register it locally under the module's name.
         std::string authToken = boost::uuids::to_string(boost::uuids::random_generator()());
 
         if (!loader->sendToken(name, authToken)) {
+            // We are about to terminate it deliberately, so announce the intent
+            // BEFORE calling terminate() — otherwise onTerminated, which may
+            // already be running on the asio thread, reports this as a crash.
+            markExitExpected(name);
             loader->terminate(name);
+            logos::ModuleStateObserver::instance().record(
+                name, logos::module_state::kLoading, logos::module_state::kError,
+                instanceId, pid, "failed to deliver the module's auth token");
             return false;
         }
 
@@ -345,6 +455,9 @@ namespace {
         refreshDerivedRestrictionsForDependenciesOf(name);
 
         spdlog::info("Module loaded: {}", name);
+        logos::ModuleStateObserver::instance().record(
+            name, logos::module_state::kLoading, logos::module_state::kLoaded,
+            instanceId, pid);
 
         return true;
     }
@@ -358,20 +471,37 @@ namespace {
             return false;
         }
 
+        logos::ModuleStateObserver::instance().record(
+            name, logos::module_state::kLoaded, logos::module_state::kStopping);
+
         auto loader = registryInstance().loaderFor(name);
         if (loader) {
             if (!loader->hasModule(name)) {
                 spdlog::warn("No module entry found for module: {}", name);
+                // Nothing was torn down, so the module is still where it was.
+                // Walk `stopping` back rather than leaving a consumer watching
+                // a teardown that never happens.
+                logos::ModuleStateObserver::instance().record(
+                    name, logos::module_state::kStopping, logos::module_state::kLoaded,
+                    std::nullopt, std::nullopt, "no module entry found; teardown not started");
                 return false;
             }
+            // Announce BEFORE terminate(): onTerminated can fire on the asio
+            // thread before terminate() even returns here.
+            markExitExpected(name);
             loader->terminate(name);
         } else {
             // Fallback: module was loaded via markLoaded(name) directly (test
             // scenarios or external setup), so no loader was recorded. Ask the
             // registered loaders to terminate it by name — no specific container
             // is named here.
+            markExitExpected(name);
             if (!loaderRegistry().terminate(name)) {
                 spdlog::warn("No live module entry found for module: {}", name);
+                consumeExpectedExit(name);
+                logos::ModuleStateObserver::instance().record(
+                    name, logos::module_state::kStopping, logos::module_state::kLoaded,
+                    std::nullopt, std::nullopt, "no live module entry; teardown not started");
                 return false;
             }
         }
@@ -382,6 +512,21 @@ namespace {
         refreshDerivedRestrictionsForDependenciesOf(name);
 
         spdlog::info("Module unloaded: {}", name);
+
+        // THE MARK IS THE GUARD, and it has to be — the observer is stateless,
+        // so it cannot recognise a duplicate `stopping -> unloaded` as a no-op
+        // the way it drops old == new. Emitting it twice would reach
+        // modules_state as two transitions with two different seqs, both
+        // applied, producing two identical events for one teardown.
+        //
+        // If onTerminated already ran it consumed the mark, and this is false.
+        // If the mark is still here no callback ever fired — the loaders that
+        // terminate synchronously — and without this the module would sit in
+        // `stopping` forever.
+        if (consumeExpectedExit(name)) {
+            logos::ModuleStateObserver::instance().record(
+                name, logos::module_state::kStopping, logos::module_state::kUnloaded);
+        }
         return true;
     }
 }
@@ -493,11 +638,21 @@ namespace ModuleManager {
     }
 
     bool loadModule(const char* moduleName) {
+        // Declared BEFORE the lock guard so it is destroyed AFTER it: the
+        // batch dispatches with loadMutex() already released. Reversing these
+        // two lines calls the sink from inside the load path while holding the
+        // lock every other load and unload needs.
+        logos::ScopedModuleStateFlush stateFlusher;
         std::lock_guard lock(loadMutex());
         return loadModuleInternal(moduleName);
     }
 
     bool loadModuleWithDependencies(const char* moduleName) {
+        // Declared BEFORE the lock guard so it is destroyed AFTER it: the
+        // batch dispatches with loadMutex() already released. Reversing these
+        // two lines calls the sink from inside the load path while holding the
+        // lock every other load and unload needs.
+        logos::ScopedModuleStateFlush stateFlusher;
         std::lock_guard lock(loadMutex());
 
         std::string name(moduleName);
@@ -542,6 +697,11 @@ namespace ModuleManager {
     }
 
     bool initializeCapabilityModule() {
+        // Declared BEFORE the lock guard so it is destroyed AFTER it: the
+        // batch dispatches with loadMutex() already released. Reversing these
+        // two lines calls the sink from inside the load path while holding the
+        // lock every other load and unload needs.
+        logos::ScopedModuleStateFlush stateFlusher;
         std::lock_guard lock(loadMutex());
 
         if (!registryInstance().isKnown("capability_module"))
@@ -563,11 +723,21 @@ namespace ModuleManager {
     }
 
     bool unloadModule(const char* moduleName) {
+        // Declared BEFORE the lock guard so it is destroyed AFTER it: the
+        // batch dispatches with loadMutex() already released. Reversing these
+        // two lines calls the sink from inside the load path while holding the
+        // lock every other load and unload needs.
+        logos::ScopedModuleStateFlush stateFlusher;
         std::lock_guard lock(loadMutex());
         return unloadModuleInternalLocked(std::string(moduleName));
     }
 
     bool unloadModuleWithDependents(const char* moduleName) {
+        // Declared BEFORE the lock guard so it is destroyed AFTER it: the
+        // batch dispatches with loadMutex() already released. Reversing these
+        // two lines calls the sink from inside the load path while holding the
+        // lock every other load and unload needs.
+        logos::ScopedModuleStateFlush stateFlusher;
         std::lock_guard lock(loadMutex());
 
         std::string name(moduleName);
@@ -633,13 +803,27 @@ namespace ModuleManager {
     }
 
     void terminateAll() {
+        // Declared BEFORE the lock guard so it is destroyed AFTER it: the
+        // batch dispatches with loadMutex() already released. Reversing these
+        // two lines calls the sink from inside the load path while holding the
+        // lock every other load and unload needs.
+        logos::ScopedModuleStateFlush stateFlusher;
         std::lock_guard lock(loadMutex());
+        // Announce before tearing down, or every module reports as a crash.
+        markAllLoadedExitsExpected();
         loaderRegistry().terminateAll();
         registryInstance().clearLoaded();
     }
 
     void clear() {
+        // Declared BEFORE the lock guard so it is destroyed AFTER it: the
+        // batch dispatches with loadMutex() already released. Reversing these
+        // two lines calls the sink from inside the load path while holding the
+        // lock every other load and unload needs.
+        logos::ScopedModuleStateFlush stateFlusher;
         std::lock_guard lock(loadMutex());
+        // Announce before tearing down, or every module reports as a crash.
+        markAllLoadedExitsExpected();
         loaderRegistry().terminateAll();
         registryInstance().clear();
         // Per-module transport overrides are part of the manager's
