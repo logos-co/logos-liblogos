@@ -9,6 +9,9 @@
 #include <logos_module_loader/format_loader_factory.h>
 #include <spdlog/spdlog.h>
 #include <nlohmann/json.hpp>
+#include <QString>
+#include <QVariant>
+#include <QVariantList>
 #include <algorithm>
 #include <mutex>
 #include <cassert>
@@ -280,6 +283,178 @@ namespace {
         }
     }
 
+    // ═════════════════════════════════════════════════════════════════════════
+    // THE modules_state FEED
+    //
+    // The consumer end of ModuleStateObserver. The observer produces sequenced
+    // transitions and knows nothing about any module; this turns them into
+    // calls on `modules_state`.
+    //
+    // It follows the capability_module precedent above — one long-lived "core"
+    // LogosAPI, per-module transport honoured — with three differences that are
+    // all forced by where it runs:
+    //
+    //   1. ASYNC. registerRestrictionRpc is synchronous and gets away with it
+    //      because it is a rare, short call. This one happens on EVERY load,
+    //      unload and crash, and it is invoked from the observer's flush, which
+    //      runs on whichever thread did the work. A synchronous RPC there would
+    //      put a 20 s worst case on the load path.
+    //
+    //   2. CHEAP NO-OP WHEN ABSENT. Guarded on isLoaded() before the client is
+    //      even fetched. A synchronous dial to a module that is not there cost
+    //      Basecamp ~417 s of blocked GUI thread once already.
+    //
+    //   3. THE SINK IS UNINSTALLED when modules_state goes away, so the
+    //      observer returns to buffering nothing at all rather than buffering
+    //      into a sink that will only drop it.
+    // ═════════════════════════════════════════════════════════════════════════
+
+    constexpr const char* kModulesState = "modules_state";
+
+    // An empty optional must reach the wire as JSON null. An invalid QVariant
+    // falls through every branch of qvariantToNlohmann and returns nullptr,
+    // which is exactly that — see logos-protocol, cpp/logos_json_convert.cpp.
+    QVariant optToVariant(const std::optional<std::string>& v) {
+        return v.has_value() ? QVariant(QString::fromStdString(*v)) : QVariant();
+    }
+
+    QVariant optToVariant(const std::optional<int64_t>& v) {
+        return v.has_value() ? QVariant(static_cast<qlonglong>(*v)) : QVariant();
+    }
+
+    LogosAPIClient* modulesStateClient() {
+        static LogosAPI* s_api = nullptr;
+        if (!s_api)
+            s_api = new LogosAPI(std::string("core"));
+
+        if (auto it = moduleTransportsMap().find(kModulesState);
+            it != moduleTransportsMap().end() && !it->second.empty()) {
+            const auto ts = logos::transportSetFromJsonString(it->second);
+            if (!ts.empty())
+                return s_api->getClient(QString::fromUtf8(kModulesState), ts.front());
+        }
+        return s_api->getClient(std::string(kModulesState));
+    }
+
+    // Everything the host knows, as a ModuleListing, for apply_snapshot.
+    //
+    // THE SEQ RULE, and it is the one thing here that is easy to get wrong:
+    // every record seq AND the listing seq come from ModuleStateObserver's
+    // single counter. modules_state tombstones a record it prunes at the
+    // LISTING's seq, so a second counter would make that tombstone either
+    // unreachably high (a real later delta dropped forever) or trivially low (a
+    // stale delta resurrecting a pruned module). The listing seq is drawn LAST
+    // so it is >= every record in it.
+    nlohmann::json buildSnapshotListing() {
+        auto& observer = logos::ModuleStateObserver::instance();
+        nlohmann::json records = nlohmann::json::array();
+
+        for (const auto& info : registryInstance().allModulesInfo()) {
+            const std::string name = info.value("name", std::string());
+            if (name.empty())
+                continue;
+
+            const bool loaded = info.value("loaded", false);
+
+            nlohmann::json rec = nlohmann::json::object();
+            rec["module"]       = name;
+            rec["state"]        = loaded ? logos::module_state::kLoaded
+                                         : logos::module_state::kUnloaded;
+            rec["path"]         = info.value("path", std::string());
+            rec["type"]         = std::string();
+            rec["version"]      = std::string();
+            rec["dependencies"] = info.value("dependencies", nlohmann::json::array());
+            rec["dependents"]   = info.value("dependents", nlohmann::json::array());
+            rec["loadedAt"]     = info.value("loaded_at", static_cast<int64_t>(0));
+            rec["seq"]          = observer.nextSeq();
+            // instance / pid / reason are OMITTED rather than nulled: the
+            // generated encoder omits an absent optional, and the host's
+            // registry does not carry either of them per module.
+            records.push_back(std::move(rec));
+        }
+
+        nlohmann::json listing = nlohmann::json::object();
+        listing["modules"] = std::move(records);
+        // FALSE, and it is a claim worth defending: `partial` means the host's
+        // scan SKIPPED something. discoverInstalledModules drops a module it
+        // cannot read before it ever enters the registry, so anything missing
+        // here is not something the host knows about and is withholding -- it
+        // is something the host does not know. From modules_state's side that
+        // is a complete view, which is what this flag is asking about.
+        listing["partial"] = false;
+        listing["seq"]     = observer.nextSeq();
+        return listing;
+    }
+
+    void pushSnapshot() {
+        if (!registryInstance().isLoaded(kModulesState))
+            return;
+        nlohmann::json args = nlohmann::json::array();
+        args.push_back(buildSnapshotListing());
+        // Synchronous, unlike the deltas, and deliberately: this runs from
+        // whenObjectAvailable's callback rather than from the load path, so
+        // there is no lock held and nothing waiting on it. The nlohmann
+        // overload has no async twin, and a struct argument is far easier to
+        // build correctly as JSON than as a nested QVariantMap.
+        const nlohmann::json ok = modulesStateClient()->invokeRemoteMethod(
+            std::string(kModulesState), std::string("apply_snapshot"), args);
+        if (!ok.is_boolean() || !ok.get<bool>())
+            spdlog::warn("modules_state refused the startup snapshot");
+        else
+            spdlog::info("Pushed module snapshot to modules_state");
+    }
+
+    void pushTransitions(const std::vector<logos::ModuleTransition>& batch) {
+        // Before the client is fetched: see note 2 above.
+        if (!registryInstance().isLoaded(kModulesState))
+            return;
+
+        LogosAPIClient* client = modulesStateClient();
+        for (const logos::ModuleTransition& t : batch) {
+            QVariantList args;
+            args << QString::fromStdString(t.module)
+                 << optToVariant(t.instance)
+                 << optToVariant(t.pid)
+                 << QString::fromStdString(t.oldState)
+                 << QString::fromStdString(t.newState)
+                 << optToVariant(t.reason)
+                 << QVariant(static_cast<qulonglong>(t.seq));
+
+            // Fire and forget. A refused or failed push is not worth retrying:
+            // the next snapshot re-establishes the whole picture, and blocking
+            // the load path to find out would be the failure this is shaped to
+            // avoid.
+            client->invokeRemoteMethodAsync(
+                QString::fromUtf8(kModulesState),
+                QStringLiteral("note_transition"),
+                args,
+                [](QVariant) {});
+        }
+    }
+
+    // Called once modules_state is loaded. The snapshot waits for the module to
+    // PUBLISH, which is later than "loaded" -- measured at ~390 ms on a cold
+    // start -- and whenObjectAvailable is the primitive that waits without
+    // either failing fast or burning the acquire timeout on this thread.
+    void enableModulesStateFeed() {
+        logos::ModuleStateObserver::instance().setSink(&pushTransitions);
+        modulesStateClient()->whenObjectAvailable(
+            QString::fromUtf8(kModulesState),
+            [](bool ready) {
+                if (ready)
+                    pushSnapshot();
+                else
+                    spdlog::warn("modules_state never became available; no snapshot pushed");
+            });
+    }
+
+    void disableModulesStateFeed() {
+        // Clearing the sink is what makes the observer free again: record()
+        // early-outs when nothing is installed, so with modules_state gone
+        // liblogos stops paying for a feed with no consumer.
+        logos::ModuleStateObserver::instance().setSink({});
+    }
+
     bool loadModuleInternal(const char* moduleName) {
         std::string name(moduleName);
 
@@ -459,6 +634,10 @@ namespace {
             name, logos::module_state::kLoading, logos::module_state::kLoaded,
             instanceId, pid);
 
+        // The feed can only exist once its consumer does.
+        if (name == kModulesState)
+            enableModulesStateFeed();
+
         return true;
     }
 
@@ -527,6 +706,8 @@ namespace {
             logos::ModuleStateObserver::instance().record(
                 name, logos::module_state::kStopping, logos::module_state::kUnloaded);
         }
+        if (name == kModulesState)
+            disableModulesStateFeed();
         return true;
     }
 }
