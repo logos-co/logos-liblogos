@@ -8,10 +8,8 @@
 #include <thread>
 #include <vector>
 
-// The observer's job is to turn lifecycle changes into SEQUENCED facts and hand
-// them over OUTSIDE the caller's lock. Everything below guards one of the two
-// rules in module_state_observer.h, or one of the guarantees modules_state
-// relies on at the far end of the wire.
+// Each case guards one of the two rules in module_state_observer.h, or a
+// guarantee modules_state relies on at the far end of the wire.
 
 using logos::ModuleStateObserver;
 using logos::ModuleTransition;
@@ -19,9 +17,8 @@ namespace ms = logos::module_state;
 
 namespace {
 
-// Installs a collecting sink and removes it again, so one test cannot leave a
-// sink (or buffered transitions) behind for the next. The observer is a
-// process-wide singleton, so this matters.
+// The observer is a process-wide singleton, so each case installs and removes
+// its own sink rather than leaking one into the next.
 class ObserverFixture : public ::testing::Test {
 protected:
     void SetUp() override
@@ -70,10 +67,9 @@ TEST_F(ObserverFixture, RecordDoesNotDispatch)
     EXPECT_EQ(seen[1].newState, ms::kLoaded);
 }
 
-// Strictly increasing, and shared across every module. modules_state applies a
-// transition iff its seq beats what it stored for THAT module, and it keeps a
-// seq tombstone for a departed one — a per-module or restarting counter would
-// make a tombstone either unreachably high or trivially low.
+// Strictly increasing and shared across every module: modules_state tombstones
+// a departed record at a seq, so a per-module or restarting counter would make
+// that tombstone unreachably high or trivially low.
 TEST_F(ObserverFixture, SeqIsGloballyMonotonic)
 {
     auto& o = ModuleStateObserver::instance();
@@ -92,9 +88,8 @@ TEST_F(ObserverFixture, SeqIsGloballyMonotonic)
     EXPECT_GT(o.nextSeq(), afterBatch);
 }
 
-// old == new is not a transition. Dropped here so the guarantee holds for every
-// consumer rather than being re-enforced at each one; modules_state refuses
-// them anyway, so emitting them is defined-to-be-discarded traffic.
+// old == new is not a transition. modules_state refuses them anyway, so
+// emitting them would be defined-to-be-discarded traffic.
 TEST_F(ObserverFixture, NoOpTransitionsAreDropped)
 {
     auto& o = ModuleStateObserver::instance();
@@ -107,9 +102,8 @@ TEST_F(ObserverFixture, NoOpTransitionsAreDropped)
     EXPECT_TRUE(seen.empty());
 }
 
-// With no sink, record() must not accumulate. A host with no modules_state
-// loaded is the NORMAL case and runs for weeks; buffering there is an unbounded
-// leak.
+// With no sink, record() must not accumulate — a host with no consumer is the
+// NORMAL case, so buffering there is an unbounded leak.
 TEST_F(ObserverFixture, NothingBuffersWithoutASink)
 {
     auto& o = ModuleStateObserver::instance();
@@ -162,10 +156,8 @@ TEST_F(ObserverFixture, InstanceAndPidAreCarried)
     EXPECT_EQ(*seen[0].pid, 4242);
 }
 
-// THE RULE THAT MATTERS. A sink that re-enters the observer must not deadlock:
-// flush() copies the batch and the sink out, then releases the lock before
-// calling. A consumer reacting to a transition by causing another one is
-// ordinary code, not an abuse.
+// A sink that re-enters must not deadlock: flush() copies the batch and sink
+// out, then releases the lock before calling.
 TEST_F(ObserverFixture, SinkMayReenterTheObserver)
 {
     auto& o = ModuleStateObserver::instance();
@@ -216,9 +208,9 @@ TEST_F(ObserverFixture, ConcurrentRecordersProduceUniqueSeqs)
     EXPECT_EQ(std::adjacent_find(seqs.begin(), seqs.end()), seqs.end());
 }
 
-// flush() with nothing buffered must be a cheap no-op, not an empty batch. The
-// seam points flush unconditionally on every load and unload, and a sink that
-// had to filter empty batches would be one more thing to get wrong.
+// flush() with nothing buffered is a no-op, not an empty batch: the seam points
+// flush unconditionally, and a sink filtering empty batches is one more thing
+// to get wrong.
 TEST_F(ObserverFixture, FlushWithNothingPendingDoesNotCallTheSink)
 {
     ModuleStateObserver::instance().flush();

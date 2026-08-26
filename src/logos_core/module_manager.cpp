@@ -57,20 +57,14 @@ namespace {
 
     // ── Orderly teardown vs. death ───────────────────────────────────────────
     //
-    // onTerminated fires for BOTH: an unload we asked for, and a module that
-    // exited on its own. The callback cannot tell them apart from its
-    // arguments, and they are different states — `stopping -> unloaded` versus
-    // `loaded -> error`. Reporting a crash as an orderly stop is the more
-    // damaging direction: it is precisely the event a consumer wants to react
-    // to, and it would silently never fire.
+    // onTerminated fires for BOTH an unload we asked for and a module that
+    // exited on its own, and cannot tell them apart from its arguments — but
+    // they are different states (`stopping -> unloaded` vs `loaded -> error`).
+    // So teardown announces intent here before terminate(); a name NOT in this
+    // set died without being asked to.
     //
-    // So unloadModuleInternalLocked announces its intent here before calling
-    // terminate(), and the callback consumes it. A name NOT in this set died
-    // without being asked to.
-    //
-    // Guarded by its own mutex, not loadMutex(): the callback runs on the
-    // container's background asio thread and must never contend with — or
-    // worse, wait behind — a load in progress.
+    // Its own mutex, not loadMutex(): the callback runs on the container's
+    // background asio thread and must never wait behind a load in progress.
     std::mutex& expectedExitMutex() {
         static std::mutex m;
         return m;
@@ -283,37 +277,27 @@ namespace {
         }
     }
 
-    // ═════════════════════════════════════════════════════════════════════════
-    // THE modules_state FEED
+    // ── THE modules_state FEED ───────────────────────────────────────────────
     //
-    // The consumer end of ModuleStateObserver. The observer produces sequenced
-    // transitions and knows nothing about any module; this turns them into
-    // calls on `modules_state`.
-    //
-    // It follows the capability_module precedent above — one long-lived "core"
-    // LogosAPI, per-module transport honoured — with three differences that are
-    // all forced by where it runs:
+    // The consumer end of ModuleStateObserver. Follows the capability_module
+    // precedent above — one long-lived "core" LogosAPI, per-module transport
+    // honoured — with three differences forced by where it runs:
     //
     //   1. ASYNC. registerRestrictionRpc is synchronous and gets away with it
-    //      because it is a rare, short call. This one happens on EVERY load,
-    //      unload and crash, and it is invoked from the observer's flush, which
-    //      runs on whichever thread did the work. A synchronous RPC there would
-    //      put a 20 s worst case on the load path.
-    //
-    //   2. CHEAP NO-OP WHEN ABSENT. Guarded on isLoaded() before the client is
-    //      even fetched. A synchronous dial to a module that is not there cost
-    //      Basecamp ~417 s of blocked GUI thread once already.
-    //
+    //      because it is rare and short. This runs on EVERY load, unload and
+    //      crash, from the observer's flush. A synchronous RPC there would put
+    //      a 20 s worst case on the load path.
+    //   2. CHEAP NO-OP WHEN ABSENT, checked before the client is even fetched.
+    //      A synchronous dial to an absent module cost Basecamp ~417 s of
+    //      blocked GUI thread once already.
     //   3. THE SINK IS UNINSTALLED when modules_state goes away, so the
-    //      observer returns to buffering nothing at all rather than buffering
-    //      into a sink that will only drop it.
-    // ═════════════════════════════════════════════════════════════════════════
+    //      observer buffers nothing rather than buffering into a sink that
+    //      only drops.
 
     constexpr const char* kModulesState = "modules_state";
 
-    // An empty optional must reach the wire as JSON null. An invalid QVariant
-    // falls through every branch of qvariantToNlohmann and returns nullptr,
-    // which is exactly that — see logos-protocol, cpp/logos_json_convert.cpp.
+    // An empty optional reaches the wire as JSON null: an invalid QVariant
+    // falls through every branch of qvariantToNlohmann and returns nullptr.
     QVariant optToVariant(const std::optional<std::string>& v) {
         return v.has_value() ? QVariant(QString::fromStdString(*v)) : QVariant();
     }
@@ -338,13 +322,11 @@ namespace {
 
     // Everything the host knows, as a ModuleListing, for apply_snapshot.
     //
-    // THE SEQ RULE, and it is the one thing here that is easy to get wrong:
-    // every record seq AND the listing seq come from ModuleStateObserver's
-    // single counter. modules_state tombstones a record it prunes at the
-    // LISTING's seq, so a second counter would make that tombstone either
-    // unreachably high (a real later delta dropped forever) or trivially low (a
-    // stale delta resurrecting a pruned module). The listing seq is drawn LAST
-    // so it is >= every record in it.
+    // THE SEQ RULE, the one thing here easy to get wrong: every record seq AND
+    // the listing seq come from the observer's single counter, listing drawn
+    // LAST so it is >= every record. modules_state tombstones a pruned record
+    // at the LISTING's seq, so a second counter makes that tombstone
+    // unreachably high or trivially low.
     nlohmann::json buildSnapshotListing() {
         auto& observer = logos::ModuleStateObserver::instance();
         nlohmann::json records = nlohmann::json::array();
@@ -367,20 +349,18 @@ namespace {
             rec["dependents"]   = info.value("dependents", nlohmann::json::array());
             rec["loadedAt"]     = info.value("loaded_at", static_cast<int64_t>(0));
             rec["seq"]          = observer.nextSeq();
-            // instance / pid / reason are OMITTED rather than nulled: the
-            // generated encoder omits an absent optional, and the host's
-            // registry does not carry either of them per module.
+            // instance/pid/reason are OMITTED rather than nulled, matching the
+            // generated encoder; the registry carries none of them.
             records.push_back(std::move(rec));
         }
 
         nlohmann::json listing = nlohmann::json::object();
         listing["modules"] = std::move(records);
-        // FALSE, and it is a claim worth defending: `partial` means the host's
-        // scan SKIPPED something. discoverInstalledModules drops a module it
-        // cannot read before it ever enters the registry, so anything missing
-        // here is not something the host knows about and is withholding -- it
-        // is something the host does not know. From modules_state's side that
-        // is a complete view, which is what this flag is asking about.
+        // FALSE, and it is a claim worth defending: `partial` means the scan
+        // SKIPPED something, and discoverInstalledModules drops what it cannot
+        // read before it ever enters the registry. Anything missing is not
+        // withheld — it is unknown to the host, which is a complete view from
+        // modules_state's side.
         listing["partial"] = false;
         listing["seq"]     = observer.nextSeq();
         return listing;
@@ -391,11 +371,10 @@ namespace {
             return;
         nlohmann::json args = nlohmann::json::array();
         args.push_back(buildSnapshotListing());
-        // Synchronous, unlike the deltas, and deliberately: this runs from
-        // whenObjectAvailable's callback rather than from the load path, so
-        // there is no lock held and nothing waiting on it. The nlohmann
-        // overload has no async twin, and a struct argument is far easier to
-        // build correctly as JSON than as a nested QVariantMap.
+        // Synchronous unlike the deltas, deliberately: this runs from
+        // whenObjectAvailable's callback, not the load path, so no lock is held
+        // and nothing waits on it. The nlohmann overload has no async twin, and
+        // a struct argument is easier to build as JSON than as a QVariantMap.
         const nlohmann::json ok = modulesStateClient()->invokeRemoteMethod(
             std::string(kModulesState), std::string("apply_snapshot"), args);
         if (!ok.is_boolean() || !ok.get<bool>())
@@ -420,10 +399,9 @@ namespace {
                  << optToVariant(t.reason)
                  << QVariant(static_cast<qulonglong>(t.seq));
 
-            // Fire and forget. A refused or failed push is not worth retrying:
-            // the next snapshot re-establishes the whole picture, and blocking
-            // the load path to find out would be the failure this is shaped to
-            // avoid.
+            // Fire and forget: the next snapshot re-establishes the whole
+            // picture, and blocking the load path to find out would be the
+            // failure this shape exists to avoid.
             client->invokeRemoteMethodAsync(
                 QString::fromUtf8(kModulesState),
                 QStringLiteral("note_transition"),
@@ -432,10 +410,10 @@ namespace {
         }
     }
 
-    // Called once modules_state is loaded. The snapshot waits for the module to
-    // PUBLISH, which is later than "loaded" -- measured at ~390 ms on a cold
-    // start -- and whenObjectAvailable is the primitive that waits without
-    // either failing fast or burning the acquire timeout on this thread.
+    // Called once modules_state is loaded. The snapshot waits for it to
+    // PUBLISH, which is later than "loaded" (~390 ms cold);
+    // whenObjectAvailable waits without failing fast or burning the acquire
+    // timeout on this thread.
     void enableModulesStateFeed() {
         logos::ModuleStateObserver::instance().setSink(&pushTransitions);
         modulesStateClient()->whenObjectAvailable(
@@ -450,8 +428,7 @@ namespace {
 
     void disableModulesStateFeed() {
         // Clearing the sink is what makes the observer free again: record()
-        // early-outs when nothing is installed, so with modules_state gone
-        // liblogos stops paying for a feed with no consumer.
+        // early-outs when nothing is installed.
         logos::ModuleStateObserver::instance().setSink({});
     }
 
@@ -692,16 +669,13 @@ namespace {
 
         spdlog::info("Module unloaded: {}", name);
 
-        // THE MARK IS THE GUARD, and it has to be — the observer is stateless,
-        // so it cannot recognise a duplicate `stopping -> unloaded` as a no-op
-        // the way it drops old == new. Emitting it twice would reach
-        // modules_state as two transitions with two different seqs, both
-        // applied, producing two identical events for one teardown.
-        //
-        // If onTerminated already ran it consumed the mark, and this is false.
-        // If the mark is still here no callback ever fired — the loaders that
-        // terminate synchronously — and without this the module would sit in
-        // `stopping` forever.
+        // THE MARK IS THE GUARD: the observer is stateless, so it cannot spot
+        // a duplicate `stopping -> unloaded` the way it drops old == new, and
+        // emitting twice would reach modules_state as two transitions with
+        // different seqs — two identical events for one teardown. If
+        // onTerminated already ran it consumed the mark; if the mark is still
+        // here no callback fired (loaders that terminate synchronously) and
+        // without this the module sits in `stopping` forever.
         if (consumeExpectedExit(name)) {
             logos::ModuleStateObserver::instance().record(
                 name, logos::module_state::kStopping, logos::module_state::kUnloaded);
@@ -819,20 +793,14 @@ namespace ModuleManager {
     }
 
     bool loadModule(const char* moduleName) {
-        // Declared BEFORE the lock guard so it is destroyed AFTER it: the
-        // batch dispatches with loadMutex() already released. Reversing these
-        // two lines calls the sink from inside the load path while holding the
-        // lock every other load and unload needs.
+        // BEFORE the lock guard, so it is destroyed after it. See rule 1.
         logos::ScopedModuleStateFlush stateFlusher;
         std::lock_guard lock(loadMutex());
         return loadModuleInternal(moduleName);
     }
 
     bool loadModuleWithDependencies(const char* moduleName) {
-        // Declared BEFORE the lock guard so it is destroyed AFTER it: the
-        // batch dispatches with loadMutex() already released. Reversing these
-        // two lines calls the sink from inside the load path while holding the
-        // lock every other load and unload needs.
+        // BEFORE the lock guard, so it is destroyed after it. See rule 1.
         logos::ScopedModuleStateFlush stateFlusher;
         std::lock_guard lock(loadMutex());
 
@@ -878,10 +846,7 @@ namespace ModuleManager {
     }
 
     bool initializeCapabilityModule() {
-        // Declared BEFORE the lock guard so it is destroyed AFTER it: the
-        // batch dispatches with loadMutex() already released. Reversing these
-        // two lines calls the sink from inside the load path while holding the
-        // lock every other load and unload needs.
+        // BEFORE the lock guard, so it is destroyed after it. See rule 1.
         logos::ScopedModuleStateFlush stateFlusher;
         std::lock_guard lock(loadMutex());
 
@@ -904,20 +869,14 @@ namespace ModuleManager {
     }
 
     bool unloadModule(const char* moduleName) {
-        // Declared BEFORE the lock guard so it is destroyed AFTER it: the
-        // batch dispatches with loadMutex() already released. Reversing these
-        // two lines calls the sink from inside the load path while holding the
-        // lock every other load and unload needs.
+        // BEFORE the lock guard, so it is destroyed after it. See rule 1.
         logos::ScopedModuleStateFlush stateFlusher;
         std::lock_guard lock(loadMutex());
         return unloadModuleInternalLocked(std::string(moduleName));
     }
 
     bool unloadModuleWithDependents(const char* moduleName) {
-        // Declared BEFORE the lock guard so it is destroyed AFTER it: the
-        // batch dispatches with loadMutex() already released. Reversing these
-        // two lines calls the sink from inside the load path while holding the
-        // lock every other load and unload needs.
+        // BEFORE the lock guard, so it is destroyed after it. See rule 1.
         logos::ScopedModuleStateFlush stateFlusher;
         std::lock_guard lock(loadMutex());
 
@@ -984,10 +943,7 @@ namespace ModuleManager {
     }
 
     void terminateAll() {
-        // Declared BEFORE the lock guard so it is destroyed AFTER it: the
-        // batch dispatches with loadMutex() already released. Reversing these
-        // two lines calls the sink from inside the load path while holding the
-        // lock every other load and unload needs.
+        // BEFORE the lock guard, so it is destroyed after it. See rule 1.
         logos::ScopedModuleStateFlush stateFlusher;
         std::lock_guard lock(loadMutex());
         // Announce before tearing down, or every module reports as a crash.
@@ -997,10 +953,7 @@ namespace ModuleManager {
     }
 
     void clear() {
-        // Declared BEFORE the lock guard so it is destroyed AFTER it: the
-        // batch dispatches with loadMutex() already released. Reversing these
-        // two lines calls the sink from inside the load path while holding the
-        // lock every other load and unload needs.
+        // BEFORE the lock guard, so it is destroyed after it. See rule 1.
         logos::ScopedModuleStateFlush stateFlusher;
         std::lock_guard lock(loadMutex());
         // Announce before tearing down, or every module reports as a crash.

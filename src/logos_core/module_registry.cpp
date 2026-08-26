@@ -60,16 +60,14 @@ std::vector<std::string> ModuleRegistry::modulesDirs() const {
 void ModuleRegistry::discoverInstalledModules() {
     // ── THE MEMBERSHIP EDGES ─────────────────────────────────────────────────
     //
-    // A scan is where the host's SET of known modules changes in bulk, and the
-    // only place a module can LEAVE it. `absent -> unloaded` is a module being
-    // discovered; `unloaded -> absent` is one being pruned because its files
-    // went away. (processModule() below is the other way IN — one module, no
-    // scan — and it emits the discovery edge too.)
+    // A scan changes the host's SET of known modules in bulk, and is the only
+    // place a module can LEAVE it: `absent -> unloaded` on discovery,
+    // `unloaded -> absent` on prune. (processModule() below is the other way
+    // IN, and emits the discovery edge too.)
     //
-    // These two edges are the reason `absent` exists as an event-only state at
-    // all. Without them a consumer is back to inferring membership from
-    // package-install events plus a settle timer, which is what basecamp's
-    // PackageCoordinator does today.
+    // These edges are why `absent` exists as an event-only state at all —
+    // without them a consumer infers membership from package-install events
+    // plus a settle timer, which is what basecamp does today.
     //
     // Declared before the lock so the batch dispatches after m_mutex is
     // released — same rule as loadMutex() on the ModuleManager side.
@@ -77,10 +75,9 @@ void ModuleRegistry::discoverInstalledModules() {
 
     std::unique_lock lock(m_mutex);
 
-    // Membership as it stood before this scan. Compared against the scan
-    // results below to derive the edges; cheap, and it avoids threading
-    // discovered/pruned reporting down through processModuleInternal, which is
-    // also reached from the single-module processModule() path.
+    // Membership before this scan, compared against the results below to derive
+    // the edges. Avoids threading reporting down through processModuleInternal,
+    // which the single-module path also reaches.
     std::unordered_set<std::string> knownBefore;
     if (logos::ModuleStateObserver::instance().hasSink()) {
         knownBefore.reserve(m_modules.size());
@@ -134,9 +131,8 @@ void ModuleRegistry::discoverInstalledModules() {
     }
     for (const std::string& name : toRemove) {
         m_modules.erase(name);
-        // Leaving the view. Only unloaded entries reach toRemove (a loaded
-        // module is preserved even when its files are gone), so the state it
-        // is leaving FROM is always `unloaded`.
+        // Only unloaded entries reach toRemove (a loaded module is preserved
+        // even when its files are gone), so it always leaves FROM `unloaded`.
         logos::ModuleStateObserver::instance().record(
             name, logos::module_state::kUnloaded, logos::module_state::kAbsent,
             std::nullopt, std::nullopt, "module files are no longer on disk");
@@ -158,18 +154,16 @@ void ModuleRegistry::discoverInstalledModules() {
 }
 
 std::string ModuleRegistry::processModule(const std::string& modulePath) {
-    // The OTHER membership edge. This is the raw host API — a module can become
-    // known through it without any discovery scan — so a consumer that only saw
-    // discoverInstalledModules' edges would miss it entirely and then be
-    // surprised by a `unloaded -> loading` for a module it had never heard of.
+    // The OTHER membership edge: the raw host API, where a module becomes known
+    // with no scan. Without this a consumer would be surprised by a
+    // `unloaded -> loading` for a module it had never heard of.
     logos::ScopedModuleStateFlush stateFlusher;
 
     std::unique_lock lock(m_mutex);
 
-    // Whether this path UPSERTS or INSERTS is only knowable after
-    // processModuleInternal resolves the name out of the plugin's metadata, so
-    // membership has to be sampled first. Skipped entirely when nothing is
-    // listening.
+    // Whether this UPSERTS or INSERTS is only knowable after the name is
+    // resolved from the plugin's metadata, so sample membership first. Skipped
+    // when nothing is listening.
     const bool observing = logos::ModuleStateObserver::instance().hasSink();
     std::unordered_set<std::string> knownBefore;
     if (observing) {

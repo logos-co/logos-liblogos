@@ -6,15 +6,10 @@ namespace logos {
 
 ModuleStateObserver& ModuleStateObserver::instance()
 {
-    // Function-local static: one observer per liblogos IMAGE.
-    //
-    // On ELF that is one per process, because the dynamic linker interposes a
-    // single definition. On PE it is one per image — a host that links
-    // liblogos_core into two binaries gets two observers, which is the same
-    // trap that gave Basecamp three TokenManagers. That is acceptable here and
-    // is not acceptable for TokenManager, for one reason: this object holds no
-    // cross-image contract. A second observer with no sink installed simply
-    // does nothing, whereas a second TokenManager silently loses tokens.
+    // One observer per liblogos IMAGE. On PE that means one per image — the
+    // trap that gave Basecamp three TokenManagers — and it is acceptable here
+    // only because this holds no cross-image contract: a second observer with
+    // no sink does nothing, whereas a second TokenManager loses tokens.
     static ModuleStateObserver s_instance;
     return s_instance;
 }
@@ -44,10 +39,8 @@ void ModuleStateObserver::record(const std::string& module,
                                  std::optional<int64_t> pid,
                                  std::optional<std::string> reason)
 {
-    // A no-op is not a transition. Dropped here rather than at the sink so the
-    // guarantee holds for every consumer: modules_state refuses old == new, and
-    // a feed that emitted them would be generating traffic that is defined to
-    // be discarded.
+    // A no-op is not a transition. Dropped here so the guarantee holds for
+    // every consumer rather than being re-enforced at each one.
     if (module.empty() || oldState.empty() || newState.empty())
         return;
     if (oldState == newState)
@@ -56,9 +49,9 @@ void ModuleStateObserver::record(const std::string& module,
     ModuleTransition t;
     {
         std::lock_guard<std::mutex> lock(m_mutex);
-        // No sink means nobody is listening, so buffering would be an unbounded
-        // leak in the normal case — a host with no modules_state loaded runs
-        // for weeks. Checked under the lock so it cannot race setSink().
+        // No sink means nobody is listening; buffering would be an unbounded
+        // leak in the normal case. Checked under the lock so it cannot race
+        // setSink().
         if (!m_sink)
             return;
 
@@ -75,11 +68,9 @@ void ModuleStateObserver::record(const std::string& module,
 
 void ModuleStateObserver::flush()
 {
-    // Compute under the lock, dispatch after releasing it — the discipline the
-    // header's rule 1 exists to enforce. The sink is copied out too: calling it
-    // while holding m_mutex would deadlock the moment a sink re-entered
-    // record(), and a sink that reacts to a transition by causing another one
-    // is an ordinary thing to write.
+    // Compute under the lock, dispatch after releasing it — rule 1. The sink is
+    // copied out too: calling it under m_mutex would deadlock the moment a sink
+    // re-entered record(), which is an ordinary thing to write.
     std::vector<ModuleTransition> batch;
     Sink sink;
     {
