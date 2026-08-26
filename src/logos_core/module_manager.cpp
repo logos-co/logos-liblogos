@@ -356,11 +356,22 @@ namespace {
                 continue;
 
             const bool loaded = info.value("loaded", false);
+            // Readiness must survive the snapshot. Snapshot records draw fresh
+            // seqs, so they outrank every earlier transition -- reporting a
+            // published module as merely `loaded` would clobber its `ready`
+            // permanently, since the watch is one-shot and will not re-fire.
+            // `published` is null when no watch is armed, hence the is_boolean
+            // check: unknown readiness reports `loaded`, never `ready`.
+            bool published = false;
+            if (auto p = info.find("published");
+                p != info.end() && p->is_boolean())
+                published = p->get<bool>();
 
             nlohmann::json rec = nlohmann::json::object();
             rec["module"]       = name;
-            rec["state"]        = loaded ? logos::module_state::kLoaded
-                                         : logos::module_state::kUnloaded;
+            rec["state"]        = !loaded ? logos::module_state::kUnloaded
+                                : published ? logos::module_state::kReady
+                                            : logos::module_state::kLoaded;
             rec["path"]         = info.value("path", std::string());
             rec["type"]         = std::string();
             rec["version"]      = std::string();
