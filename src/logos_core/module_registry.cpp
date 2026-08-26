@@ -1,4 +1,5 @@
 #include "module_registry.h"
+#include "module_state_observer.h"
 #include <spdlog/spdlog.h>
 #include <cassert>
 #include <ctime>
@@ -57,7 +58,32 @@ std::vector<std::string> ModuleRegistry::modulesDirs() const {
 }
 
 void ModuleRegistry::discoverInstalledModules() {
+    // ── THE MEMBERSHIP EDGES ─────────────────────────────────────────────────
+    //
+    // A scan changes the host's SET of known modules in bulk, and is the only
+    // place a module can LEAVE it: `absent -> unloaded` on discovery,
+    // `unloaded -> absent` on prune. (processModule() below is the other way
+    // IN, and emits the discovery edge too.)
+    //
+    // These edges are why `absent` exists as an event-only state at all —
+    // without them a consumer infers membership from package-install events
+    // plus a settle timer, which is what basecamp does today.
+    //
+    // Declared before the lock so the batch dispatches after m_mutex is
+    // released — same rule as loadMutex() on the ModuleManager side.
+    logos::ScopedModuleStateFlush stateFlusher;
+
     std::unique_lock lock(m_mutex);
+
+    // Membership before this scan, compared against the results below to derive
+    // the edges. Avoids threading reporting down through processModuleInternal,
+    // which the single-module path also reaches.
+    std::unordered_set<std::string> knownBefore;
+    if (logos::ModuleStateObserver::instance().hasSink()) {
+        knownBefore.reserve(m_modules.size());
+        for (const auto& [name, info] : m_modules)
+            knownBefore.insert(name);
+    }
 
     PackageManagerLib& pm = packageManagerInstance();
     if (!m_modulesDirs.empty()) {
@@ -105,6 +131,20 @@ void ModuleRegistry::discoverInstalledModules() {
     }
     for (const std::string& name : toRemove) {
         m_modules.erase(name);
+        // Only unloaded entries reach toRemove (a loaded module is preserved
+        // even when its files are gone), so it always leaves FROM `unloaded`.
+        logos::ModuleStateObserver::instance().record(
+            name, logos::module_state::kUnloaded, logos::module_state::kAbsent,
+            std::nullopt, std::nullopt, "module files are no longer on disk");
+    }
+
+    // Entering the view. Reported after the prune so a scan that both drops and
+    // re-adds a name emits the two edges in the order they happened.
+    for (const std::string& name : scannedNames) {
+        if (knownBefore.count(name) == 0) {
+            logos::ModuleStateObserver::instance().record(
+                name, logos::module_state::kAbsent, logos::module_state::kUnloaded);
+        }
     }
 
     // Graph has its final shape (upserts + prunes applied). Re-derive
@@ -114,12 +154,34 @@ void ModuleRegistry::discoverInstalledModules() {
 }
 
 std::string ModuleRegistry::processModule(const std::string& modulePath) {
+    // The OTHER membership edge: the raw host API, where a module becomes known
+    // with no scan. Without this a consumer would be surprised by a
+    // `unloaded -> loading` for a module it had never heard of.
+    logos::ScopedModuleStateFlush stateFlusher;
+
     std::unique_lock lock(m_mutex);
+
+    // Whether this UPSERTS or INSERTS is only knowable after the name is
+    // resolved from the plugin's metadata, so sample membership first. Skipped
+    // when nothing is listening.
+    const bool observing = logos::ModuleStateObserver::instance().hasSink();
+    std::unordered_set<std::string> knownBefore;
+    if (observing) {
+        knownBefore.reserve(m_modules.size());
+        for (const auto& [n, info] : m_modules)
+            knownBefore.insert(n);
+    }
+
     std::string name = processModuleInternal(modulePath);
     // A single module changed, but its new dependency list can invert edges
     // elsewhere in the graph (e.g. an upgrade that drops a dep). Full
     // rebuild is simpler and still O(N * avg_deps) — cheap at module scale.
     recomputeDependentsLocked();
+
+    if (observing && !name.empty() && knownBefore.count(name) == 0) {
+        logos::ModuleStateObserver::instance().record(
+            name, logos::module_state::kAbsent, logos::module_state::kUnloaded);
+    }
     return name;
 }
 
@@ -197,6 +259,12 @@ nlohmann::json ModuleRegistry::allModulesInfo() const {
         // Unix-seconds timestamp of the current load (0 when not loaded).
         // Callers compute uptime as now - loaded_at while loaded.
         entry["loaded_at"]    = info.loadedAt;
+        // Readiness. null (not false) when no watch is armed -- "nobody looked"
+        // and "not ready" are different answers.
+        entry["published"]    = info.published.has_value()
+                                    ? nlohmann::json(*info.published)
+                                    : nlohmann::json(nullptr);
+        entry["published_at"] = info.publishedAt;
         entry["dependencies"] = info.dependencies;
         entry["dependents"]   = info.dependents;
         // Parse the cached metadata JSON back into structured form. Tolerate a
@@ -363,6 +431,9 @@ void ModuleRegistry::markLoaded(const std::string& name) {
     auto& info = m_modules[name];
     info.loaded = true;
     info.loadedAt = nowUnixSeconds();
+    info.published.reset();
+    info.publishedAt = 0;
+    ++info.loadEpoch;
 }
 
 void ModuleRegistry::markLoaded(const std::string& name,
@@ -372,8 +443,36 @@ void ModuleRegistry::markLoaded(const std::string& name,
     auto& info = m_modules[name];
     info.loaded = true;
     info.loadedAt = nowUnixSeconds();
+    info.published.reset();
+    info.publishedAt = 0;
+    ++info.loadEpoch;
     info.loader = std::move(loader);
     info.handle = std::move(handle);
+}
+
+void ModuleRegistry::beginPublishWatch(const std::string& name) {
+    std::unique_lock lock(m_mutex);
+    auto it = m_modules.find(name);
+    if (it != m_modules.end() && !it->second.published.has_value())
+        it->second.published = false;
+}
+
+bool ModuleRegistry::markPublished(const std::string& name, uint64_t epoch) {
+    std::unique_lock lock(m_mutex);
+    auto it = m_modules.find(name);
+    if (it == m_modules.end()) return false;
+    // Reloaded since the watch was armed, or unloaded outright.
+    if (it->second.loadEpoch != epoch || !it->second.loaded) return false;
+    if (it->second.published == true) return false;
+    it->second.published = true;
+    it->second.publishedAt = nowUnixSeconds();
+    return true;
+}
+
+uint64_t ModuleRegistry::loadEpoch(const std::string& name) const {
+    std::shared_lock lock(m_mutex);
+    auto it = m_modules.find(name);
+    return it == m_modules.end() ? 0 : it->second.loadEpoch;
 }
 
 std::shared_ptr<LogosCore::ModuleLoader>
@@ -390,6 +489,8 @@ void ModuleRegistry::markUnloaded(const std::string& name) {
     if (it != m_modules.end()) {
         it->second.loaded = false;
         it->second.loadedAt = 0;
+        it->second.published.reset();
+        it->second.publishedAt = 0;
     }
 }
 

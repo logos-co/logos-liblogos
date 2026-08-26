@@ -19,6 +19,7 @@ add_executable(logos_core_tests
     test_module_loader_registry.cpp
     test_module_loader_abstraction.cpp
     test_protocol_gate.cpp
+    test_module_state_observer.cpp
 )
 
 # Imported container/loader targets the tests drive via SubprocessManager /

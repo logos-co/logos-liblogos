@@ -4,10 +4,14 @@
 #include "dependency_resolver.h"
 #include "module_loader_registry.h"
 #include "composite_module_loader.h"
+#include "module_state_observer.h"
 #include <logos_container/container_factory.h>
 #include <logos_module_loader/format_loader_factory.h>
 #include <spdlog/spdlog.h>
 #include <nlohmann/json.hpp>
+#include <QString>
+#include <QVariant>
+#include <QVariantList>
 #include <algorithm>
 #include <mutex>
 #include <cassert>
@@ -49,6 +53,51 @@ namespace {
     std::string& persistenceBasePath() {
         static std::string path;
         return path;
+    }
+
+    // ── Orderly teardown vs. death ───────────────────────────────────────────
+    //
+    // onTerminated fires for BOTH an unload we asked for and a module that
+    // exited on its own, and cannot tell them apart from its arguments — but
+    // they are different states (`stopping -> unloaded` vs `loaded -> error`).
+    // So teardown announces intent here before terminate(); a name NOT in this
+    // set died without being asked to.
+    //
+    // Its own mutex, not loadMutex(): the callback runs on the container's
+    // background asio thread and must never wait behind a load in progress.
+    std::mutex& expectedExitMutex() {
+        static std::mutex m;
+        return m;
+    }
+
+    std::unordered_set<std::string>& expectedExits() {
+        static std::unordered_set<std::string> s;
+        return s;
+    }
+
+    void markExitExpected(const std::string& name) {
+        std::lock_guard<std::mutex> g(expectedExitMutex());
+        expectedExits().insert(name);
+    }
+
+    // Consumes the mark: returns true exactly once per announced teardown, so a
+    // module that is unloaded, reloaded and then CRASHES is reported as a crash
+    // rather than inheriting the earlier orderly exit.
+    bool consumeExpectedExit(const std::string& name) {
+        std::lock_guard<std::mutex> g(expectedExitMutex());
+        return expectedExits().erase(name) > 0;
+    }
+
+    // Host shutdown tears down EVERY loaded module at once, and each one
+    // triggers onTerminated. Without announcing them first, a clean shutdown
+    // reports the whole fleet as having crashed — `loaded -> error`, "module
+    // exited without being asked to", once per module — which is both wrong and
+    // the single most alarming thing this feed can say.
+    //
+    // Callers hold loadMutex(), so the loaded set cannot move underneath.
+    void markAllLoadedExitsExpected() {
+        for (const std::string& n : registryInstance().loadedModuleNames())
+            markExitExpected(n);
     }
 
     // Both guarded by loadMutex(). parsedEnforcePolicy is set only in enforce mode.
@@ -104,25 +153,26 @@ namespace {
         return result;
     }
 
-    // Dial capability_module from a long-lived "core" LogosAPI. Prefer the
-    // operator's first configured transport; fall back to the global
-    // default (LocalSocket). Needed because the single-arg getClient()
-    // always uses the global default, which hangs against a tcp-only
-    // capability_module that never bound a LocalSocket.
-    LogosAPIClient* capabilityModuleClient() {
+    // Dial `name` from a long-lived "core" LogosAPI. Prefer the operator's first
+    // configured transport; fall back to the global default (LocalSocket).
+    // Needed because the single-arg getClient() always uses the global default,
+    // which hangs against a tcp-only module that never bound a LocalSocket.
+    LogosAPIClient* moduleClient(const std::string& name) {
         static LogosAPI* s_coreApi = nullptr;
         if (!s_coreApi)
             s_coreApi = new LogosAPI(std::string("core"));
 
-        if (auto it = moduleTransportsMap().find("capability_module");
+        if (auto it = moduleTransportsMap().find(name);
             it != moduleTransportsMap().end() && !it->second.empty()) {
             const auto ts = logos::transportSetFromJsonString(it->second);
-            if (!ts.empty()) {
-                return s_coreApi->getClient(
-                    QStringLiteral("capability_module"), ts.front());
-            }
+            if (!ts.empty())
+                return s_coreApi->getClient(QString::fromStdString(name), ts.front());
         }
-        return s_coreApi->getClient(std::string("capability_module"));
+        return s_coreApi->getClient(name);
+    }
+
+    LogosAPIClient* capabilityModuleClient() {
+        return moduleClient("capability_module");
     }
 
     // Token authenticates the call. Best-effort; assumes capability_module loaded.
@@ -228,6 +278,179 @@ namespace {
         }
     }
 
+    // ── THE modules_state FEED ───────────────────────────────────────────────
+    //
+    // The consumer end of ModuleStateObserver. Follows the capability_module
+    // precedent above — one long-lived "core" LogosAPI, per-module transport
+    // honoured — with three differences forced by where it runs:
+    //
+    //   1. ASYNC. registerRestrictionRpc is synchronous and gets away with it
+    //      because it is rare and short. This runs on EVERY load, unload and
+    //      crash, from the observer's flush. A synchronous RPC there would put
+    //      a 20 s worst case on the load path.
+    //   2. CHEAP NO-OP WHEN ABSENT, checked before the client is even fetched.
+    //      A synchronous dial to an absent module cost Basecamp ~417 s of
+    //      blocked GUI thread once already.
+    //   3. THE SINK IS UNINSTALLED when modules_state goes away, so the
+    //      observer buffers nothing rather than buffering into a sink that
+    //      only drops.
+
+    constexpr const char* kModulesState = "modules_state";
+
+    // An empty optional reaches the wire as JSON null: an invalid QVariant
+    // falls through every branch of qvariantToNlohmann and returns nullptr.
+    QVariant optToVariant(const std::optional<std::string>& v) {
+        return v.has_value() ? QVariant(QString::fromStdString(*v)) : QVariant();
+    }
+
+    QVariant optToVariant(const std::optional<int64_t>& v) {
+        return v.has_value() ? QVariant(static_cast<qlonglong>(*v)) : QVariant();
+    }
+
+    LogosAPIClient* modulesStateClient() {
+        return moduleClient(kModulesState);
+    }
+
+    // Observe readiness: arm a one-shot watch and return. Never waits -- rule 1
+    // forbids blocking or dispatching under loadMutex(), and the callback lands
+    // on this thread's event loop with no lock held.
+    //
+    // Only armed when a sink is installed; without one nothing consumes the
+    // transition and each watch would hold a client and replica for nothing.
+    void armReadinessWatch(const std::string& name,
+                           std::optional<std::string> instanceId,
+                           std::optional<int64_t> pid) {
+        auto& observer = logos::ModuleStateObserver::instance();
+        if (!observer.hasSink()) return;
+
+        registryInstance().beginPublishWatch(name);
+        const uint64_t epoch = registryInstance().loadEpoch(name);
+
+        moduleClient(name)->whenObjectAvailable(
+            QString::fromStdString(name),
+            [name, instanceId, pid, epoch](bool ready) {
+                if (!ready) return;                                  // abandoned
+                if (!registryInstance().markPublished(name, epoch))  // reloaded
+                    return;
+                auto& o = logos::ModuleStateObserver::instance();
+                o.record(name, logos::module_state::kLoaded,
+                         logos::module_state::kReady, instanceId, pid);
+                o.flush();   // no ScopedModuleStateFlush in scope out here
+            });
+    }
+
+    // Everything the host knows, as a ModuleListing, for apply_snapshot.
+    //
+    // THE SEQ RULE, the one thing here easy to get wrong: every record seq AND
+    // the listing seq come from the observer's single counter, listing drawn
+    // LAST so it is >= every record. modules_state tombstones a pruned record
+    // at the LISTING's seq, so a second counter makes that tombstone
+    // unreachably high or trivially low.
+    nlohmann::json buildSnapshotListing() {
+        auto& observer = logos::ModuleStateObserver::instance();
+        nlohmann::json records = nlohmann::json::array();
+
+        for (const auto& info : registryInstance().allModulesInfo()) {
+            const std::string name = info.value("name", std::string());
+            if (name.empty())
+                continue;
+
+            const bool loaded = info.value("loaded", false);
+
+            nlohmann::json rec = nlohmann::json::object();
+            rec["module"]       = name;
+            rec["state"]        = loaded ? logos::module_state::kLoaded
+                                         : logos::module_state::kUnloaded;
+            rec["path"]         = info.value("path", std::string());
+            rec["type"]         = std::string();
+            rec["version"]      = std::string();
+            rec["dependencies"] = info.value("dependencies", nlohmann::json::array());
+            rec["dependents"]   = info.value("dependents", nlohmann::json::array());
+            rec["loadedAt"]     = info.value("loaded_at", static_cast<int64_t>(0));
+            rec["seq"]          = observer.nextSeq();
+            // instance/pid/reason are OMITTED rather than nulled, matching the
+            // generated encoder; the registry carries none of them.
+            records.push_back(std::move(rec));
+        }
+
+        nlohmann::json listing = nlohmann::json::object();
+        listing["modules"] = std::move(records);
+        // FALSE, and it is a claim worth defending: `partial` means the scan
+        // SKIPPED something, and discoverInstalledModules drops what it cannot
+        // read before it ever enters the registry. Anything missing is not
+        // withheld — it is unknown to the host, which is a complete view from
+        // modules_state's side.
+        listing["partial"] = false;
+        listing["seq"]     = observer.nextSeq();
+        return listing;
+    }
+
+    void pushSnapshot() {
+        if (!registryInstance().isLoaded(kModulesState))
+            return;
+        nlohmann::json args = nlohmann::json::array();
+        args.push_back(buildSnapshotListing());
+        // Synchronous unlike the deltas, deliberately: this runs from
+        // whenObjectAvailable's callback, not the load path, so no lock is held
+        // and nothing waits on it. The nlohmann overload has no async twin, and
+        // a struct argument is easier to build as JSON than as a QVariantMap.
+        const nlohmann::json ok = modulesStateClient()->invokeRemoteMethod(
+            std::string(kModulesState), std::string("apply_snapshot"), args);
+        if (!ok.is_boolean() || !ok.get<bool>())
+            spdlog::warn("modules_state refused the startup snapshot");
+        else
+            spdlog::info("Pushed module snapshot to modules_state");
+    }
+
+    void pushTransitions(const std::vector<logos::ModuleTransition>& batch) {
+        // Before the client is fetched: see note 2 above.
+        if (!registryInstance().isLoaded(kModulesState))
+            return;
+
+        LogosAPIClient* client = modulesStateClient();
+        for (const logos::ModuleTransition& t : batch) {
+            QVariantList args;
+            args << QString::fromStdString(t.module)
+                 << optToVariant(t.instance)
+                 << optToVariant(t.pid)
+                 << QString::fromStdString(t.oldState)
+                 << QString::fromStdString(t.newState)
+                 << optToVariant(t.reason)
+                 << QVariant(static_cast<qulonglong>(t.seq));
+
+            // Fire and forget: the next snapshot re-establishes the whole
+            // picture, and blocking the load path to find out would be the
+            // failure this shape exists to avoid.
+            client->invokeRemoteMethodAsync(
+                QString::fromUtf8(kModulesState),
+                QStringLiteral("note_transition"),
+                args,
+                [](QVariant) {});
+        }
+    }
+
+    // Called once modules_state is loaded. The snapshot waits for it to
+    // PUBLISH, which is later than "loaded" (~390 ms cold);
+    // whenObjectAvailable waits without failing fast or burning the acquire
+    // timeout on this thread.
+    void enableModulesStateFeed() {
+        logos::ModuleStateObserver::instance().setSink(&pushTransitions);
+        modulesStateClient()->whenObjectAvailable(
+            QString::fromUtf8(kModulesState),
+            [](bool ready) {
+                if (ready)
+                    pushSnapshot();
+                else
+                    spdlog::warn("modules_state never became available; no snapshot pushed");
+            });
+    }
+
+    void disableModulesStateFeed() {
+        // Clearing the sink is what makes the observer free again: record()
+        // early-outs when nothing is installed.
+        logos::ModuleStateObserver::instance().setSink({});
+    }
+
     bool loadModuleInternal(const char* moduleName) {
         std::string name(moduleName);
 
@@ -258,11 +481,29 @@ namespace {
         desc.dependencies = registryInstance().moduleDependencies(name);
         desc.modulesDirs  = registryInstance().modulesDirs();
 
+        // Hoisted out of the block below so the observer can carry it. The
+        // instance id is the host's PERSISTENCE identity and is stable across
+        // load/unload cycles (ResolveMode::ReuseOrCreate), which is exactly why
+        // a consumer needs the pid too: instance cannot tell you a module died
+        // and came back, and pid can.
+        std::optional<std::string> instanceId;
+
         if (!persistenceBasePath().empty()) {
             auto info = ModuleLib::InstancePersistence::resolveInstance(
                 persistenceBasePath(), name);
             desc.instancePersistencePath = info.persistencePath;
+            if (!info.instanceId.empty())
+                instanceId = info.instanceId;
         }
+
+        // The attempt starts here — everything above was a cheap reject that
+        // never touched the module. `loading` is the state the drafts fold into
+        // `loaded`; we keep it because it is the only way a consumer can tell
+        // "being brought up" from "up", and a load that hangs is otherwise
+        // indistinguishable from one that never started.
+        logos::ModuleStateObserver::instance().record(
+            name, logos::module_state::kUnloaded, logos::module_state::kLoading,
+            instanceId);
 
         // Per-module transport set, if the daemon registered one before
         // calling load. The loader threads it through to the child via
@@ -299,6 +540,10 @@ namespace {
                 "protocol majors",
                 name, moduleProtocolVersion, gate.moduleMajor,
                 LOGOS_PROTOCOL_VERSION_MAJOR, LOGOS_PROTOCOL_VERSION_STRING);
+            logos::ModuleStateObserver::instance().record(
+                name, logos::module_state::kLoading, logos::module_state::kError,
+                instanceId, std::nullopt,
+                "incompatible logos-protocol major: module " + moduleProtocolVersion);
             return false;
         case LogosCore::ProtocolGateDecision::AllowLegacy:
             spdlog::warn(
@@ -316,23 +561,59 @@ namespace {
         auto loader = loaderRegistry().select(desc);
         if (!loader) {
             spdlog::warn("No loader available to load module: {}", name);
+            logos::ModuleStateObserver::instance().record(
+                name, logos::module_state::kLoading, logos::module_state::kError,
+                instanceId, std::nullopt, "no loader available for this module format");
             return false;
         }
 
+        // Fires on the container's BACKGROUND asio thread, for both an orderly
+        // unload and a module that died. consumeExpectedExit() is what tells
+        // them apart; see its definition.
+        //
+        // This is the one seam that flushes inline: it is not under
+        // loadMutex(), so there is no lock to get out from under, and a crash
+        // is the transition a consumer most needs promptly.
         auto onTerminated = [](const std::string& n) {
             registryInstance().markUnloaded(n);
+
+            auto& observer = logos::ModuleStateObserver::instance();
+            if (consumeExpectedExit(n)) {
+                observer.record(n, logos::module_state::kStopping,
+                                logos::module_state::kUnloaded);
+            } else {
+                observer.record(n, logos::module_state::kLoaded,
+                                logos::module_state::kError, std::nullopt,
+                                std::nullopt, "module exited without being asked to");
+            }
+            observer.flush();
         };
 
         LogosCore::LoadedModuleHandle handle;
-        if (!loader->load(desc, onTerminated, handle))
+        if (!loader->load(desc, onTerminated, handle)) {
+            logos::ModuleStateObserver::instance().record(
+                name, logos::module_state::kLoading, logos::module_state::kError,
+                instanceId, std::nullopt, "loader failed to start the module");
             return false;
+        }
+
+        // Read before the handle is moved into the registry below.
+        const std::optional<int64_t> pid =
+            handle.pid >= 0 ? std::optional<int64_t>(handle.pid) : std::nullopt;
 
         // OUTBOUND half of load-time identity: mint a root token, send it into
         // the child, and register it locally under the module's name.
         std::string authToken = boost::uuids::to_string(boost::uuids::random_generator()());
 
         if (!loader->sendToken(name, authToken)) {
+            // We are about to terminate it deliberately, so announce the intent
+            // BEFORE calling terminate() — otherwise onTerminated, which may
+            // already be running on the asio thread, reports this as a crash.
+            markExitExpected(name);
             loader->terminate(name);
+            logos::ModuleStateObserver::instance().record(
+                name, logos::module_state::kLoading, logos::module_state::kError,
+                instanceId, pid, "failed to deliver the module's auth token");
             return false;
         }
 
@@ -345,6 +626,17 @@ namespace {
         refreshDerivedRestrictionsForDependenciesOf(name);
 
         spdlog::info("Module loaded: {}", name);
+        logos::ModuleStateObserver::instance().record(
+            name, logos::module_state::kLoading, logos::module_state::kLoaded,
+            instanceId, pid);
+
+        // The feed can only exist once its consumer does.
+        if (name == kModulesState)
+            enableModulesStateFeed();
+
+        // After the feed: modules_state installs the sink as it loads, and
+        // armReadinessWatch is a no-op without one, so it must see its own sink.
+        armReadinessWatch(name, instanceId, pid);
 
         return true;
     }
@@ -358,20 +650,37 @@ namespace {
             return false;
         }
 
+        logos::ModuleStateObserver::instance().record(
+            name, logos::module_state::kLoaded, logos::module_state::kStopping);
+
         auto loader = registryInstance().loaderFor(name);
         if (loader) {
             if (!loader->hasModule(name)) {
                 spdlog::warn("No module entry found for module: {}", name);
+                // Nothing was torn down, so the module is still where it was.
+                // Walk `stopping` back rather than leaving a consumer watching
+                // a teardown that never happens.
+                logos::ModuleStateObserver::instance().record(
+                    name, logos::module_state::kStopping, logos::module_state::kLoaded,
+                    std::nullopt, std::nullopt, "no module entry found; teardown not started");
                 return false;
             }
+            // Announce BEFORE terminate(): onTerminated can fire on the asio
+            // thread before terminate() even returns here.
+            markExitExpected(name);
             loader->terminate(name);
         } else {
             // Fallback: module was loaded via markLoaded(name) directly (test
             // scenarios or external setup), so no loader was recorded. Ask the
             // registered loaders to terminate it by name — no specific container
             // is named here.
+            markExitExpected(name);
             if (!loaderRegistry().terminate(name)) {
                 spdlog::warn("No live module entry found for module: {}", name);
+                consumeExpectedExit(name);
+                logos::ModuleStateObserver::instance().record(
+                    name, logos::module_state::kStopping, logos::module_state::kLoaded,
+                    std::nullopt, std::nullopt, "no live module entry; teardown not started");
                 return false;
             }
         }
@@ -382,6 +691,20 @@ namespace {
         refreshDerivedRestrictionsForDependenciesOf(name);
 
         spdlog::info("Module unloaded: {}", name);
+
+        // THE MARK IS THE GUARD: the observer is stateless, so it cannot spot
+        // a duplicate `stopping -> unloaded` the way it drops old == new, and
+        // emitting twice would reach modules_state as two transitions with
+        // different seqs — two identical events for one teardown. If
+        // onTerminated already ran it consumed the mark; if the mark is still
+        // here no callback fired (loaders that terminate synchronously) and
+        // without this the module sits in `stopping` forever.
+        if (consumeExpectedExit(name)) {
+            logos::ModuleStateObserver::instance().record(
+                name, logos::module_state::kStopping, logos::module_state::kUnloaded);
+        }
+        if (name == kModulesState)
+            disableModulesStateFeed();
         return true;
     }
 }
@@ -493,11 +816,15 @@ namespace ModuleManager {
     }
 
     bool loadModule(const char* moduleName) {
+        // BEFORE the lock guard, so it is destroyed after it. See rule 1.
+        logos::ScopedModuleStateFlush stateFlusher;
         std::lock_guard lock(loadMutex());
         return loadModuleInternal(moduleName);
     }
 
     bool loadModuleWithDependencies(const char* moduleName) {
+        // BEFORE the lock guard, so it is destroyed after it. See rule 1.
+        logos::ScopedModuleStateFlush stateFlusher;
         std::lock_guard lock(loadMutex());
 
         std::string name(moduleName);
@@ -542,6 +869,8 @@ namespace ModuleManager {
     }
 
     bool initializeCapabilityModule() {
+        // BEFORE the lock guard, so it is destroyed after it. See rule 1.
+        logos::ScopedModuleStateFlush stateFlusher;
         std::lock_guard lock(loadMutex());
 
         if (!registryInstance().isKnown("capability_module"))
@@ -563,11 +892,15 @@ namespace ModuleManager {
     }
 
     bool unloadModule(const char* moduleName) {
+        // BEFORE the lock guard, so it is destroyed after it. See rule 1.
+        logos::ScopedModuleStateFlush stateFlusher;
         std::lock_guard lock(loadMutex());
         return unloadModuleInternalLocked(std::string(moduleName));
     }
 
     bool unloadModuleWithDependents(const char* moduleName) {
+        // BEFORE the lock guard, so it is destroyed after it. See rule 1.
+        logos::ScopedModuleStateFlush stateFlusher;
         std::lock_guard lock(loadMutex());
 
         std::string name(moduleName);
@@ -633,13 +966,21 @@ namespace ModuleManager {
     }
 
     void terminateAll() {
+        // BEFORE the lock guard, so it is destroyed after it. See rule 1.
+        logos::ScopedModuleStateFlush stateFlusher;
         std::lock_guard lock(loadMutex());
+        // Announce before tearing down, or every module reports as a crash.
+        markAllLoadedExitsExpected();
         loaderRegistry().terminateAll();
         registryInstance().clearLoaded();
     }
 
     void clear() {
+        // BEFORE the lock guard, so it is destroyed after it. See rule 1.
+        logos::ScopedModuleStateFlush stateFlusher;
         std::lock_guard lock(loadMutex());
+        // Announce before tearing down, or every module reports as a crash.
+        markAllLoadedExitsExpected();
         loaderRegistry().terminateAll();
         registryInstance().clear();
         // Per-module transport overrides are part of the manager's
