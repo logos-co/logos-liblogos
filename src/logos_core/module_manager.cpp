@@ -153,25 +153,26 @@ namespace {
         return result;
     }
 
-    // Dial capability_module from a long-lived "core" LogosAPI. Prefer the
-    // operator's first configured transport; fall back to the global
-    // default (LocalSocket). Needed because the single-arg getClient()
-    // always uses the global default, which hangs against a tcp-only
-    // capability_module that never bound a LocalSocket.
-    LogosAPIClient* capabilityModuleClient() {
+    // Dial `name` from a long-lived "core" LogosAPI. Prefer the operator's first
+    // configured transport; fall back to the global default (LocalSocket).
+    // Needed because the single-arg getClient() always uses the global default,
+    // which hangs against a tcp-only module that never bound a LocalSocket.
+    LogosAPIClient* moduleClient(const std::string& name) {
         static LogosAPI* s_coreApi = nullptr;
         if (!s_coreApi)
             s_coreApi = new LogosAPI(std::string("core"));
 
-        if (auto it = moduleTransportsMap().find("capability_module");
+        if (auto it = moduleTransportsMap().find(name);
             it != moduleTransportsMap().end() && !it->second.empty()) {
             const auto ts = logos::transportSetFromJsonString(it->second);
-            if (!ts.empty()) {
-                return s_coreApi->getClient(
-                    QStringLiteral("capability_module"), ts.front());
-            }
+            if (!ts.empty())
+                return s_coreApi->getClient(QString::fromStdString(name), ts.front());
         }
-        return s_coreApi->getClient(std::string("capability_module"));
+        return s_coreApi->getClient(name);
+    }
+
+    LogosAPIClient* capabilityModuleClient() {
+        return moduleClient("capability_module");
     }
 
     // Token authenticates the call. Best-effort; assumes capability_module loaded.
@@ -307,17 +308,35 @@ namespace {
     }
 
     LogosAPIClient* modulesStateClient() {
-        static LogosAPI* s_api = nullptr;
-        if (!s_api)
-            s_api = new LogosAPI(std::string("core"));
+        return moduleClient(kModulesState);
+    }
 
-        if (auto it = moduleTransportsMap().find(kModulesState);
-            it != moduleTransportsMap().end() && !it->second.empty()) {
-            const auto ts = logos::transportSetFromJsonString(it->second);
-            if (!ts.empty())
-                return s_api->getClient(QString::fromUtf8(kModulesState), ts.front());
-        }
-        return s_api->getClient(std::string(kModulesState));
+    // Observe readiness: arm a one-shot watch and return. Never waits -- rule 1
+    // forbids blocking or dispatching under loadMutex(), and the callback lands
+    // on this thread's event loop with no lock held.
+    //
+    // Only armed when a sink is installed; without one nothing consumes the
+    // transition and each watch would hold a client and replica for nothing.
+    void armReadinessWatch(const std::string& name,
+                           std::optional<std::string> instanceId,
+                           std::optional<int64_t> pid) {
+        auto& observer = logos::ModuleStateObserver::instance();
+        if (!observer.hasSink()) return;
+
+        registryInstance().beginPublishWatch(name);
+        const uint64_t epoch = registryInstance().loadEpoch(name);
+
+        moduleClient(name)->whenObjectAvailable(
+            QString::fromStdString(name),
+            [name, instanceId, pid, epoch](bool ready) {
+                if (!ready) return;                                  // abandoned
+                if (!registryInstance().markPublished(name, epoch))  // reloaded
+                    return;
+                auto& o = logos::ModuleStateObserver::instance();
+                o.record(name, logos::module_state::kLoaded,
+                         logos::module_state::kReady, instanceId, pid);
+                o.flush();   // no ScopedModuleStateFlush in scope out here
+            });
     }
 
     // Everything the host knows, as a ModuleListing, for apply_snapshot.
@@ -614,6 +633,10 @@ namespace {
         // The feed can only exist once its consumer does.
         if (name == kModulesState)
             enableModulesStateFeed();
+
+        // After the feed: modules_state installs the sink as it loads, and
+        // armReadinessWatch is a no-op without one, so it must see its own sink.
+        armReadinessWatch(name, instanceId, pid);
 
         return true;
     }

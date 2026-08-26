@@ -2,7 +2,9 @@
 #define MODULE_REGISTRY_H
 
 #include "module_loader.h"
+#include <cstdint>
 #include <memory>
+#include <optional>
 #include <string>
 #include <vector>
 #include <unordered_map>
@@ -38,6 +40,14 @@ struct ModuleInfo {
     // cleared to 0 by markUnloaded. 0 ⟺ not currently loaded. Callers derive a
     // module's uptime from it (now - loadedAt), valid only while loaded.
     int64_t loadedAt = 0;
+    // Readiness: has the module published its object? Tracked only while a
+    // watch is armed, so nullopt means UNKNOWN, not "not ready".
+    std::optional<bool> published;
+    int64_t publishedAt = 0;
+    // Bumped by every markLoaded. A readiness callback carries the epoch it was
+    // armed under, so a fast unload/reload cannot let a stale watch mark the new
+    // instance ready. Not loadedAt: that is whole seconds and collides.
+    uint64_t loadEpoch = 0;
     // Null when loaded directly via markLoaded(name) (test/external scenarios).
     std::shared_ptr<LogosCore::ModuleLoader> loader;
     LogosCore::LoadedModuleHandle handle;
@@ -89,6 +99,14 @@ public:
     void markUnloaded(const std::string& name);
     std::vector<std::string> loadedModuleNames() const;
     void clearLoaded();
+
+    // Readiness. beginPublishWatch flips `published` from unknown to false;
+    // markPublished sets it true, but only if `epoch` still matches the current
+    // load (a stale watch from a previous load is dropped). Returns whether it
+    // applied. loadEpoch() reads the value to arm a watch with.
+    void beginPublishWatch(const std::string& name);
+    bool markPublished(const std::string& name, uint64_t epoch);
+    uint64_t loadEpoch(const std::string& name) const;
 
     // Returns the loader that owns the named loaded module, or nullptr if
     // loaded without a loader association (e.g. via markLoaded(name) only).

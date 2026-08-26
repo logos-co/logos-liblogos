@@ -55,6 +55,9 @@ constexpr const char* kAbsent   = "absent";
 constexpr const char* kUnloaded = "unloaded";
 constexpr const char* kLoading  = "loading";
 constexpr const char* kLoaded   = "loaded";
+// kLoaded means the host owns the process. kReady means the module's object is
+// acquirable -- observed asynchronously, since publish happens in the child.
+constexpr const char* kReady    = "ready";
 constexpr const char* kStopping = "stopping";
 constexpr const char* kError    = "error";
 }  // namespace module_state
