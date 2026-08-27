@@ -10,6 +10,7 @@
     logos-qt-sdk.url = "github:logos-co/logos-qt-sdk";
     logos-plugin-qt.url = "github:logos-co/logos-plugin-qt";
     logos-capability-module.url = "github:logos-co/logos-capability-module";
+    logos-modules-state-module.url = "github:logos-co/logos-modules-state-module";
     logos-module.url = "github:logos-co/logos-module";
     process-stats.url = "github:logos-co/process-stats";
     logos-container.url = "github:logos-co/logos-container";
@@ -19,7 +20,7 @@
     logos-package-manager.url = "github:logos-co/logos-package-manager";
   };
 
-  outputs = { self, nixpkgs, logos-nix, logos-cpp-sdk, logos-protocol, logos-qt-sdk, logos-plugin-qt, logos-capability-module, logos-module, logos-package-manager, process-stats, logos-container, default-container, logos-module-loader, default-module-loader }:
+  outputs = { self, nixpkgs, logos-nix, logos-cpp-sdk, logos-protocol, logos-qt-sdk, logos-plugin-qt, logos-capability-module, logos-modules-state-module, logos-module, logos-package-manager, process-stats, logos-container, default-container, logos-module-loader, default-module-loader }:
 
     let
       systems = [ "aarch64-darwin" "x86_64-darwin" "aarch64-linux" "x86_64-linux" ];
@@ -31,6 +32,7 @@
         logosQtSdk = logos-qt-sdk.packages.${system}.default;
         logosQtHost = logos-plugin-qt.packages.${system}.logos-qt-host;
         capabilityModule = logos-capability-module.packages.${system}.default;
+        modulesStateModule = logos-modules-state-module.packages.${system}.default;
         logosModule = logos-module.packages.${system}.default;
         processStats = process-stats.packages.${system}.default;
         logosContainer = logos-container.packages.${system}.default;
@@ -68,6 +70,7 @@
           logosQtSdk = logos-qt-sdk.packages.${system}.default;
           logosQtHost = logos-plugin-qt.packages.${system}.logos-qt-host;
           capabilityModule = logos-capability-module.packages.${system}.default;
+          modulesStateModule = logos-modules-state-module.packages.${system}.default;
           logosModule = logos-module.packages.${system}.default;
           processStats = process-stats.packages.${system}.default;
           logosContainer = logos-container.packages.${system}.default;
@@ -79,7 +82,7 @@
         });
     in
     {
-      packages = forAllTargets ({ pkgs, system, logosSdk, logosProtocolPkg, logosQtSdk, logosQtHost, capabilityModule, logosModule, processStats, logosContainer, logosModuleLoader, defaultContainer, defaultModuleLoader, logosPackageManager, logosPackageManagerPortable }:
+      packages = forAllTargets ({ pkgs, system, logosSdk, logosProtocolPkg, logosQtSdk, logosQtHost, capabilityModule, modulesStateModule, logosModule, processStats, logosContainer, logosModuleLoader, defaultContainer, defaultModuleLoader, logosPackageManager, logosPackageManagerPortable }:
         let
           # The built-in default container + format-loader implementations — the
           # single place the default is chosen. Each is just the package; it
@@ -109,8 +112,21 @@
 
           # Individual package components (reference the shared build)
           lib = import ./nix/lib.nix { inherit pkgs common build; };
-          modules = import ./nix/modules.nix { inherit pkgs common capabilityModule; };
-          modulesPortable = import ./nix/modules.nix { inherit pkgs capabilityModule; common = commonPortable; portableBuild = true; };
+          # The bundled set. capability_module is load-bearing at startup;
+          # modules_state is the lifecycle registry the observer feeds, and it
+          # is inert until something loads it -- the feed arms only when the
+          # module itself loads.
+          bundledModules = [
+            { name = "capability_module"; pkg = capabilityModule;   version = "1.0.0"; }
+            { name = "modules_state";     pkg = modulesStateModule; version = "0.1.0"; }
+          ];
+          modules = import ./nix/modules.nix { inherit pkgs common; modules = bundledModules; };
+          modulesPortable = import ./nix/modules.nix {
+            inherit pkgs;
+            modules = bundledModules;
+            common = commonPortable;
+            portableBuild = true;
+          };
           bin = import ./nix/bin.nix { inherit pkgs common build lib modules formatLoaderImpl; };
           include = import ./nix/include.nix { inherit pkgs common src logosSdk; inherit logosProtocolPkg logosQtSdk logosQtHost; };
           tests = import ./nix/tests.nix { inherit pkgs common build; };
