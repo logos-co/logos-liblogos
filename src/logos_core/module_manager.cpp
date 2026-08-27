@@ -879,6 +879,34 @@ namespace ModuleManager {
         return allSucceeded;
     }
 
+    // Auto-load modules_state, if it is installed.
+    //
+    // OPTIONAL BY DESIGN: absent, this returns false and nothing else changes.
+    // The observer has no sink, record() early-outs, and liblogos pays nothing.
+    //
+    // LOADED LAST, AFTER DISCOVERY AND capability_module, AND THAT IS FINE. The
+    // membership edges from discoverInstalledModules and capability_module's own
+    // load were recorded with no sink installed, so they were dropped. The
+    // snapshot pushed when this module publishes carries the whole picture,
+    // which is exactly what apply_snapshot exists for -- modules_state cannot
+    // be first, so it must not need to be.
+    bool initializeModulesState() {
+        // BEFORE the lock guard, so it is destroyed after it. See rule 1.
+        logos::ScopedModuleStateFlush stateFlusher;
+        std::lock_guard lock(loadMutex());
+
+        if (!registryInstance().isKnown("modules_state")) {
+            spdlog::debug("modules_state is not installed; lifecycle feed stays off");
+            return false;
+        }
+
+        if (!loadModuleInternal("modules_state")) {
+            spdlog::warn("Failed to load modules_state; lifecycle feed stays off");
+            return false;
+        }
+        return true;
+    }
+
     bool initializeCapabilityModule() {
         // BEFORE the lock guard, so it is destroyed after it. See rule 1.
         logos::ScopedModuleStateFlush stateFlusher;

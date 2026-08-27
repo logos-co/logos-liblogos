@@ -25,6 +25,9 @@ void logos_core_start() {
     LogosInstance::id();
     ModuleManager::discoverInstalledModules();
     ModuleManager::initializeCapabilityModule();
+    // After capability_module: this one is optional, and its snapshot back-fills
+    // everything that happened before it was up.
+    ModuleManager::initializeModulesState();
 }
 
 void logos_core_cleanup() {

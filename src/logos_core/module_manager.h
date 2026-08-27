@@ -58,6 +58,11 @@ namespace ModuleManager {
     bool loadModule(const char* moduleName);
     bool loadModuleWithDependencies(const char* moduleName);
     bool initializeCapabilityModule();
+
+    // Loads modules_state when installed, arming the lifecycle feed. Returns
+    // false and changes nothing when it is absent -- the module is optional and
+    // liblogos pays nothing for it not being there.
+    bool initializeModulesState();
     bool unloadModule(const char* moduleName);
 
     // Cascading unload: unload the named module together with every currently
