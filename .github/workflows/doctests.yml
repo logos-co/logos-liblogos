@@ -3,11 +3,11 @@ name: liblogos Doc-Tests
 # Runs the executable liblogos doc-tests end-to-end via the shared doctest CLI,
 # both pinned to the commit of logos-liblogos under test (via --release-for):
 #   - doctests/liblogos-module-runtime.test.yaml — drives liblogos through the
-#     logoscore CLI frontend (build logoscore against this commit, install the
-#     accounts module, start the daemon, load + call methods).
+#     logoscore CLI frontend (build logoscore against this commit, install
+#     test_basic_module, start the daemon, load + call methods).
 #   - doctests/liblogos-as-a-library.test.yaml — embeds liblogos directly:
 #     builds liblogos_core from this commit, compiles a C++ program that links
-#     it, installs modules with lgpm, and loads the accounts module via the C API.
+#     it, installs modules with lgpm, and loads test_basic_module via the C API.
 # Both specs run in one invocation, producing a single combined report.
 #
 # ──────────────────────────────────────────────────────────────────────────────
@@ -230,7 +230,7 @@ jobs:
             const body =
               `${marker}\n` +
               `### 📊 liblogos doc-test report\n\n` +
-              `The real accounts module, run through a logoscore daemon built against ` +
+              `A real module, run through a logoscore daemon built against ` +
               `this commit of liblogos — rendered alongside the commands actually run ` +
               `and their output (updated each run, commit \`${context.sha.slice(0,7)}\`):\n\n` +
               `${links}\n\n` +
