@@ -1,6 +1,7 @@
 #ifndef MODULE_REGISTRY_H
 #define MODULE_REGISTRY_H
 
+#include "dependency_gate.h"
 #include "module_loader.h"
 #include <cstdint>
 #include <memory>
@@ -29,7 +30,14 @@ struct ModuleInfo {
     // at discovery time via ModuleLib::LogosModule (no plugin instantiation).
     // Empty when the plugin exposes no readable metadata.
     std::string metadataJson;
-    std::vector<std::string> dependencies;
+    // The module's own version, from that embedded metadata. Empty when the
+    // plugin carries no version stamp; a dependent's range is evaluated
+    // against it.
+    std::string version;
+    // Declared dependency edges with whatever constraints each entry carried
+    // (a bare-name entry constrains nothing). Every graph consumer uses the
+    // name-only view from moduleDependencies().
+    std::vector<LogosCore::ModuleDependency> dependencies;
     // Direct reverse edges — names of modules whose `dependencies` list
     // includes this module. Kept in sync with `dependencies` across every
     // graph mutation by ModuleRegistry itself; callers never populate it
@@ -76,6 +84,12 @@ public:
     // names yield an empty list. Traversal is cycle- and diamond-safe.
     std::vector<std::string> moduleDependencies(const std::string& name,
                                                 bool recursive = false) const;
+    // The same direct edges, carrying the constraints they declared. Feeds the
+    // dependency gate; unknown names yield an empty list.
+    std::vector<LogosCore::ModuleDependency>
+    moduleDependencyEntries(const std::string& name) const;
+    // A module's own version, or "" when it is unknown or carries no stamp.
+    std::string moduleVersion(const std::string& name) const;
     // Reverse-edge accessor. `recursive=false` returns the direct
     // dependents stored on ModuleInfo. `recursive=true` walks the reverse
     // graph breadth-first and returns every transitive dependent. Unknown
@@ -86,6 +100,11 @@ public:
     void registerModule(const std::string& name, const std::string& path,
                         const std::vector<std::string>& dependencies = {});
     void registerDependencies(const std::string& name, const std::vector<std::string>& dependencies);
+    // Constraint-carrying overload, and the version a dependent's range is
+    // checked against. Direct graph mutators alongside registerModule.
+    void registerDependencies(const std::string& name,
+                              const std::vector<LogosCore::ModuleDependency>& dependencies);
+    void registerModuleVersion(const std::string& name, const std::string& version);
 
     bool isLoaded(const std::string& name) const;
     void markLoaded(const std::string& name);

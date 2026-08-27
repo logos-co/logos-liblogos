@@ -73,8 +73,10 @@ pkgs.stdenv.mkDerivation {
     # Copy the libraries so tests can run
     mkdir -p $out/lib
     cp -r lib/* $out/lib/ || true
-    # Copy package_manager_lib from its nix store path
+    # Copy package_manager_lib and liblgx (logos_core links both) from their
+    # nix store path
     cp ${common.env.LOGOS_PACKAGE_MANAGER_ROOT}/lib/libpackage_manager_lib.* $out/lib/ || true
+    cp ${common.env.LOGOS_PACKAGE_MANAGER_ROOT}/lib/liblgx.* $out/lib/ || true
 
     ${pkgs.lib.optionalString pkgs.stdenv.isDarwin ''
       # Fix RPATH to find libraries in $out/lib on macOS

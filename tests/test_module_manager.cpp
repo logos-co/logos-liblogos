@@ -1,5 +1,7 @@
 #include <gtest/gtest.h>
 #include "logos_core.h"
+#include "logos_core/dependency_gate.h"
+#include "logos_core/module_state_observer.h"
 #include "qt_test_adapter.h"
 #include <nlohmann/json.hpp>
 #include <algorithm>
@@ -651,6 +653,130 @@ TEST_F(ModuleManagerTest, RegisterDependencies_PreservesLoadedFlag) {
 }
 
 // =============================================================================
+// Dependency version-range gate
+//
+// A module declares each dependency either as a bare name or as
+// { name, version, signer }. The declared range is checked against the
+// installed dependency's version before the loader is ever consulted; an
+// unsatisfied or unevaluatable range refuses the load exactly the way the
+// protocol gate refuses an incompatible major.
+//
+// The refusal cases run through the real logos_core_load_module and are read
+// back off the lifecycle observer, which is where a refusal is reported. The
+// permissive cases are asserted on the gate itself, because a load that gets
+// PAST the gate goes on to spawn a module host — not something these tests
+// can (or should) drive with a placeholder file on disk.
+// =============================================================================
+
+class DependencyGateLoadTest : public ::testing::Test {
+protected:
+    void SetUp() override {
+        clearModuleState();
+        auto& o = logos::ModuleStateObserver::instance();
+        o.setSink({});
+        o.clearPending();
+        seen.clear();
+        o.setSink([this](const std::vector<logos::ModuleTransition>& batch) {
+            for (const auto& t : batch) seen.push_back(t);
+        });
+    }
+
+    void TearDown() override {
+        auto& o = logos::ModuleStateObserver::instance();
+        o.setSink({});
+        o.clearPending();
+        clearModuleState();
+    }
+
+    // `app` depends on `lib`, which is installed at `installedVersion`.
+    void plantGraph(const std::string& range, const std::string& installedVersion) {
+        logos_core_register_module("lib", "/path/to/lib");
+        ModuleManager::registry().registerModuleVersion("lib", installedVersion);
+        logos_core_register_module("app", (tmpDir.path / "app_plugin.so").string().c_str());
+        ModuleManager::registry().registerDependencies(
+            "app", std::vector<LogosCore::ModuleDependency>{{"lib", range, ""}});
+        std::ofstream f(tmpDir.path / "app_plugin.so");
+        f << "not a real plugin";
+    }
+
+    // The reason recorded on the loading -> error edge for `module`, or "".
+    std::string errorReason(const std::string& module) const {
+        for (const auto& t : seen) {
+            if (t.module == module && t.newState == logos::module_state::kError)
+                return t.reason.value_or(std::string{});
+        }
+        return {};
+    }
+
+    TmpDir tmpDir;
+    std::vector<logos::ModuleTransition> seen;
+};
+
+TEST_F(DependencyGateLoadTest, UnsatisfiedRange_RefusesLoad) {
+    plantGraph("^2.0.0", "1.0.0");
+
+    EXPECT_EQ(logos_core_load_module("app", /*with_dependencies=*/false), 0);
+    EXPECT_EQ(logos_core_is_module_loaded("app"), 0);
+
+    const std::string reason = errorReason("app");
+    EXPECT_NE(reason.find("lib"), std::string::npos) << reason;
+    EXPECT_NE(reason.find("^2.0.0"), std::string::npos) << reason;
+    EXPECT_NE(reason.find("1.0.0"), std::string::npos) << reason;
+}
+
+TEST_F(DependencyGateLoadTest, MalformedRange_RefusesLoad) {
+    plantGraph("^^2.0.0", "2.1.0");
+
+    EXPECT_EQ(logos_core_load_module("app", /*with_dependencies=*/false), 0);
+
+    const std::string reason = errorReason("app");
+    EXPECT_NE(reason.find("unparseable"), std::string::npos) << reason;
+}
+
+TEST_F(DependencyGateLoadTest, SatisfiedRange_GateAllows) {
+    plantGraph("^2.0.0", "2.1.0");
+
+    const auto gate = ModuleManager::dependencyGateFor("app");
+    EXPECT_EQ(gate.decision, LogosCore::DependencyGateDecision::Allow);
+    EXPECT_TRUE(gate.reason.empty());
+}
+
+// The string form of a dependency entry keeps behaving exactly as before: an
+// edge, no constraint, nothing for the gate to refuse.
+TEST_F(DependencyGateLoadTest, BareNameDependency_GateIsUnconstrained) {
+    logos_core_register_module("lib", "/path/to/lib");
+    logos_core_register_module("app", "/path/to/app");
+    const char* deps[] = {"lib"};
+    logos_core_register_module_dependencies("app", deps, 1);
+
+    const auto gate = ModuleManager::dependencyGateFor("app");
+    EXPECT_EQ(gate.decision, LogosCore::DependencyGateDecision::Unconstrained);
+    EXPECT_EQ(logos_core_get_module_dependencies_count("app"), 1);
+}
+
+// Carrying constraints must not widen the name-only shapes the graph and the
+// modules-info wire format are built on.
+TEST_F(DependencyGateLoadTest, ConstraintsDoNotChangeTheNameOnlyViews) {
+    plantGraph("^2.0.0", "2.1.0");
+
+    EXPECT_EQ(ModuleManager::registry().moduleDependencies("app"),
+              (std::vector<std::string>{"lib"}));
+    EXPECT_EQ(ModuleManager::registry().moduleDependents("lib"),
+              (std::vector<std::string>{"app"}));
+
+    char* json = logos_core_get_modules_info();
+    ASSERT_NE(json, nullptr);
+    nlohmann::json info = nlohmann::json::parse(json, nullptr, /*allow_exceptions=*/false);
+    free(json);
+    ASSERT_TRUE(info.is_array());
+    for (const auto& entry : info) {
+        if (entry.value("name", std::string{}) != "app") continue;
+        ASSERT_TRUE(entry["dependencies"].is_array());
+        EXPECT_EQ(entry["dependencies"], nlohmann::json::array({"lib"}));
+    }
+}
+
+// =============================================================================
 // End-to-end regression tests using a real Qt module.
 // =============================================================================
 
@@ -711,6 +837,30 @@ TEST_F(RealModuleRegistryTest, GetModulesInfo_PopulatesEmbeddedMetadata) {
     EXPECT_EQ(entry["metadata"].value("name", std::string{}), moduleName);
     EXPECT_FALSE(entry["metadata"].value("version", std::string{}).empty())
         << "built test modules declare a version in metadata.json";
+}
+
+// The version a dependent's range is evaluated against is the dependency's own
+// embedded stamp, cached at discovery without loading the plugin. Closes the
+// loop from a real binary's metadata to a gate decision.
+TEST_F(RealModuleRegistryTest, EmbeddedVersionFeedsTheDependencyGate) {
+    char* name = logos_core_process_module(modulePath.c_str());
+    ASSERT_NE(name, nullptr) << "process_module failed for " << modulePath;
+    const std::string dep(name);
+    delete[] name;
+
+    const std::string version = ModuleManager::registry().moduleVersion(dep);
+    ASSERT_FALSE(version.empty()) << "built test modules declare a version";
+
+    logos_core_register_module("dependent", "/path/to/dependent");
+    ModuleManager::registry().registerDependencies(
+        "dependent", std::vector<LogosCore::ModuleDependency>{{dep, "=" + version, ""}});
+    EXPECT_EQ(ModuleManager::dependencyGateFor("dependent").decision,
+              LogosCore::DependencyGateDecision::Allow);
+
+    ModuleManager::registry().registerDependencies(
+        "dependent", std::vector<LogosCore::ModuleDependency>{{dep, "=" + version + "-nope.1", ""}});
+    EXPECT_EQ(ModuleManager::dependencyGateFor("dependent").decision,
+              LogosCore::DependencyGateDecision::Refuse);
 }
 
 // =============================================================================
