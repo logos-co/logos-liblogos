@@ -205,9 +205,22 @@
               export QT_PLUGIN_PATH="${pkgs.qt6.qtbase}/${pkgs.qt6.qtbase.qtPluginPrefix}"
             ''}
             export TEST_PLUGIN="${capabilityModulePkg}/lib/capability_module_plugin.${pluginExt}"
+            # The only binary in reach whose embedded metadata declares an
+            # object-form dependency WITH a version range (no shipped module
+            # does), so it is what covers the production discovery -> gate path.
+            # Staged into the tests package itself by tests/CMakeLists.txt.
+            export TEST_PLUGIN_DEP_RANGE="${testsPkg}/lib/dep_range_fixture_plugin.${pluginExt}"
+            # Turns a missing fixture into a red run instead of a skip. A skip
+            # renders as a pass, which would hand back the coverage hole.
+            export LOGOS_REQUIRE_TEST_FIXTURES=1
+            if [ ! -f "$TEST_PLUGIN_DEP_RANGE" ]; then
+              echo "Error: dependency-range fixture not found at $TEST_PLUGIN_DEP_RANGE" >&2
+              exit 1
+            fi
             mkdir -p $out
             echo "Running logos-liblogos tests..."
             echo "TEST_PLUGIN=$TEST_PLUGIN"
+            echo "TEST_PLUGIN_DEP_RANGE=$TEST_PLUGIN_DEP_RANGE"
             ${testsPkg}/bin/logos_core_tests --gtest_output=xml:$out/test-results.xml
           '';
         }

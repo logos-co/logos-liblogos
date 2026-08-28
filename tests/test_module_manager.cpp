@@ -864,6 +864,130 @@ TEST_F(RealModuleRegistryTest, EmbeddedVersionFeedsTheDependencyGate) {
 }
 
 // =============================================================================
+// The production dependency-range path, end to end from a real binary.
+//
+// This is the ONLY coverage of it. Every other constraint test either injects
+// entries through the constraint-carrying registerDependencies overload (which
+// has no production caller) or exercises parseEmbeddedDeclaration in isolation.
+// The real path is
+//     processModuleInternal -> getRawMetadataJson -> parseEmbeddedDeclaration
+//                           -> ModuleInfo::dependencies -> dependencyGateFor
+// and it was measurably untested: dropping the constraints where the registry
+// assigns them (keeping only the names) left all 218 tests green, i.e. it
+// silently reinstated the bug the gate exists to fix.
+//
+// It stayed uncovered because no metadata.json in the fleet uses the object
+// form, so no shipped module declares a range. tests/fixtures supplies the
+// missing input: a real Qt plugin whose embedded blob declares
+//     "dependencies": [ { "name": "range_probe_dep", "version": "^9.0.0" } ]
+// =============================================================================
+
+namespace {
+// Mirrors tests/fixtures/dep_range_fixture.json. A drift here shows up as an
+// assertion, not as a test that quietly stops covering anything.
+constexpr const char* kFixtureModule = "dep_range_fixture";
+constexpr const char* kFixtureDep    = "range_probe_dep";
+constexpr const char* kFixtureRange  = "^9.0.0";
+}  // namespace
+
+class RealDependencyRangeTest : public ::testing::Test {
+protected:
+    std::string fixturePath;
+
+    void SetUp() override {
+        clearModuleState();
+
+        const char* env = std::getenv("TEST_PLUGIN_DEP_RANGE");
+        if (env && std::strlen(env) > 0 && fs::exists(env)) {
+            fixturePath = env;
+            return;
+        }
+
+        // A skipped test renders as a pass, and a pass here would mean the
+        // production path is unguarded again. CI sets LOGOS_REQUIRE_TEST_FIXTURES
+        // so an absent fixture is a red run; a local dev without one still skips.
+        const char* strict = std::getenv("LOGOS_REQUIRE_TEST_FIXTURES");
+        if (strict && std::strcmp(strict, "0") != 0) {
+            FAIL() << "TEST_PLUGIN_DEP_RANGE is unset or missing (got '"
+                   << (env ? env : "") << "') while LOGOS_REQUIRE_TEST_FIXTURES is "
+                   << "set: the dependency-range fixture must be supplied, not skipped.";
+        }
+
+        GTEST_SKIP() << "No dependency-range fixture available. Set "
+                     << "TEST_PLUGIN_DEP_RANGE to tests/fixtures' built plugin.";
+    }
+
+    void TearDown() override {
+        clearModuleState();
+    }
+
+    // Discovers the fixture through the real registry entry point and returns
+    // the name it registered under.
+    std::string discover() {
+        char* name = logos_core_process_module(fixturePath.c_str());
+        EXPECT_NE(name, nullptr) << "process_module failed for " << fixturePath;
+        if (!name) return {};
+        std::string registered(name);
+        delete[] name;
+        return registered;
+    }
+};
+
+// The range survives the trip from the plugin's embedded metadata into the
+// registry's dependency entries. Fails the moment the registry keeps names and
+// drops constraints.
+TEST_F(RealDependencyRangeTest, EmbeddedRangeReachesTheRegistry) {
+    ASSERT_EQ(discover(), kFixtureModule);
+
+    const auto entries =
+        ModuleManager::registry().moduleDependencyEntries(kFixtureModule);
+    ASSERT_EQ(entries.size(), 1u) << "fixture declares exactly one dependency";
+    EXPECT_EQ(entries[0].name, kFixtureDep);
+    EXPECT_EQ(entries[0].versionRange, kFixtureRange)
+        << "the range declared in the plugin's embedded metadata was dropped "
+        << "before it reached ModuleInfo::dependencies";
+
+    // The name-only view the graph and the modules-info wire shape are built on
+    // is unchanged by carrying the constraint.
+    EXPECT_EQ(ModuleManager::registry().moduleDependencies(kFixtureModule),
+              (std::vector<std::string>{kFixtureDep}));
+}
+
+// ...and it decides. An installed dependency outside the declared range must be
+// refused; the refusal names the range, so a gate that saw no constraint cannot
+// produce this message.
+TEST_F(RealDependencyRangeTest, EmbeddedRangeRefusesAnOutOfRangeDependency) {
+    ASSERT_EQ(discover(), kFixtureModule);
+
+    logos_core_register_module(kFixtureDep, "/path/to/range_probe_dep");
+    ModuleManager::registry().registerModuleVersion(kFixtureDep, "1.2.3");
+
+    const auto gate = ModuleManager::dependencyGateFor(kFixtureModule);
+    EXPECT_EQ(gate.decision, LogosCore::DependencyGateDecision::Refuse)
+        << "installed 1.2.3 does not satisfy " << kFixtureRange
+        << ", so the gate must refuse; decision was "
+        << static_cast<int>(gate.decision);
+    EXPECT_EQ(gate.dependency, kFixtureDep);
+    EXPECT_EQ(gate.range, kFixtureRange);
+    EXPECT_EQ(gate.installedVersion, "1.2.3");
+    EXPECT_NE(gate.reason.find(kFixtureRange), std::string::npos) << gate.reason;
+}
+
+// Positive control on the same fixture: satisfy the range and the gate reports
+// Allow, not the Unconstrained a dropped constraint would yield.
+TEST_F(RealDependencyRangeTest, EmbeddedRangeAllowsAnInRangeDependency) {
+    ASSERT_EQ(discover(), kFixtureModule);
+
+    logos_core_register_module(kFixtureDep, "/path/to/range_probe_dep");
+    ModuleManager::registry().registerModuleVersion(kFixtureDep, "9.4.1");
+
+    EXPECT_EQ(ModuleManager::dependencyGateFor(kFixtureModule).decision,
+              LogosCore::DependencyGateDecision::Allow)
+        << "a satisfied range must read as Allow; Unconstrained here means the "
+        << "gate never saw the constraint the plugin declared";
+}
+
+// =============================================================================
 // Security regression: privileged-name impersonation during discovery (F-022).
 //
 // Module identity used to be taken from the name embedded in the plugin's own

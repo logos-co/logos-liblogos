@@ -78,6 +78,20 @@ pkgs.stdenv.mkDerivation {
     cp ${common.env.LOGOS_PACKAGE_MANAGER_ROOT}/lib/libpackage_manager_lib.* $out/lib/ || true
     cp ${common.env.LOGOS_PACKAGE_MANAGER_ROOT}/lib/liblgx.* $out/lib/ || true
 
+    # The dependency-range fixture plugin, which the blanket lib/ copy above
+    # already carried in. Assert it rather than trust it: without the fixture
+    # RealDependencyRangeTest skips, and a skip renders as a pass -- the exact
+    # silent hole the fixture was added to close.
+    _fixture=""
+    for cand in $out/lib/dep_range_fixture_plugin.so $out/lib/dep_range_fixture_plugin.dylib; do
+      [ -f "$cand" ] && _fixture="$cand"
+    done
+    if [ -z "$_fixture" ]; then
+      echo "Error: dep_range_fixture_plugin missing from $out/lib" >&2
+      ls -la lib >&2 || true
+      exit 1
+    fi
+
     ${pkgs.lib.optionalString pkgs.stdenv.isDarwin ''
       # Fix RPATH to find libraries in $out/lib on macOS
       install_name_tool \

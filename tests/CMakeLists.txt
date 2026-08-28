@@ -100,4 +100,26 @@ if(DEFINED LOGOS_PROTOCOL_ROOT AND EXISTS "${LOGOS_PROTOCOL_ROOT}/include")
   )
 endif()
 
+# A real Qt plugin that exists solely to carry an object-form dependency with a
+# version range in its EMBEDDED metadata. Nothing in the fleet declares one, so
+# this is the only input that exercises the production discovery path end to
+# end; RealDependencyRangeTest consumes it via TEST_PLUGIN_DEP_RANGE.
+add_library(dep_range_fixture_plugin MODULE
+    fixtures/dep_range_fixture_plugin.cpp
+)
+set_target_properties(dep_range_fixture_plugin PROPERTIES
+    AUTOMOC ON
+    PREFIX ""
+)
+if(APPLE)
+    # CMake gives a MODULE library .so even on Darwin; match the .dylib the
+    # rest of the stack (and the check's pluginExt) names plugins by.
+    set_target_properties(dep_range_fixture_plugin PROPERTIES SUFFIX ".dylib")
+endif()
+target_link_libraries(dep_range_fixture_plugin PRIVATE Qt${QT_VERSION_MAJOR}::Core)
+
+# nix/tests.nix builds the `logos_core_tests` target only, so hanging the
+# fixture off it is what keeps the test binary and its fixture shipping together.
+add_dependencies(logos_core_tests dep_range_fixture_plugin)
+
 gtest_discover_tests(logos_core_tests DISCOVERY_MODE PRE_TEST)
