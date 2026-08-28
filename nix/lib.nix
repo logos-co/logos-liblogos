@@ -42,8 +42,14 @@ pkgs.runCommand "${common.pname}-lib-${common.version}"
       exit 1
     fi
 
-    # Bundle package_manager_lib alongside logos_core (logos_core links against it)
-    for f in ${logosPackageManagerRoot}/lib/libpackage_manager_lib*; do
+    # Bundle package_manager_lib alongside logos_core (logos_core links against
+    # it), and liblgx, which logos_core now links DIRECTLY for the dependency
+    # gate's semver. Before that, liblgx was reached only through the absolute
+    # store path baked into libpackage_manager_lib; now liblogos_core records
+    # @rpath/liblgx and its only LC_RPATH is @loader_path, so it must be here.
+    for f in ${logosPackageManagerRoot}/lib/libpackage_manager_lib* \
+             ${logosPackageManagerRoot}/lib/liblgx.so* \
+             ${logosPackageManagerRoot}/lib/liblgx.dylib; do
       if [ -f "$f" ]; then
         cp -L "$f" $out/lib/
       fi

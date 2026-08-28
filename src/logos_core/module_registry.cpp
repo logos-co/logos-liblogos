@@ -39,6 +39,38 @@ static PackageManagerLib& packageManagerInstance() {
     return instance;
 }
 
+namespace {
+
+std::vector<std::string> dependencyNames(
+    const std::vector<LogosCore::ModuleDependency>& deps) {
+    std::vector<std::string> names;
+    names.reserve(deps.size());
+    for (const auto& d : deps) names.push_back(d.name);
+    return names;
+}
+
+// ModuleLib's entry is Qt-free but reachable only through a Qt-bearing header,
+// and dependency_gate.h is deliberately std-only -- so the gate keeps its own
+// type and the two meet here, in the TU that already speaks Qt.
+std::vector<LogosCore::ModuleDependency> toGateDependencies(
+    const std::vector<ModuleLib::ModuleDependency>& entries) {
+    std::vector<LogosCore::ModuleDependency> deps;
+    deps.reserve(entries.size());
+    for (const auto& e : entries)
+        deps.push_back({e.name, e.versionRange, e.signer, e.malformedConstraint});
+    return deps;
+}
+
+std::vector<LogosCore::ModuleDependency> toDependencyEntries(
+    const std::vector<std::string>& names) {
+    std::vector<LogosCore::ModuleDependency> deps;
+    deps.reserve(names.size());
+    for (const auto& n : names) deps.push_back({n, {}, {}});
+    return deps;
+}
+
+}  // namespace
+
 void ModuleRegistry::setModulesDir(const std::string& dir) {
     std::unique_lock lock(m_mutex);
     m_modulesDirs.clear();
@@ -189,12 +221,15 @@ std::string ModuleRegistry::processModuleInternal(const std::string& modulePath,
                                                   const std::string& trustedName) {
     // The plugin's *self-asserted* identity, read verbatim from its embedded
     // metadata. This is attacker-controlled for any plugin we didn't build,
-    // so it must never be trusted as the module's identity on its own.
-    std::string embedded = ModuleLib::LogosModule::getModuleName(modulePath);
-    if (embedded.empty()) {
+    // so it must never be trusted as the module's identity on its own. One
+    // read serves identity, the cached blob and the gate's inputs alike --
+    // each per-field ModuleLib accessor would re-open the plugin.
+    auto metadata = ModuleLib::LogosModule::extractMetadata(modulePath);
+    if (!metadata || !metadata->isValid()) {
         spdlog::warn("No valid metadata for module: {}", modulePath);
         return {};
     }
+    const std::string embedded = metadata->name.toStdString();
 
     // When discovery supplies a trusted package name, the plugin's
     // embedded name MUST match it. Otherwise a package installed under an
@@ -228,11 +263,9 @@ std::string ModuleRegistry::processModuleInternal(const std::string& modulePath,
     // (and any other state that lives on ModuleInfo).
     ModuleInfo& info = m_modules[name];
     info.path = modulePath;
-    info.metadataJson = ModuleLib::LogosModule::getRawMetadataJson(modulePath);
-    info.dependencies.clear();
-    for (const auto& d : ModuleLib::LogosModule::getModuleDependencies(modulePath)) {
-        info.dependencies.push_back(d);
-    }
+    info.metadataJson = std::move(metadata->rawMetadataJson);
+    info.version = metadata->version.toStdString();
+    info.dependencies = toGateDependencies(metadata->dependencies);
 
     return name;
 }
@@ -265,7 +298,9 @@ nlohmann::json ModuleRegistry::allModulesInfo() const {
                                     ? nlohmann::json(*info.published)
                                     : nlohmann::json(nullptr);
         entry["published_at"] = info.publishedAt;
-        entry["dependencies"] = info.dependencies;
+        // Names only: the documented shape of this field (logos_core.h) and of
+        // the modules_state snapshot record built from it.
+        entry["dependencies"] = dependencyNames(info.dependencies);
         entry["dependents"]   = info.dependents;
         // Parse the cached metadata JSON back into structured form. Tolerate a
         // missing/garbled blob by reporting null rather than aborting the call.
@@ -287,6 +322,20 @@ std::vector<std::string> ModuleRegistry::moduleDependencies(const std::string& n
     return moduleDependenciesLocked(name, recursive);
 }
 
+std::vector<LogosCore::ModuleDependency>
+ModuleRegistry::moduleDependencyEntries(const std::string& name) const {
+    std::shared_lock lock(m_mutex);
+    auto it = m_modules.find(name);
+    return it != m_modules.end() ? it->second.dependencies
+                                 : std::vector<LogosCore::ModuleDependency>{};
+}
+
+std::string ModuleRegistry::moduleVersion(const std::string& name) const {
+    std::shared_lock lock(m_mutex);
+    auto it = m_modules.find(name);
+    return it != m_modules.end() ? it->second.version : std::string{};
+}
+
 std::vector<std::string> ModuleRegistry::moduleDependenciesLocked(const std::string& name,
                                                                   bool recursive) const {
     auto it = m_modules.find(name);
@@ -294,7 +343,7 @@ std::vector<std::string> ModuleRegistry::moduleDependenciesLocked(const std::str
         return {};
 
     if (!recursive)
-        return it->second.dependencies;
+        return dependencyNames(it->second.dependencies);
 
     // BFS over the forward graph. `seen` is pre-seeded with `name` so a
     // dependency cycle that leads back to the target can't append the
@@ -304,8 +353,8 @@ std::vector<std::string> ModuleRegistry::moduleDependenciesLocked(const std::str
     std::vector<std::string> out;
     std::unordered_set<std::string> seen;
     seen.insert(name);
-    std::deque<std::string> queue(it->second.dependencies.begin(),
-                                   it->second.dependencies.end());
+    std::deque<std::string> queue;
+    for (const auto& d : it->second.dependencies) queue.push_back(d.name);
     while (!queue.empty()) {
         std::string current = std::move(queue.front());
         queue.pop_front();
@@ -313,8 +362,8 @@ std::vector<std::string> ModuleRegistry::moduleDependenciesLocked(const std::str
         out.push_back(current);
         auto depIt = m_modules.find(current);
         if (depIt == m_modules.end()) continue;
-        for (const std::string& d : depIt->second.dependencies) {
-            if (seen.count(d) == 0) queue.push_back(d);
+        for (const auto& d : depIt->second.dependencies) {
+            if (seen.count(d.name) == 0) queue.push_back(d.name);
         }
     }
     return out;
@@ -369,8 +418,8 @@ void ModuleRegistry::recomputeDependentsLocked() {
     // edge against something we don't track, and logging per-edge here
     // would flood the log during every discovery pass.
     for (const auto& [depender, info] : m_modules) {
-        for (const std::string& dep : info.dependencies) {
-            auto depIt = m_modules.find(dep);
+        for (const auto& entry : info.dependencies) {
+            auto depIt = m_modules.find(entry.name);
             if (depIt == m_modules.end()) continue;
             auto& deps = depIt->second.dependents;
             if (std::find(deps.begin(), deps.end(), depender) == deps.end())
@@ -400,17 +449,31 @@ void ModuleRegistry::registerModule(const std::string& name, const std::string& 
     //      recompute skipped the unknown edge, and this is the registration
     //      that makes "a → b" visible.
     //   2. Callers need a way to clear forward edges by passing `{}`.
-    info.dependencies = dependencies;
+    info.dependencies = toDependencyEntries(dependencies);
     recomputeDependentsLocked();
 }
 
 void ModuleRegistry::registerDependencies(const std::string& name, const std::vector<std::string>& dependencies) {
     std::unique_lock lock(m_mutex);
-    m_modules[name].dependencies = dependencies;
+    m_modules[name].dependencies = toDependencyEntries(dependencies);
     // Same reasoning as registerModule: this is a direct graph mutator used
     // by tests. Keep the dependents-consistent-with-dependencies invariant
     // holding across every path that edits forward edges.
     recomputeDependentsLocked();
+}
+
+void ModuleRegistry::registerDependencies(
+    const std::string& name,
+    const std::vector<LogosCore::ModuleDependency>& dependencies) {
+    std::unique_lock lock(m_mutex);
+    m_modules[name].dependencies = dependencies;
+    recomputeDependentsLocked();
+}
+
+void ModuleRegistry::registerModuleVersion(const std::string& name,
+                                           const std::string& version) {
+    std::unique_lock lock(m_mutex);
+    m_modules[name].version = version;
 }
 
 bool ModuleRegistry::isLoaded(const std::string& name) const {

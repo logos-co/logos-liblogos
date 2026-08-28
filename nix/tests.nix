@@ -73,8 +73,26 @@ pkgs.stdenv.mkDerivation {
     # Copy the libraries so tests can run
     mkdir -p $out/lib
     cp -r lib/* $out/lib/ || true
-    # Copy package_manager_lib from its nix store path
+    # Copy package_manager_lib and liblgx (logos_core links both) from their
+    # nix store path
     cp ${common.env.LOGOS_PACKAGE_MANAGER_ROOT}/lib/libpackage_manager_lib.* $out/lib/ || true
+    cp ${common.env.LOGOS_PACKAGE_MANAGER_ROOT}/lib/liblgx.* $out/lib/ || true
+
+    # The constraint fixture plugins, which the blanket lib/ copy above already
+    # carried in. Assert them rather than trust it: without a fixture its test
+    # skips, and a skip renders as a pass -- the exact silent hole the fixtures
+    # were added to close.
+    for _name in dep_range_fixture_plugin dep_malformed_fixture_plugin; do
+      _fixture=""
+      for cand in $out/lib/$_name.so $out/lib/$_name.dylib; do
+        [ -f "$cand" ] && _fixture="$cand"
+      done
+      if [ -z "$_fixture" ]; then
+        echo "Error: $_name missing from $out/lib" >&2
+        ls -la lib >&2 || true
+        exit 1
+      fi
+    done
 
     ${pkgs.lib.optionalString pkgs.stdenv.isDarwin ''
       # Fix RPATH to find libraries in $out/lib on macOS

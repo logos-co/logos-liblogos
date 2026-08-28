@@ -19,6 +19,7 @@ add_executable(logos_core_tests
     test_module_loader_registry.cpp
     test_module_loader_abstraction.cpp
     test_protocol_gate.cpp
+    test_dependency_gate.cpp
     test_module_state_observer.cpp
 )
 
@@ -98,5 +99,29 @@ if(DEFINED LOGOS_PROTOCOL_ROOT AND EXISTS "${LOGOS_PROTOCOL_ROOT}/include")
     ${LOGOS_PROTOCOL_ROOT}/include/cpp
   )
 endif()
+
+# Real Qt plugins that exist solely to carry object-form dependencies in their
+# EMBEDDED metadata: one with a version range, one whose constraint is not a
+# string. Nothing in the fleet declares either, so these are the only inputs
+# that exercise the production discovery -> gate path end to end;
+# RealDependencyRangeTest / RealMalformedConstraintTest consume them via
+# TEST_PLUGIN_DEP_RANGE and TEST_PLUGIN_DEP_MALFORMED.
+foreach(_fixture dep_range_fixture dep_malformed_fixture)
+    add_library(${_fixture}_plugin MODULE fixtures/${_fixture}_plugin.cpp)
+    set_target_properties(${_fixture}_plugin PROPERTIES
+        AUTOMOC ON
+        PREFIX ""
+    )
+    if(APPLE)
+        # CMake gives a MODULE library .so even on Darwin; match the .dylib the
+        # rest of the stack (and the check's pluginExt) names plugins by.
+        set_target_properties(${_fixture}_plugin PROPERTIES SUFFIX ".dylib")
+    endif()
+    target_link_libraries(${_fixture}_plugin PRIVATE Qt${QT_VERSION_MAJOR}::Core)
+
+    # nix/tests.nix builds the `logos_core_tests` target only, so hanging the
+    # fixtures off it keeps the test binary and its inputs shipping together.
+    add_dependencies(logos_core_tests ${_fixture}_plugin)
+endforeach()
 
 gtest_discover_tests(logos_core_tests DISCOVERY_MODE PRE_TEST)

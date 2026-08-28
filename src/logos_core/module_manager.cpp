@@ -25,6 +25,7 @@
 #include "logos_api_client.h"
 #include "logos_module.h"
 #include "logos_protocol.h"
+#include "dependency_gate.h"
 #include "protocol_gate.h"
 #include "logos_transport_config_json.h"
 #include "token_manager.h"
@@ -569,6 +570,24 @@ namespace {
             break;
         }
 
+        // ── Dependency version-range gate ──────────────────────────────
+        // Direct edges only: every module is gated as it loads, so a chain is
+        // covered edge by edge. The signer pin each entry may also carry is
+        // NOT checked — lgpm verifies a package's signature at install time
+        // (PackageManagerLib::verifyPackageSignature) and keeps no evidence on
+        // disk afterwards, so there is nothing here to check it against.
+        const auto depGate = ModuleManager::dependencyGateFor(name);
+        if (depGate.decision == LogosCore::DependencyGateDecision::Refuse) {
+            spdlog::error("Refusing to load module {}: {}", name, depGate.reason);
+            logos::ModuleStateObserver::instance().record(
+                name, logos::module_state::kLoading, logos::module_state::kError,
+                instanceId, std::nullopt, depGate.reason);
+            return false;
+        }
+        if (depGate.decision == LogosCore::DependencyGateDecision::Allow) {
+            spdlog::debug("Module {} dependency constraints satisfied", name);
+        }
+
         auto loader = loaderRegistry().select(desc);
         if (!loader) {
             spdlog::warn("No loader available to load module: {}", name);
@@ -1050,6 +1069,12 @@ namespace ModuleManager {
 
     std::unordered_map<std::string, int64_t> getModuleProcessIds() {
         return loaderRegistry().getAllPids();
+    }
+
+    LogosCore::DependencyGateResult dependencyGateFor(const std::string& name) {
+        return LogosCore::evaluateDependencyGate(
+            registryInstance().moduleDependencyEntries(name),
+            [](const std::string& dep) { return registryInstance().moduleVersion(dep); });
     }
 
     std::vector<std::string> resolveDependencies(const std::vector<std::string>& requestedModules) {

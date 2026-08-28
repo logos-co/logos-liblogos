@@ -1,6 +1,7 @@
 #ifndef MODULE_MANAGER_H
 #define MODULE_MANAGER_H
 
+#include "dependency_gate.h"
 #include "module_loader_registry.h"
 #include <string>
 #include <vector>
@@ -80,6 +81,10 @@ namespace ModuleManager {
 
     bool isModuleLoaded(const std::string& name);
     std::unordered_map<std::string, int64_t> getModuleProcessIds();
+
+    // The dependency version-range gate exactly as loadModuleInternal applies
+    // it to `name`. A pure read of the registry — no plugin is touched.
+    LogosCore::DependencyGateResult dependencyGateFor(const std::string& name);
 
     std::vector<std::string> resolveDependencies(const std::vector<std::string>& requestedModules);
 

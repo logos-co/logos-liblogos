@@ -205,9 +205,27 @@
               export QT_PLUGIN_PATH="${pkgs.qt6.qtbase}/${pkgs.qt6.qtbase.qtPluginPrefix}"
             ''}
             export TEST_PLUGIN="${capabilityModulePkg}/lib/capability_module_plugin.${pluginExt}"
+            # The only binaries in reach whose embedded metadata declares an
+            # object-form dependency -- one carrying a version range, one whose
+            # constraint is not a string (no shipped module declares either), so
+            # they are what cover the production discovery -> gate path.
+            # Staged into the tests package itself by tests/CMakeLists.txt.
+            export TEST_PLUGIN_DEP_RANGE="${testsPkg}/lib/dep_range_fixture_plugin.${pluginExt}"
+            export TEST_PLUGIN_DEP_MALFORMED="${testsPkg}/lib/dep_malformed_fixture_plugin.${pluginExt}"
+            # Turns a missing fixture into a red run instead of a skip. A skip
+            # renders as a pass, which would hand back the coverage hole.
+            export LOGOS_REQUIRE_TEST_FIXTURES=1
+            for f in "$TEST_PLUGIN_DEP_RANGE" "$TEST_PLUGIN_DEP_MALFORMED"; do
+              if [ ! -f "$f" ]; then
+                echo "Error: constraint fixture not found at $f" >&2
+                exit 1
+              fi
+            done
             mkdir -p $out
             echo "Running logos-liblogos tests..."
             echo "TEST_PLUGIN=$TEST_PLUGIN"
+            echo "TEST_PLUGIN_DEP_RANGE=$TEST_PLUGIN_DEP_RANGE"
+            echo "TEST_PLUGIN_DEP_MALFORMED=$TEST_PLUGIN_DEP_MALFORMED"
             ${testsPkg}/bin/logos_core_tests --gtest_output=xml:$out/test-results.xml
           '';
         }

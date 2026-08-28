@@ -181,6 +181,8 @@ set(LOGOS_CORE_SOURCES
     logos_core/module_registry.h
     logos_core/dependency_resolver.cpp
     logos_core/dependency_resolver.h
+    logos_core/dependency_gate.cpp
+    logos_core/dependency_gate.h
     logos_core/access_policy.cpp
     logos_core/access_policy.h
     logos_core/module_state_observer.cpp
@@ -293,6 +295,30 @@ if(DEFINED LOGOS_PACKAGE_MANAGER_ROOT AND EXISTS "${LOGOS_PACKAGE_MANAGER_ROOT}/
       IMPORTED_IMPLIB "${LOGOS_PACKAGE_MANAGER_LIBRARY}"
     )
   endif()
+
+  # liblgx, for the semver the dependency gate evaluates ranges with. It ships
+  # in the same root (lgx.h is already on package_manager_lib's include dirs)
+  # but package_manager_lib only IMPORTS it, so it must be named here too.
+  find_library(LOGOS_LGX_LIBRARY
+    NAMES lgx
+    PATHS "${LOGOS_PACKAGE_MANAGER_ROOT}/lib"
+    NO_DEFAULT_PATH
+  )
+
+  if(NOT LOGOS_LGX_LIBRARY)
+    message(FATAL_ERROR "lgx not found in ${LOGOS_PACKAGE_MANAGER_ROOT}/lib")
+  endif()
+
+  add_library(lgx_lib SHARED IMPORTED)
+  set_target_properties(lgx_lib PROPERTIES
+    IMPORTED_LOCATION "${LOGOS_LGX_LIBRARY}"
+    INTERFACE_INCLUDE_DIRECTORIES "${LOGOS_PACKAGE_MANAGER_ROOT}/include"
+  )
+  if(WIN32)
+    set_target_properties(lgx_lib PROPERTIES
+      IMPORTED_IMPLIB "${LOGOS_LGX_LIBRARY}"
+    )
+  endif()
 else()
   message(FATAL_ERROR "LOGOS_PACKAGE_MANAGER_ROOT not set or ${LOGOS_PACKAGE_MANAGER_ROOT}/lib does not exist")
 endif()
@@ -313,6 +339,7 @@ target_link_libraries(logos_core PUBLIC
     LogosContainerImpl::impl
     LogosFormatLoaderImpl::impl
     package_manager_lib
+    lgx_lib
     nlohmann_json::nlohmann_json
     Boost::process
     spdlog::spdlog

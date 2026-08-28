@@ -1,5 +1,7 @@
 #include <gtest/gtest.h>
 #include "logos_core.h"
+#include "logos_core/dependency_gate.h"
+#include "logos_core/module_state_observer.h"
 #include "qt_test_adapter.h"
 #include <nlohmann/json.hpp>
 #include <algorithm>
@@ -651,6 +653,130 @@ TEST_F(ModuleManagerTest, RegisterDependencies_PreservesLoadedFlag) {
 }
 
 // =============================================================================
+// Dependency version-range gate
+//
+// A module declares each dependency either as a bare name or as
+// { name, version, signer }. The declared range is checked against the
+// installed dependency's version before the loader is ever consulted; an
+// unsatisfied or unevaluatable range refuses the load exactly the way the
+// protocol gate refuses an incompatible major.
+//
+// The refusal cases run through the real logos_core_load_module and are read
+// back off the lifecycle observer, which is where a refusal is reported. The
+// permissive cases are asserted on the gate itself, because a load that gets
+// PAST the gate goes on to spawn a module host — not something these tests
+// can (or should) drive with a placeholder file on disk.
+// =============================================================================
+
+class DependencyGateLoadTest : public ::testing::Test {
+protected:
+    void SetUp() override {
+        clearModuleState();
+        auto& o = logos::ModuleStateObserver::instance();
+        o.setSink({});
+        o.clearPending();
+        seen.clear();
+        o.setSink([this](const std::vector<logos::ModuleTransition>& batch) {
+            for (const auto& t : batch) seen.push_back(t);
+        });
+    }
+
+    void TearDown() override {
+        auto& o = logos::ModuleStateObserver::instance();
+        o.setSink({});
+        o.clearPending();
+        clearModuleState();
+    }
+
+    // `app` depends on `lib`, which is installed at `installedVersion`.
+    void plantGraph(const std::string& range, const std::string& installedVersion) {
+        logos_core_register_module("lib", "/path/to/lib");
+        ModuleManager::registry().registerModuleVersion("lib", installedVersion);
+        logos_core_register_module("app", (tmpDir.path / "app_plugin.so").string().c_str());
+        ModuleManager::registry().registerDependencies(
+            "app", std::vector<LogosCore::ModuleDependency>{{"lib", range, ""}});
+        std::ofstream f(tmpDir.path / "app_plugin.so");
+        f << "not a real plugin";
+    }
+
+    // The reason recorded on the loading -> error edge for `module`, or "".
+    std::string errorReason(const std::string& module) const {
+        for (const auto& t : seen) {
+            if (t.module == module && t.newState == logos::module_state::kError)
+                return t.reason.value_or(std::string{});
+        }
+        return {};
+    }
+
+    TmpDir tmpDir;
+    std::vector<logos::ModuleTransition> seen;
+};
+
+TEST_F(DependencyGateLoadTest, UnsatisfiedRange_RefusesLoad) {
+    plantGraph("^2.0.0", "1.0.0");
+
+    EXPECT_EQ(logos_core_load_module("app", /*with_dependencies=*/false), 0);
+    EXPECT_EQ(logos_core_is_module_loaded("app"), 0);
+
+    const std::string reason = errorReason("app");
+    EXPECT_NE(reason.find("lib"), std::string::npos) << reason;
+    EXPECT_NE(reason.find("^2.0.0"), std::string::npos) << reason;
+    EXPECT_NE(reason.find("1.0.0"), std::string::npos) << reason;
+}
+
+TEST_F(DependencyGateLoadTest, MalformedRange_RefusesLoad) {
+    plantGraph("^^2.0.0", "2.1.0");
+
+    EXPECT_EQ(logos_core_load_module("app", /*with_dependencies=*/false), 0);
+
+    const std::string reason = errorReason("app");
+    EXPECT_NE(reason.find("unparseable"), std::string::npos) << reason;
+}
+
+TEST_F(DependencyGateLoadTest, SatisfiedRange_GateAllows) {
+    plantGraph("^2.0.0", "2.1.0");
+
+    const auto gate = ModuleManager::dependencyGateFor("app");
+    EXPECT_EQ(gate.decision, LogosCore::DependencyGateDecision::Allow);
+    EXPECT_TRUE(gate.reason.empty());
+}
+
+// The string form of a dependency entry keeps behaving exactly as before: an
+// edge, no constraint, nothing for the gate to refuse.
+TEST_F(DependencyGateLoadTest, BareNameDependency_GateIsUnconstrained) {
+    logos_core_register_module("lib", "/path/to/lib");
+    logos_core_register_module("app", "/path/to/app");
+    const char* deps[] = {"lib"};
+    logos_core_register_module_dependencies("app", deps, 1);
+
+    const auto gate = ModuleManager::dependencyGateFor("app");
+    EXPECT_EQ(gate.decision, LogosCore::DependencyGateDecision::Unconstrained);
+    EXPECT_EQ(logos_core_get_module_dependencies_count("app"), 1);
+}
+
+// Carrying constraints must not widen the name-only shapes the graph and the
+// modules-info wire format are built on.
+TEST_F(DependencyGateLoadTest, ConstraintsDoNotChangeTheNameOnlyViews) {
+    plantGraph("^2.0.0", "2.1.0");
+
+    EXPECT_EQ(ModuleManager::registry().moduleDependencies("app"),
+              (std::vector<std::string>{"lib"}));
+    EXPECT_EQ(ModuleManager::registry().moduleDependents("lib"),
+              (std::vector<std::string>{"app"}));
+
+    char* json = logos_core_get_modules_info();
+    ASSERT_NE(json, nullptr);
+    nlohmann::json info = nlohmann::json::parse(json, nullptr, /*allow_exceptions=*/false);
+    free(json);
+    ASSERT_TRUE(info.is_array());
+    for (const auto& entry : info) {
+        if (entry.value("name", std::string{}) != "app") continue;
+        ASSERT_TRUE(entry["dependencies"].is_array());
+        EXPECT_EQ(entry["dependencies"], nlohmann::json::array({"lib"}));
+    }
+}
+
+// =============================================================================
 // End-to-end regression tests using a real Qt module.
 // =============================================================================
 
@@ -711,6 +837,250 @@ TEST_F(RealModuleRegistryTest, GetModulesInfo_PopulatesEmbeddedMetadata) {
     EXPECT_EQ(entry["metadata"].value("name", std::string{}), moduleName);
     EXPECT_FALSE(entry["metadata"].value("version", std::string{}).empty())
         << "built test modules declare a version in metadata.json";
+}
+
+// The version a dependent's range is evaluated against is the dependency's own
+// embedded stamp, cached at discovery without loading the plugin. Closes the
+// loop from a real binary's metadata to a gate decision.
+TEST_F(RealModuleRegistryTest, EmbeddedVersionFeedsTheDependencyGate) {
+    char* name = logos_core_process_module(modulePath.c_str());
+    ASSERT_NE(name, nullptr) << "process_module failed for " << modulePath;
+    const std::string dep(name);
+    delete[] name;
+
+    const std::string version = ModuleManager::registry().moduleVersion(dep);
+    ASSERT_FALSE(version.empty()) << "built test modules declare a version";
+
+    logos_core_register_module("dependent", "/path/to/dependent");
+    ModuleManager::registry().registerDependencies(
+        "dependent", std::vector<LogosCore::ModuleDependency>{{dep, "=" + version, ""}});
+    EXPECT_EQ(ModuleManager::dependencyGateFor("dependent").decision,
+              LogosCore::DependencyGateDecision::Allow);
+
+    ModuleManager::registry().registerDependencies(
+        "dependent", std::vector<LogosCore::ModuleDependency>{{dep, "=" + version + "-nope.1", ""}});
+    EXPECT_EQ(ModuleManager::dependencyGateFor("dependent").decision,
+              LogosCore::DependencyGateDecision::Refuse);
+}
+
+// =============================================================================
+// The production dependency-range path, end to end from a real binary.
+//
+// This is the ONLY coverage of it. Every other constraint test injects entries
+// through the constraint-carrying registerDependencies overload, which has no
+// production caller. The real path is
+//     processModuleInternal -> ModuleLib::extractMetadata
+//                           -> toGateDependencies -> ModuleInfo::dependencies
+//                           -> dependencyGateFor
+// and it was measurably untested: dropping the constraints where the registry
+// assigns them (keeping only the names) left all 218 tests green, i.e. it
+// silently reinstated the bug the gate exists to fix.
+//
+// It stayed uncovered because no metadata.json in the fleet uses the object
+// form, so no shipped module declares a range. tests/fixtures supplies the
+// missing input: a real Qt plugin whose embedded blob declares
+//     "dependencies": [ { "name": "range_probe_dep", "version": "^9.0.0" } ]
+// =============================================================================
+
+namespace {
+// Mirrors tests/fixtures/dep_range_fixture.json. A drift here shows up as an
+// assertion, not as a test that quietly stops covering anything.
+constexpr const char* kFixtureModule = "dep_range_fixture";
+constexpr const char* kFixtureDep    = "range_probe_dep";
+constexpr const char* kFixtureRange  = "^9.0.0";
+}  // namespace
+
+class RealDependencyRangeTest : public ::testing::Test {
+protected:
+    std::string fixturePath;
+
+    void SetUp() override {
+        clearModuleState();
+
+        const char* env = std::getenv("TEST_PLUGIN_DEP_RANGE");
+        if (env && std::strlen(env) > 0 && fs::exists(env)) {
+            fixturePath = env;
+            return;
+        }
+
+        // A skipped test renders as a pass, and a pass here would mean the
+        // production path is unguarded again. CI sets LOGOS_REQUIRE_TEST_FIXTURES
+        // so an absent fixture is a red run; a local dev without one still skips.
+        const char* strict = std::getenv("LOGOS_REQUIRE_TEST_FIXTURES");
+        if (strict && std::strcmp(strict, "0") != 0) {
+            FAIL() << "TEST_PLUGIN_DEP_RANGE is unset or missing (got '"
+                   << (env ? env : "") << "') while LOGOS_REQUIRE_TEST_FIXTURES is "
+                   << "set: the dependency-range fixture must be supplied, not skipped.";
+        }
+
+        GTEST_SKIP() << "No dependency-range fixture available. Set "
+                     << "TEST_PLUGIN_DEP_RANGE to tests/fixtures' built plugin.";
+    }
+
+    void TearDown() override {
+        clearModuleState();
+    }
+
+    // Discovers the fixture through the real registry entry point and returns
+    // the name it registered under.
+    std::string discover() {
+        char* name = logos_core_process_module(fixturePath.c_str());
+        EXPECT_NE(name, nullptr) << "process_module failed for " << fixturePath;
+        if (!name) return {};
+        std::string registered(name);
+        delete[] name;
+        return registered;
+    }
+};
+
+// The range survives the trip from the plugin's embedded metadata into the
+// registry's dependency entries. Fails the moment the registry keeps names and
+// drops constraints.
+TEST_F(RealDependencyRangeTest, EmbeddedRangeReachesTheRegistry) {
+    ASSERT_EQ(discover(), kFixtureModule);
+
+    const auto entries =
+        ModuleManager::registry().moduleDependencyEntries(kFixtureModule);
+    ASSERT_EQ(entries.size(), 1u) << "fixture declares exactly one dependency";
+    EXPECT_EQ(entries[0].name, kFixtureDep);
+    EXPECT_EQ(entries[0].versionRange, kFixtureRange)
+        << "the range declared in the plugin's embedded metadata was dropped "
+        << "before it reached ModuleInfo::dependencies";
+
+    // The name-only view the graph and the modules-info wire shape are built on
+    // is unchanged by carrying the constraint.
+    EXPECT_EQ(ModuleManager::registry().moduleDependencies(kFixtureModule),
+              (std::vector<std::string>{kFixtureDep}));
+}
+
+// ...and it decides. An installed dependency outside the declared range must be
+// refused; the refusal names the range, so a gate that saw no constraint cannot
+// produce this message.
+TEST_F(RealDependencyRangeTest, EmbeddedRangeRefusesAnOutOfRangeDependency) {
+    ASSERT_EQ(discover(), kFixtureModule);
+
+    logos_core_register_module(kFixtureDep, "/path/to/range_probe_dep");
+    ModuleManager::registry().registerModuleVersion(kFixtureDep, "1.2.3");
+
+    const auto gate = ModuleManager::dependencyGateFor(kFixtureModule);
+    EXPECT_EQ(gate.decision, LogosCore::DependencyGateDecision::Refuse)
+        << "installed 1.2.3 does not satisfy " << kFixtureRange
+        << ", so the gate must refuse; decision was "
+        << static_cast<int>(gate.decision);
+    EXPECT_EQ(gate.dependency, kFixtureDep);
+    EXPECT_EQ(gate.range, kFixtureRange);
+    EXPECT_EQ(gate.installedVersion, "1.2.3");
+    EXPECT_NE(gate.reason.find(kFixtureRange), std::string::npos) << gate.reason;
+}
+
+// Positive control on the same fixture: satisfy the range and the gate reports
+// Allow, not the Unconstrained a dropped constraint would yield.
+TEST_F(RealDependencyRangeTest, EmbeddedRangeAllowsAnInRangeDependency) {
+    ASSERT_EQ(discover(), kFixtureModule);
+
+    logos_core_register_module(kFixtureDep, "/path/to/range_probe_dep");
+    ModuleManager::registry().registerModuleVersion(kFixtureDep, "9.4.1");
+
+    EXPECT_EQ(ModuleManager::dependencyGateFor(kFixtureModule).decision,
+              LogosCore::DependencyGateDecision::Allow)
+        << "a satisfied range must read as Allow; Unconstrained here means the "
+        << "gate never saw the constraint the plugin declared";
+}
+
+// =============================================================================
+// The same production path, for a constraint that cannot be READ.
+//
+// `"version": 2` comes back empty from any string accessor, so a decoder that
+// only asks for the string unconstrains the edge and the gate waves it through
+// — the precise fail-open ModuleDependency::malformedConstraint exists to
+// refuse. The decode itself now lives in logos-module, so this fixture is what
+// proves the flag still survives the mapping at liblogos' boundary; break
+// toGateDependencies and EmbeddedMalformedConstraintRefuses goes red.
+//
+// The fixture also carries a bare-name entry alongside the malformed one, so
+// the mixed-form array is covered here rather than in a decode unit test.
+// =============================================================================
+
+namespace {
+// Mirrors tests/fixtures/dep_malformed_fixture.json.
+constexpr const char* kMalformedModule  = "dep_malformed_fixture";
+constexpr const char* kMalformedPlainDep = "plain_probe_dep";
+constexpr const char* kMalformedBadDep   = "malformed_probe_dep";
+}  // namespace
+
+class RealMalformedConstraintTest : public ::testing::Test {
+protected:
+    std::string fixturePath;
+
+    void SetUp() override {
+        clearModuleState();
+
+        const char* env = std::getenv("TEST_PLUGIN_DEP_MALFORMED");
+        if (env && std::strlen(env) > 0 && fs::exists(env)) {
+            fixturePath = env;
+            return;
+        }
+
+        // A skip renders as a pass, and a pass here would mean the fail-open is
+        // unguarded again. See RealDependencyRangeTest for the same contract.
+        const char* strict = std::getenv("LOGOS_REQUIRE_TEST_FIXTURES");
+        if (strict && std::strcmp(strict, "0") != 0) {
+            FAIL() << "TEST_PLUGIN_DEP_MALFORMED is unset or missing (got '"
+                   << (env ? env : "") << "') while LOGOS_REQUIRE_TEST_FIXTURES is "
+                   << "set: the malformed-constraint fixture must be supplied, "
+                   << "not skipped.";
+        }
+
+        GTEST_SKIP() << "No malformed-constraint fixture available. Set "
+                     << "TEST_PLUGIN_DEP_MALFORMED to tests/fixtures' built plugin.";
+    }
+
+    void TearDown() override { clearModuleState(); }
+
+    std::string discover() {
+        char* name = logos_core_process_module(fixturePath.c_str());
+        EXPECT_NE(name, nullptr) << "process_module failed for " << fixturePath;
+        if (!name) return {};
+        std::string registered(name);
+        delete[] name;
+        return registered;
+    }
+};
+
+// The flag survives the trip from the plugin's embedded metadata into the
+// registry's entries, and the bare-name sibling is left unconstrained.
+TEST_F(RealMalformedConstraintTest, EmbeddedMalformedConstraintReachesTheRegistry) {
+    ASSERT_EQ(discover(), kMalformedModule);
+
+    const auto entries =
+        ModuleManager::registry().moduleDependencyEntries(kMalformedModule);
+    ASSERT_EQ(entries.size(), 2u) << "fixture declares a bare and an object entry";
+    EXPECT_EQ(entries[0].name, kMalformedPlainDep);
+    EXPECT_FALSE(entries[0].malformedConstraint);
+    EXPECT_TRUE(entries[0].versionRange.empty());
+    EXPECT_EQ(entries[1].name, kMalformedBadDep);
+    EXPECT_TRUE(entries[1].malformedConstraint)
+        << "a non-string `version` reached the registry as an UNCONSTRAINED "
+        << "edge — the fail-open this flag exists to refuse";
+    EXPECT_TRUE(entries[1].versionRange.empty());
+}
+
+// ...and it refuses. Both dependencies are installed and readable, so nothing
+// but the unreadable constraint can produce this decision.
+TEST_F(RealMalformedConstraintTest, EmbeddedMalformedConstraintRefuses) {
+    ASSERT_EQ(discover(), kMalformedModule);
+
+    logos_core_register_module(kMalformedPlainDep, "/path/to/plain_probe_dep");
+    ModuleManager::registry().registerModuleVersion(kMalformedPlainDep, "1.0.0");
+    logos_core_register_module(kMalformedBadDep, "/path/to/malformed_probe_dep");
+    ModuleManager::registry().registerModuleVersion(kMalformedBadDep, "1.0.0");
+
+    const auto gate = ModuleManager::dependencyGateFor(kMalformedModule);
+    EXPECT_EQ(gate.decision, LogosCore::DependencyGateDecision::Refuse)
+        << "an unreadable constraint must refuse, not unconstrain the edge; "
+        << "decision was " << static_cast<int>(gate.decision);
+    EXPECT_EQ(gate.dependency, kMalformedBadDep);
+    EXPECT_NE(gate.reason.find("not a string"), std::string::npos) << gate.reason;
 }
 
 // =============================================================================
