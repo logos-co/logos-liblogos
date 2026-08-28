@@ -164,6 +164,34 @@ TEST(EmbeddedDeclaration, ObjectFormKeepsRangeAndSigner)
 
 // The form every module in the fleet uses today: an edge that constrains
 // nothing, so the gate stays out of the way.
+TEST(EmbeddedDeclaration, UnquotedVersionIsMalformedNotAbsent)
+{
+    // `"version": 2` reads as absent through a string accessor, which would
+    // unconstrain the edge — the fail-open this gate exists to remove.
+    const auto d = parseEmbeddedDeclaration(R"({
+        "version": "1.0.0",
+        "dependencies": [ {"name": "lib", "version": 2} ]
+    })");
+    ASSERT_EQ(d.dependencies.size(), 1u);
+    EXPECT_TRUE(d.dependencies[0].malformedConstraint);
+
+    const auto r = evaluateDependencyGate(d.dependencies,
+                                          [](const std::string&) { return "1.0.0"; });
+    EXPECT_EQ(r.decision, DependencyGateDecision::Refuse);
+    EXPECT_EQ(r.dependency, "lib");
+}
+
+TEST(EmbeddedDeclaration, NonStringSignerAlsoRefuses)
+{
+    const auto d = parseEmbeddedDeclaration(R"({
+        "dependencies": [ {"name": "lib", "signer": {"did": "x"}} ]
+    })");
+    ASSERT_EQ(d.dependencies.size(), 1u);
+    EXPECT_EQ(evaluateDependencyGate(d.dependencies,
+                                     [](const std::string&) { return "1.0.0"; }).decision,
+              DependencyGateDecision::Refuse);
+}
+
 TEST(EmbeddedDeclaration, BareNameFormConstrainsNothing)
 {
     const auto d = parseEmbeddedDeclaration(

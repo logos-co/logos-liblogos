@@ -12,6 +12,13 @@ std::string jsonString(const nlohmann::json& obj, const char* key) {
                                                 : std::string{};
 }
 
+// Present but not a string: `"version": 2` reads as absent through toString()
+// and would silently unconstrain the edge.
+bool presentButNotString(const nlohmann::json& obj, const char* key) {
+    auto it = obj.find(key);
+    return it != obj.end() && !it->is_string();
+}
+
 }  // namespace
 
 DependencyGateResult evaluateDependencyGate(
@@ -21,6 +28,13 @@ DependencyGateResult evaluateDependencyGate(
     DependencyGateResult out;
 
     for (const ModuleDependency& dep : dependencies) {
+        if (dep.malformedConstraint) {
+            out.decision = DependencyGateDecision::Refuse;
+            out.dependency = dep.name;
+            out.reason = "dependency " + dep.name +
+                         " declares a constraint that is not a string";
+            return out;
+        }
         if (dep.versionRange.empty())
             continue;
 
@@ -69,6 +83,8 @@ EmbeddedDeclaration parseEmbeddedDeclaration(const std::string& metadataJson)
             entry.name         = jsonString(dep, "name");
             entry.versionRange = jsonString(dep, "version");
             entry.signer       = jsonString(dep, "signer");
+            entry.malformedConstraint = presentButNotString(dep, "version") ||
+                                        presentButNotString(dep, "signer");
         } else if (dep.is_string()) {
             entry.name = dep.get<std::string>();
         }

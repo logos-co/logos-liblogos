@@ -26,6 +26,10 @@ struct ModuleDependency {
     std::string name;
     std::string versionRange;  // empty when the entry declares no range
     std::string signer;        // empty when the entry pins no signer
+    // A `version`/`signer` that is present but not a string. Declaring a
+    // constraint we cannot read is not the same as declaring none, so it
+    // refuses rather than falling through to the unconstrained arm.
+    bool malformedConstraint = false;
 };
 
 enum class DependencyGateDecision {
@@ -61,7 +65,8 @@ struct EmbeddedDeclaration {
 // at discovery. A dependency entry is either a bare name or
 // { name, version, signer }; both declare the same edge, the bare form simply
 // constrains nothing. A missing or garbled blob yields empty values — the gate
-// treats an unreadable version as unevaluatable, not as a pass.
+// treats an unreadable version as unevaluatable, not as a pass, and a
+// non-string `version` as malformed rather than absent.
 EmbeddedDeclaration parseEmbeddedDeclaration(const std::string& metadataJson);
 
 } // namespace LogosCore
