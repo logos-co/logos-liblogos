@@ -1,25 +1,8 @@
 #include "dependency_gate.h"
 
 #include <lgx.h>
-#include <nlohmann/json.hpp>
 
 namespace LogosCore {
-namespace {
-
-std::string jsonString(const nlohmann::json& obj, const char* key) {
-    auto it = obj.find(key);
-    return (it != obj.end() && it->is_string()) ? it->get<std::string>()
-                                                : std::string{};
-}
-
-// Present but not a string: `"version": 2` reads as absent through toString()
-// and would silently unconstrain the edge.
-bool presentButNotString(const nlohmann::json& obj, const char* key) {
-    auto it = obj.find(key);
-    return it != obj.end() && !it->is_string();
-}
-
-}  // namespace
 
 DependencyGateResult evaluateDependencyGate(
     const std::vector<ModuleDependency>& dependencies,
@@ -62,34 +45,6 @@ DependencyGateResult evaluateDependencyGate(
         out.decision = DependencyGateDecision::Allow;
     }
 
-    return out;
-}
-
-EmbeddedDeclaration parseEmbeddedDeclaration(const std::string& metadataJson)
-{
-    EmbeddedDeclaration out;
-    if (metadataJson.empty()) return out;
-    nlohmann::json meta = nlohmann::json::parse(metadataJson, nullptr,
-                                                /*allow_exceptions=*/false);
-    if (!meta.is_object()) return out;
-
-    out.version = jsonString(meta, "version");
-
-    auto deps = meta.find("dependencies");
-    if (deps == meta.end() || !deps->is_array()) return out;
-    for (const nlohmann::json& dep : *deps) {
-        ModuleDependency entry;
-        if (dep.is_object()) {
-            entry.name         = jsonString(dep, "name");
-            entry.versionRange = jsonString(dep, "version");
-            entry.signer       = jsonString(dep, "signer");
-            entry.malformedConstraint = presentButNotString(dep, "version") ||
-                                        presentButNotString(dep, "signer");
-        } else if (dep.is_string()) {
-            entry.name = dep.get<std::string>();
-        }
-        if (!entry.name.empty()) out.dependencies.push_back(std::move(entry));
-    }
     return out;
 }
 

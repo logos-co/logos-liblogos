@@ -866,12 +866,12 @@ TEST_F(RealModuleRegistryTest, EmbeddedVersionFeedsTheDependencyGate) {
 // =============================================================================
 // The production dependency-range path, end to end from a real binary.
 //
-// This is the ONLY coverage of it. Every other constraint test either injects
-// entries through the constraint-carrying registerDependencies overload (which
-// has no production caller) or exercises parseEmbeddedDeclaration in isolation.
-// The real path is
-//     processModuleInternal -> getRawMetadataJson -> parseEmbeddedDeclaration
-//                           -> ModuleInfo::dependencies -> dependencyGateFor
+// This is the ONLY coverage of it. Every other constraint test injects entries
+// through the constraint-carrying registerDependencies overload, which has no
+// production caller. The real path is
+//     processModuleInternal -> ModuleLib::extractMetadata
+//                           -> toGateDependencies -> ModuleInfo::dependencies
+//                           -> dependencyGateFor
 // and it was measurably untested: dropping the constraints where the registry
 // assigns them (keeping only the names) left all 218 tests green, i.e. it
 // silently reinstated the bug the gate exists to fix.
@@ -985,6 +985,102 @@ TEST_F(RealDependencyRangeTest, EmbeddedRangeAllowsAnInRangeDependency) {
               LogosCore::DependencyGateDecision::Allow)
         << "a satisfied range must read as Allow; Unconstrained here means the "
         << "gate never saw the constraint the plugin declared";
+}
+
+// =============================================================================
+// The same production path, for a constraint that cannot be READ.
+//
+// `"version": 2` comes back empty from any string accessor, so a decoder that
+// only asks for the string unconstrains the edge and the gate waves it through
+// — the precise fail-open ModuleDependency::malformedConstraint exists to
+// refuse. The decode itself now lives in logos-module, so this fixture is what
+// proves the flag still survives the mapping at liblogos' boundary; break
+// toGateDependencies and EmbeddedMalformedConstraintRefuses goes red.
+//
+// The fixture also carries a bare-name entry alongside the malformed one, so
+// the mixed-form array is covered here rather than in a decode unit test.
+// =============================================================================
+
+namespace {
+// Mirrors tests/fixtures/dep_malformed_fixture.json.
+constexpr const char* kMalformedModule  = "dep_malformed_fixture";
+constexpr const char* kMalformedPlainDep = "plain_probe_dep";
+constexpr const char* kMalformedBadDep   = "malformed_probe_dep";
+}  // namespace
+
+class RealMalformedConstraintTest : public ::testing::Test {
+protected:
+    std::string fixturePath;
+
+    void SetUp() override {
+        clearModuleState();
+
+        const char* env = std::getenv("TEST_PLUGIN_DEP_MALFORMED");
+        if (env && std::strlen(env) > 0 && fs::exists(env)) {
+            fixturePath = env;
+            return;
+        }
+
+        // A skip renders as a pass, and a pass here would mean the fail-open is
+        // unguarded again. See RealDependencyRangeTest for the same contract.
+        const char* strict = std::getenv("LOGOS_REQUIRE_TEST_FIXTURES");
+        if (strict && std::strcmp(strict, "0") != 0) {
+            FAIL() << "TEST_PLUGIN_DEP_MALFORMED is unset or missing (got '"
+                   << (env ? env : "") << "') while LOGOS_REQUIRE_TEST_FIXTURES is "
+                   << "set: the malformed-constraint fixture must be supplied, "
+                   << "not skipped.";
+        }
+
+        GTEST_SKIP() << "No malformed-constraint fixture available. Set "
+                     << "TEST_PLUGIN_DEP_MALFORMED to tests/fixtures' built plugin.";
+    }
+
+    void TearDown() override { clearModuleState(); }
+
+    std::string discover() {
+        char* name = logos_core_process_module(fixturePath.c_str());
+        EXPECT_NE(name, nullptr) << "process_module failed for " << fixturePath;
+        if (!name) return {};
+        std::string registered(name);
+        delete[] name;
+        return registered;
+    }
+};
+
+// The flag survives the trip from the plugin's embedded metadata into the
+// registry's entries, and the bare-name sibling is left unconstrained.
+TEST_F(RealMalformedConstraintTest, EmbeddedMalformedConstraintReachesTheRegistry) {
+    ASSERT_EQ(discover(), kMalformedModule);
+
+    const auto entries =
+        ModuleManager::registry().moduleDependencyEntries(kMalformedModule);
+    ASSERT_EQ(entries.size(), 2u) << "fixture declares a bare and an object entry";
+    EXPECT_EQ(entries[0].name, kMalformedPlainDep);
+    EXPECT_FALSE(entries[0].malformedConstraint);
+    EXPECT_TRUE(entries[0].versionRange.empty());
+    EXPECT_EQ(entries[1].name, kMalformedBadDep);
+    EXPECT_TRUE(entries[1].malformedConstraint)
+        << "a non-string `version` reached the registry as an UNCONSTRAINED "
+        << "edge — the fail-open this flag exists to refuse";
+    EXPECT_TRUE(entries[1].versionRange.empty());
+}
+
+// ...and it refuses. Both dependencies are installed and readable, so nothing
+// but the unreadable constraint can produce this decision.
+TEST_F(RealMalformedConstraintTest, EmbeddedMalformedConstraintRefuses) {
+    ASSERT_EQ(discover(), kMalformedModule);
+
+    logos_core_register_module(kMalformedPlainDep, "/path/to/plain_probe_dep");
+    ModuleManager::registry().registerModuleVersion(kMalformedPlainDep, "1.0.0");
+    logos_core_register_module(kMalformedBadDep, "/path/to/malformed_probe_dep");
+    ModuleManager::registry().registerModuleVersion(kMalformedBadDep, "1.0.0");
+
+    const auto gate = ModuleManager::dependencyGateFor(kMalformedModule);
+    EXPECT_EQ(gate.decision, LogosCore::DependencyGateDecision::Refuse)
+        << "an unreadable constraint must refuse, not unconstrain the edge; "
+        << "decision was " << static_cast<int>(gate.decision);
+    EXPECT_EQ(gate.dependency, kMalformedBadDep);
+    EXPECT_NE(gate.reason.find("not a string"), std::string::npos) << gate.reason;
 }
 
 // =============================================================================

@@ -49,6 +49,18 @@ std::vector<std::string> dependencyNames(
     return names;
 }
 
+// ModuleLib's entry is Qt-free but reachable only through a Qt-bearing header,
+// and dependency_gate.h is deliberately std-only -- so the gate keeps its own
+// type and the two meet here, in the TU that already speaks Qt.
+std::vector<LogosCore::ModuleDependency> toGateDependencies(
+    const std::vector<ModuleLib::ModuleDependency>& entries) {
+    std::vector<LogosCore::ModuleDependency> deps;
+    deps.reserve(entries.size());
+    for (const auto& e : entries)
+        deps.push_back({e.name, e.versionRange, e.signer, e.malformedConstraint});
+    return deps;
+}
+
 std::vector<LogosCore::ModuleDependency> toDependencyEntries(
     const std::vector<std::string>& names) {
     std::vector<LogosCore::ModuleDependency> deps;
@@ -209,12 +221,15 @@ std::string ModuleRegistry::processModuleInternal(const std::string& modulePath,
                                                   const std::string& trustedName) {
     // The plugin's *self-asserted* identity, read verbatim from its embedded
     // metadata. This is attacker-controlled for any plugin we didn't build,
-    // so it must never be trusted as the module's identity on its own.
-    std::string embedded = ModuleLib::LogosModule::getModuleName(modulePath);
-    if (embedded.empty()) {
+    // so it must never be trusted as the module's identity on its own. One
+    // read serves identity, the cached blob and the gate's inputs alike --
+    // each per-field ModuleLib accessor would re-open the plugin.
+    auto metadata = ModuleLib::LogosModule::extractMetadata(modulePath);
+    if (!metadata || !metadata->isValid()) {
         spdlog::warn("No valid metadata for module: {}", modulePath);
         return {};
     }
+    const std::string embedded = metadata->name.toStdString();
 
     // When discovery supplies a trusted package name, the plugin's
     // embedded name MUST match it. Otherwise a package installed under an
@@ -248,12 +263,9 @@ std::string ModuleRegistry::processModuleInternal(const std::string& modulePath,
     // (and any other state that lives on ModuleInfo).
     ModuleInfo& info = m_modules[name];
     info.path = modulePath;
-    // Decoded from the blob just cached rather than by re-opening the plugin,
-    // which also keeps the gate's input independent of the logos-module pin.
-    info.metadataJson = ModuleLib::LogosModule::getRawMetadataJson(modulePath);
-    auto declared = LogosCore::parseEmbeddedDeclaration(info.metadataJson);
-    info.version = std::move(declared.version);
-    info.dependencies = std::move(declared.dependencies);
+    info.metadataJson = std::move(metadata->rawMetadataJson);
+    info.version = metadata->version.toStdString();
+    info.dependencies = toGateDependencies(metadata->dependencies);
 
     return name;
 }

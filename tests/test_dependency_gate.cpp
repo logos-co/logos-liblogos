@@ -133,121 +133,25 @@ TEST(DependencyGate, SignerPinAloneIsNotEnforced)
               DependencyGateDecision::Unconstrained);
 }
 
+// A constraint we cannot read is not a constraint we can ignore: the flag
+// alone refuses, before any range is even looked at.
+TEST(DependencyGate, MalformedConstraintRefuses)
+{
+    const std::vector<ModuleDependency> deps = {{"chat_module", "", "", true}};
+    const auto r = evaluateDependencyGate(deps, installed({{"chat_module", "1.0.0"}}));
+    EXPECT_EQ(r.decision, DependencyGateDecision::Refuse);
+    EXPECT_EQ(r.dependency, "chat_module");
+    EXPECT_NE(r.reason.find("not a string"), std::string::npos) << r.reason;
+}
+
 TEST(DependencyGate, NoDependenciesIsUnconstrained)
 {
     EXPECT_EQ(evaluateDependencyGate({}, installed({})).decision,
               DependencyGateDecision::Unconstrained);
 }
 
-// =============================================================================
-// Decoding the gate's inputs from a module's embedded metadata blob. This is
-// where the constraint used to be discarded, so the object form is the case
-// that matters.
-// =============================================================================
-
-using LogosCore::parseEmbeddedDeclaration;
-
-TEST(EmbeddedDeclaration, ObjectFormKeepsRangeAndSigner)
-{
-    const auto d = parseEmbeddedDeclaration(R"({
-        "version": "2.3.4",
-        "dependencies": [
-            {"name": "chat_module", "version": "^2.0.0", "signer": "did:jwk:whoever"}
-        ]
-    })");
-    EXPECT_EQ(d.version, "2.3.4");
-    ASSERT_EQ(d.dependencies.size(), 1u);
-    EXPECT_EQ(d.dependencies[0].name, "chat_module");
-    EXPECT_EQ(d.dependencies[0].versionRange, "^2.0.0");
-    EXPECT_EQ(d.dependencies[0].signer, "did:jwk:whoever");
-}
-
-// The form every module in the fleet uses today: an edge that constrains
-// nothing, so the gate stays out of the way.
-TEST(EmbeddedDeclaration, UnquotedVersionIsMalformedNotAbsent)
-{
-    // `"version": 2` reads as absent through a string accessor, which would
-    // unconstrain the edge — the fail-open this gate exists to remove.
-    const auto d = parseEmbeddedDeclaration(R"({
-        "version": "1.0.0",
-        "dependencies": [ {"name": "lib", "version": 2} ]
-    })");
-    ASSERT_EQ(d.dependencies.size(), 1u);
-    EXPECT_TRUE(d.dependencies[0].malformedConstraint);
-
-    const auto r = evaluateDependencyGate(d.dependencies,
-                                          [](const std::string&) { return "1.0.0"; });
-    EXPECT_EQ(r.decision, DependencyGateDecision::Refuse);
-    EXPECT_EQ(r.dependency, "lib");
-}
-
-TEST(EmbeddedDeclaration, NonStringSignerAlsoRefuses)
-{
-    const auto d = parseEmbeddedDeclaration(R"({
-        "dependencies": [ {"name": "lib", "signer": {"did": "x"}} ]
-    })");
-    ASSERT_EQ(d.dependencies.size(), 1u);
-    EXPECT_EQ(evaluateDependencyGate(d.dependencies,
-                                     [](const std::string&) { return "1.0.0"; }).decision,
-              DependencyGateDecision::Refuse);
-}
-
-TEST(EmbeddedDeclaration, BareNameFormConstrainsNothing)
-{
-    const auto d = parseEmbeddedDeclaration(
-        R"({"version":"1.0.0","dependencies":["chat_module","storage_module"]})");
-    ASSERT_EQ(d.dependencies.size(), 2u);
-    EXPECT_EQ(d.dependencies[0].name, "chat_module");
-    EXPECT_TRUE(d.dependencies[0].versionRange.empty());
-    EXPECT_TRUE(d.dependencies[1].signer.empty());
-    EXPECT_EQ(evaluateDependencyGate(d.dependencies,
-                                     installed({{"chat_module", "1.0.0"},
-                                                {"storage_module", "1.0.0"}}))
-                  .decision,
-              DependencyGateDecision::Unconstrained);
-}
-
-TEST(EmbeddedDeclaration, MixedFormsInOneArray)
-{
-    const auto d = parseEmbeddedDeclaration(
-        R"({"dependencies":["a",{"name":"b","version":"~1.2.0"}]})");
-    ASSERT_EQ(d.dependencies.size(), 2u);
-    EXPECT_TRUE(d.dependencies[0].versionRange.empty());
-    EXPECT_EQ(d.dependencies[1].versionRange, "~1.2.0");
-    EXPECT_TRUE(d.version.empty());
-}
-
-// A blob that is absent, unparseable, or wrongly typed must decode to nothing
-// rather than throwing or inventing an edge.
-TEST(EmbeddedDeclaration, UnreadableBlobsDecodeToNothing)
-{
-    for (const std::string& blob : {std::string(""), std::string("{not json"),
-                                    std::string("[]"), std::string("null"),
-                                    std::string(R"({"dependencies":"chat_module"})"),
-                                    std::string(R"({"version":7})")}) {
-        const auto d = parseEmbeddedDeclaration(blob);
-        EXPECT_TRUE(d.version.empty()) << blob;
-        EXPECT_TRUE(d.dependencies.empty()) << blob;
-    }
-}
-
-// A nameless entry is not an edge; keeping it would key the graph on "".
-TEST(EmbeddedDeclaration, NamelessEntriesAreDropped)
-{
-    const auto d = parseEmbeddedDeclaration(
-        R"({"dependencies":[{"version":"^1.0.0"},"",{"name":"b"}]})");
-    ASSERT_EQ(d.dependencies.size(), 1u);
-    EXPECT_EQ(d.dependencies[0].name, "b");
-}
-
-// The end-to-end shape the gate exists for: a declared "^2.0.0" decoded off the
-// blob refuses against an installed 1.0.0 and allows against 2.1.0.
-TEST(EmbeddedDeclaration, DecodedRangeDrivesTheGate)
-{
-    const auto d = parseEmbeddedDeclaration(
-        R"({"dependencies":[{"name":"chat_module","version":"^2.0.0"}]})");
-    EXPECT_EQ(evaluateDependencyGate(d.dependencies, installed({{"chat_module", "1.0.0"}})).decision,
-              DependencyGateDecision::Refuse);
-    EXPECT_EQ(evaluateDependencyGate(d.dependencies, installed({{"chat_module", "2.1.0"}})).decision,
-              DependencyGateDecision::Allow);
-}
+// The decode that turns a plugin's embedded metadata into these entries is
+// logos-module's (ModuleLib::ModuleMetadata) and is unit-tested there. What
+// liblogos must keep proving is that a constraint declared in a REAL plugin
+// survives the mapping into the gate -- see RealDependencyRangeTest and
+// RealMalformedConstraintTest in test_module_manager.cpp.

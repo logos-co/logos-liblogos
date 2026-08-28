@@ -100,26 +100,28 @@ if(DEFINED LOGOS_PROTOCOL_ROOT AND EXISTS "${LOGOS_PROTOCOL_ROOT}/include")
   )
 endif()
 
-# A real Qt plugin that exists solely to carry an object-form dependency with a
-# version range in its EMBEDDED metadata. Nothing in the fleet declares one, so
-# this is the only input that exercises the production discovery path end to
-# end; RealDependencyRangeTest consumes it via TEST_PLUGIN_DEP_RANGE.
-add_library(dep_range_fixture_plugin MODULE
-    fixtures/dep_range_fixture_plugin.cpp
-)
-set_target_properties(dep_range_fixture_plugin PROPERTIES
-    AUTOMOC ON
-    PREFIX ""
-)
-if(APPLE)
-    # CMake gives a MODULE library .so even on Darwin; match the .dylib the
-    # rest of the stack (and the check's pluginExt) names plugins by.
-    set_target_properties(dep_range_fixture_plugin PROPERTIES SUFFIX ".dylib")
-endif()
-target_link_libraries(dep_range_fixture_plugin PRIVATE Qt${QT_VERSION_MAJOR}::Core)
+# Real Qt plugins that exist solely to carry object-form dependencies in their
+# EMBEDDED metadata: one with a version range, one whose constraint is not a
+# string. Nothing in the fleet declares either, so these are the only inputs
+# that exercise the production discovery -> gate path end to end;
+# RealDependencyRangeTest / RealMalformedConstraintTest consume them via
+# TEST_PLUGIN_DEP_RANGE and TEST_PLUGIN_DEP_MALFORMED.
+foreach(_fixture dep_range_fixture dep_malformed_fixture)
+    add_library(${_fixture}_plugin MODULE fixtures/${_fixture}_plugin.cpp)
+    set_target_properties(${_fixture}_plugin PROPERTIES
+        AUTOMOC ON
+        PREFIX ""
+    )
+    if(APPLE)
+        # CMake gives a MODULE library .so even on Darwin; match the .dylib the
+        # rest of the stack (and the check's pluginExt) names plugins by.
+        set_target_properties(${_fixture}_plugin PROPERTIES SUFFIX ".dylib")
+    endif()
+    target_link_libraries(${_fixture}_plugin PRIVATE Qt${QT_VERSION_MAJOR}::Core)
 
-# nix/tests.nix builds the `logos_core_tests` target only, so hanging the
-# fixture off it is what keeps the test binary and its fixture shipping together.
-add_dependencies(logos_core_tests dep_range_fixture_plugin)
+    # nix/tests.nix builds the `logos_core_tests` target only, so hanging the
+    # fixtures off it keeps the test binary and its inputs shipping together.
+    add_dependencies(logos_core_tests ${_fixture}_plugin)
+endforeach()
 
 gtest_discover_tests(logos_core_tests DISCOVERY_MODE PRE_TEST)

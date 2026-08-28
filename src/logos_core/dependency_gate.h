@@ -5,7 +5,10 @@
 #include <string>
 #include <vector>
 
-// Dependency version-range load gate: decoding its inputs, and the decision.
+// Dependency version-range load gate: the decision only. Its inputs are
+// decoded by logos-module (ModuleLib::ModuleMetadata) and mapped onto the
+// types below in module_registry.cpp, the Qt-aware TU -- this header stays
+// std-only.
 //
 // Like the protocol gate this is a COMPATIBILITY control, not a security one:
 // range and installed version are both self-asserted plugin metadata. The
@@ -53,21 +56,6 @@ struct DependencyGateResult {
 DependencyGateResult evaluateDependencyGate(
     const std::vector<ModuleDependency>& dependencies,
     const std::function<std::string(const std::string&)>& installedVersionOf);
-
-// What a module's embedded metadata.json declares about itself, as far as the
-// gate is concerned.
-struct EmbeddedDeclaration {
-    std::string version;
-    std::vector<ModuleDependency> dependencies;
-};
-
-// Decodes the gate's inputs from the compact metadata blob the registry caches
-// at discovery. A dependency entry is either a bare name or
-// { name, version, signer }; both declare the same edge, the bare form simply
-// constrains nothing. A missing or garbled blob yields empty values — the gate
-// treats an unreadable version as unevaluatable, not as a pass, and a
-// non-string `version` as malformed rather than absent.
-EmbeddedDeclaration parseEmbeddedDeclaration(const std::string& metadataJson);
 
 } // namespace LogosCore
 
