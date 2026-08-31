@@ -1084,6 +1084,79 @@ TEST_F(RealMalformedConstraintTest, EmbeddedMalformedConstraintRefuses) {
 }
 
 // =============================================================================
+// Snapshot listing — the record modules_state receives
+// =============================================================================
+//
+// `type` and `version` shipped hardcoded empty on this wire. They are the
+// module's own claims, and the only place they exist is the metadata.json
+// embedded in its plugin — which allModulesInfo already parses and hands to the
+// snapshot builder. These two tests pin both halves: the real value when the
+// blob is there, and "" (present, not omitted) when it is not.
+
+// The record for `module` in a snapshot listing, or a null json when absent.
+static nlohmann::json snapshotRecord(const nlohmann::json& listing,
+                                     const std::string& module) {
+    auto mods = listing.is_object() ? listing.find("modules") : listing.end();
+    if (mods == listing.end() || !mods->is_array())
+        return nlohmann::json();
+    for (const auto& r : *mods)
+        if (r.value("module", std::string{}) == module)
+            return r;
+    return nlohmann::json();
+}
+
+TEST_F(ModuleManagerTest, SnapshotListing_EmptyTypeAndVersionWithoutMetadata) {
+    // Registered but never processed: no plugin was read, so the registry holds
+    // no metadata blob and allModulesInfo reports `metadata` as null.
+    logos_core_register_module("module_a", "/path/to/module_a.dylib");
+
+    nlohmann::json listing = nlohmann::json::parse(
+        ModuleManager::buildSnapshotListingJson(), nullptr, /*allow_exceptions=*/false);
+    nlohmann::json rec = snapshotRecord(listing, "module_a");
+    ASSERT_TRUE(rec.is_object()) << "registered module absent from the snapshot";
+
+    // PRESENT AND EMPTY, not omitted: the wire type declares both as `tstr`,
+    // and the sentinel default here would survive a missing key.
+    EXPECT_EQ(rec.value("type", std::string{"<absent>"}), "");
+    EXPECT_EQ(rec.value("version", std::string{"<absent>"}), "");
+}
+
+TEST_F(RealModuleRegistryTest, SnapshotListing_CarriesEmbeddedTypeAndVersion) {
+    char* name = logos_core_process_module(modulePath.c_str());
+    ASSERT_NE(name, nullptr) << "process_module failed for " << modulePath;
+    std::string moduleName(name);
+    delete[] name;
+
+    // Read what the plugin declares back through the same registry JSON the
+    // snapshot is built from, rather than hardcoding the values of whichever
+    // module TEST_PLUGIN happens to point at.
+    char* json = logos_core_get_modules_info();
+    ASSERT_NE(json, nullptr);
+    nlohmann::json info = nlohmann::json::parse(json, nullptr, /*allow_exceptions=*/false);
+    free(json);
+    ASSERT_TRUE(info.is_array());
+    nlohmann::json entry;
+    for (const auto& e : info)
+        if (e.value("name", std::string{}) == moduleName) { entry = e; break; }
+    ASSERT_TRUE(entry.is_object()) << "processed module absent from modules-info";
+    ASSERT_TRUE(entry["metadata"].is_object())
+        << "real plugin must yield a non-null metadata object";
+    const std::string declaredType = entry["metadata"].value("type", std::string{});
+    const std::string declaredVersion = entry["metadata"].value("version", std::string{});
+    ASSERT_FALSE(declaredVersion.empty())
+        << "built test modules declare a version in metadata.json";
+
+    nlohmann::json listing = nlohmann::json::parse(
+        ModuleManager::buildSnapshotListingJson(), nullptr, /*allow_exceptions=*/false);
+    nlohmann::json rec = snapshotRecord(listing, moduleName);
+    ASSERT_TRUE(rec.is_object()) << "processed module absent from the snapshot";
+
+    EXPECT_EQ(rec.value("version", std::string{}), declaredVersion)
+        << "the snapshot must carry the module's real version, not \"\"";
+    EXPECT_EQ(rec.value("type", std::string{}), declaredType);
+}
+
+// =============================================================================
 // Security regression: privileged-name impersonation during discovery (F-022).
 //
 // Module identity used to be taken from the name embedded in the plugin's own

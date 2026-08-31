@@ -113,6 +113,14 @@ namespace ModuleManager {
     std::string getModulesInfoJson();
     // char* variant. Caller owns the returned string. Never null.
     char* getModulesInfoCStr();
+
+    // The startup snapshot exactly as it goes over the wire to modules_state
+    // (a ModuleListing: {modules, partial, seq}), serialized. No RPC — exposed
+    // so tests can observe the record derivation without a live modules_state.
+    // NOT free of side effects: every record and the listing draw seqs from the
+    // observer's single counter, same as the real push (see the seq rule in
+    // module_manager.cpp), so calling it advances that counter.
+    std::string buildSnapshotListingJson();
 }
 
 #endif // MODULE_MANAGER_H
