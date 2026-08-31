@@ -368,14 +368,29 @@ namespace {
                 p != info.end() && p->is_boolean())
                 published = p->get<bool>();
 
+            // type/version are the module's OWN claims, read off the
+            // metadata.json embedded in its plugin. Every step degrades to ""
+            // rather than throwing: allModulesInfo reports a missing or
+            // unparseable blob as null, and even a well-formed object
+            // guarantees nothing about these two keys' types -- a snapshot
+            // must not fail to build over a module that mis-declares itself.
+            std::string type;
+            std::string version;
+            if (auto m = info.find("metadata"); m != info.end() && m->is_object()) {
+                if (auto t = m->find("type"); t != m->end() && t->is_string())
+                    type = t->get<std::string>();
+                if (auto v = m->find("version"); v != m->end() && v->is_string())
+                    version = v->get<std::string>();
+            }
+
             nlohmann::json rec = nlohmann::json::object();
             rec["module"]       = name;
             rec["state"]        = !loaded ? logos::module_state::kUnloaded
                                 : published ? logos::module_state::kReady
                                             : logos::module_state::kLoaded;
             rec["path"]         = info.value("path", std::string());
-            rec["type"]         = std::string();
-            rec["version"]      = std::string();
+            rec["type"]         = std::move(type);
+            rec["version"]      = std::move(version);
             rec["dependencies"] = info.value("dependencies", nlohmann::json::array());
             rec["dependents"]   = info.value("dependents", nlohmann::json::array());
             rec["loadedAt"]     = info.value("loaded_at", static_cast<int64_t>(0));
@@ -1124,5 +1139,11 @@ namespace ModuleManager {
     std::vector<std::string> computeDerivedAllowedCallers(const std::string& target) {
         std::lock_guard lock(loadMutex());
         return computeDerivedAllowedCallersLocked(target);
+    }
+
+    // No loadMutex(): the real caller (pushSnapshot, from whenObjectAvailable)
+    // holds no lock either, and allModulesInfo takes the registry's own.
+    std::string buildSnapshotListingJson() {
+        return buildSnapshotListing().dump();
     }
 }
