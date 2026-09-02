@@ -67,6 +67,14 @@ LOGOS_CORE_EXPORT char** logos_core_get_known_modules();
 // Returns 0 only when the module is unknown, dependency resolution
 // fails, or an actual load step (not an already-loaded no-op) fails.
 // Aborts the process if `module_name` is NULL.
+//
+// "Loaded" here means the module's plugin loaded in its host process, not
+// merely that the host was spawned and not yet that the module is
+// reachable — the call waits for the host to report which. It therefore
+// BLOCKS for as long as bringing the module up takes, and a module whose
+// plugin fails to load answers 0 with the reason in the log and on the
+// modules_state feed. A host too old to report anything is not treated as
+// a failure: the call falls back to what it always did and warns.
 LOGOS_CORE_EXPORT int logos_core_load_module(const char* module_name, bool with_dependencies);
 
 // Unload a specific module by name.
