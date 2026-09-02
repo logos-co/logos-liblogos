@@ -101,6 +101,17 @@ namespace {
             markExitExpected(n);
     }
 
+    // The counterpart, and it is not optional. A container drops the callback
+    // for a teardown it performed itself, so nothing consumes the marks above:
+    // each one survives to describe that module's NEXT death as an orderly
+    // exit, turning a real crash into `stopping -> unloaded` on the feed. Called
+    // once the teardown is done, when by construction no announced teardown is
+    // still outstanding.
+    void clearExpectedExits() {
+        std::lock_guard<std::mutex> g(expectedExitMutex());
+        expectedExits().clear();
+    }
+
     // Both guarded by loadMutex(). parsedEnforcePolicy is set only in enforce mode.
     std::string& accessPolicyJson() {
         static std::string s;
@@ -656,6 +667,10 @@ namespace {
             // already be running on the asio thread, reports this as a crash.
             markExitExpected(name);
             loader->terminate(name);
+            // Same reason unloadModuleInternalLocked() consumes below: the
+            // container drops the callback for a teardown it performed, so this
+            // mark has nothing left to consume it.
+            consumeExpectedExit(name);
             logos::ModuleStateObserver::instance().record(
                 name, logos::module_state::kLoading, logos::module_state::kError,
                 instanceId, pid, "failed to deliver the module's auth token");
@@ -1045,6 +1060,7 @@ namespace ModuleManager {
         // Announce before tearing down, or every module reports as a crash.
         markAllLoadedExitsExpected();
         loaderRegistry().terminateAll();
+        clearExpectedExits();
         registryInstance().clearLoaded();
     }
 
@@ -1055,6 +1071,7 @@ namespace ModuleManager {
         // Announce before tearing down, or every module reports as a crash.
         markAllLoadedExitsExpected();
         loaderRegistry().terminateAll();
+        clearExpectedExits();
         registryInstance().clear();
         // Per-module transport overrides are part of the manager's
         // mutable state — without clearing them here, a daemon
