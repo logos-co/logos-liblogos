@@ -189,7 +189,7 @@
         }
       );
 
-      checks = forAllSystems ({ pkgs, system, ... }:
+      checks = forAllSystems ({ pkgs, system, defaultModuleLoader, ... }:
         let
           testsPkg = self.packages.${system}.logos-liblogos-tests;
           # Real Qt plugin used by RealPluginRegistryTest (TEST_PLUGIN env var).
@@ -214,8 +214,12 @@
             export TEST_PLUGIN_DEP_MALFORMED="${testsPkg}/lib/dep_malformed_fixture_plugin.${pluginExt}"
             # Turns a missing fixture into a red run instead of a skip. A skip
             # renders as a pass, which would hand back the coverage hole.
+            # The real module host, for RealHostLoadVerdictTest: the load-verdict
+            # tests otherwise only prove the stand-in host is handled, and the
+            # defect they cover is about what the REAL child does.
+            export TEST_REAL_HOST="${defaultModuleLoader}/bin/logos_host_qt"
             export LOGOS_REQUIRE_TEST_FIXTURES=1
-            for f in "$TEST_PLUGIN_DEP_RANGE" "$TEST_PLUGIN_DEP_MALFORMED"; do
+            for f in "$TEST_PLUGIN_DEP_RANGE" "$TEST_PLUGIN_DEP_MALFORMED" "$TEST_REAL_HOST"; do
               if [ ! -f "$f" ]; then
                 echo "Error: constraint fixture not found at $f" >&2
                 exit 1
