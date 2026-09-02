@@ -50,10 +50,14 @@ struct TmpDir {
     }
 };
 
-// Stand-in for logos_host_qt: records its pid where the test can find it, then
-// stays up until something kills it. `exec` keeps the pid it just wrote — the
-// shell becomes the sleep — which is what makes the recorded pid the one the
-// container is supervising.
+// Stand-in for logos_host_qt: reports that it loaded, records its pid where the
+// test can find it, then stays up until something kills it. `exec` keeps the pid
+// it just wrote — the shell becomes the sleep — which is what makes the recorded
+// pid the one the container is supervising.
+//
+// The status line is what keeps these tests quick: without it the load path has
+// no verdict to act on and waits out its compatibility deadline on every load,
+// which is ~11 s per test here and nothing to do with what they cover.
 constexpr const char* kFakeHostScript = R"sh(#!/bin/sh
 name=""
 while [ $# -gt 0 ]; do
@@ -63,6 +67,7 @@ while [ $# -gt 0 ]; do
   esac
 done
 echo $$ > "$LOGOS_TEST_PID_DIR/$name.pid"
+printf '%s\n' "@logos-load-status ok"
 exec sleep 300
 )sh";
 

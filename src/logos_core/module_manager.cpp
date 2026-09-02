@@ -13,10 +13,13 @@
 #include <QVariant>
 #include <QVariantList>
 #include <algorithm>
+#include <atomic>
+#include <chrono>
 #include <mutex>
 #include <cassert>
 #include <cstring>
 #include <optional>
+#include <unordered_map>
 #include <unordered_set>
 #include <boost/uuid/uuid.hpp>
 #include <boost/uuid/uuid_generators.hpp>
@@ -87,6 +90,78 @@ namespace {
     bool consumeExpectedExit(const std::string& name) {
         std::lock_guard<std::mutex> g(expectedExitMutex());
         return expectedExits().erase(name) > 0;
+    }
+
+    // ── A load attempt, and a death that lands inside one ────────────────────
+    //
+    // A child that dies mid-load is reported by the load path, which has the
+    // child's reason, instead of by onTerminated from another thread. And
+    // because markUnloaded() does nothing to a module not yet marked loaded,
+    // such a death used to be erased by the markLoaded behind it — leaving a
+    // module that is not there marked loaded for good. commitLoad() settles
+    // both under one lock.
+    std::mutex& inFlightMutex() {
+        static std::mutex m;
+        return m;
+    }
+
+    // name -> "a termination arrived during this attempt".
+    std::unordered_map<std::string, bool>& inFlightLoads() {
+        static std::unordered_map<std::string, bool> m;
+        return m;
+    }
+
+    void beginLoadAttempt(const std::string& name) {
+        std::lock_guard<std::mutex> g(inFlightMutex());
+        inFlightLoads()[name] = false;
+    }
+
+    void abandonLoadAttempt(const std::string& name) {
+        std::lock_guard<std::mutex> g(inFlightMutex());
+        inFlightLoads().erase(name);
+    }
+
+    // Called from the container's asio thread. Returns true when the load path
+    // owns this termination and onTerminated should stay quiet about it.
+    bool recordTerminationDuringLoad(const std::string& name) {
+        std::lock_guard<std::mutex> g(inFlightMutex());
+        registryInstance().markUnloaded(name);
+        auto it = inFlightLoads().find(name);
+        if (it == inFlightLoads().end()) return false;
+        it->second = true;
+        return true;
+    }
+
+    // Close the attempt and mark the module loaded as one step, so a
+    // termination is either counted by the attempt or lands after the registry
+    // says loaded — never in the gap between, where it would be lost.
+    // Returns false when the module died before this could commit.
+    bool commitLoad(const std::string& name,
+                    std::shared_ptr<LogosCore::ModuleLoader> loader,
+                    LogosCore::LoadedModuleHandle handle) {
+        std::lock_guard<std::mutex> g(inFlightMutex());
+        auto it = inFlightLoads().find(name);
+        const bool died = it != inFlightLoads().end() && it->second;
+        if (it != inFlightLoads().end()) inFlightLoads().erase(it);
+        if (died) return false;
+        registryInstance().markLoaded(name, std::move(loader), std::move(handle));
+        return true;
+    }
+
+    // How long a load waits for the child's own verdict. A host that reports its
+    // status answers in the time it takes to start, so only one that never
+    // reports reaches this.
+    constexpr std::chrono::milliseconds kLoadVerdictTimeout{10000};
+
+    // What it shrinks to once a host has been seen to stay silent through a
+    // whole load. The same host binary loads every module here, so one that
+    // predates the status line costs the deadline once, not once per module —
+    // and this still catches a child that dies starting up (tens of ms).
+    constexpr std::chrono::milliseconds kSilentHostGrace{1000};
+
+    std::atomic<bool>& hostStaysSilent() {
+        static std::atomic<bool> silent{false};
+        return silent;
     }
 
     // Host shutdown tears down EVERY loaded module at once, and each one
@@ -631,7 +706,11 @@ namespace {
         // loadMutex(), so there is no lock to get out from under, and a crash
         // is the transition a consumer most needs promptly.
         auto onTerminated = [](const std::string& n) {
-            registryInstance().markUnloaded(n);
+            // Marks the module unloaded and, if a load is in flight, hands the
+            // termination to it: that load reports the failure, with the child's
+            // own reason, and its markLoaded is called off.
+            if (recordTerminationDuringLoad(n))
+                return;
 
             auto& observer = logos::ModuleStateObserver::instance();
             if (consumeExpectedExit(n)) {
@@ -645,8 +724,13 @@ namespace {
             observer.flush();
         };
 
+        // Past here a child process may exist, so a termination belongs to this
+        // attempt rather than to whatever the module was doing before.
+        beginLoadAttempt(name);
+
         LogosCore::LoadedModuleHandle handle;
         if (!loader->load(desc, onTerminated, handle)) {
+            abandonLoadAttempt(name);
             logos::ModuleStateObserver::instance().record(
                 name, logos::module_state::kLoading, logos::module_state::kError,
                 instanceId, std::nullopt, "loader failed to start the module");
@@ -669,15 +753,52 @@ namespace {
             loader->terminate(name);
             // Same reason unloadModuleInternalLocked() consumes below: the
             // container drops the callback for a teardown it performed, so this
-            // mark has nothing left to consume it.
+            // mark has nothing left to consume it. Before the attempt is
+            // abandoned, so a termination racing us is still swallowed by it and
+            // this load stays the only thing that reports.
             consumeExpectedExit(name);
+            abandonLoadAttempt(name);
             logos::ModuleStateObserver::instance().record(
                 name, logos::module_state::kLoading, logos::module_state::kError,
                 instanceId, pid, "failed to deliver the module's auth token");
             return false;
         }
 
-        registryInstance().markLoaded(name, loader, std::move(handle));
+        // SPAWNED IS NOT LOADED. load() proved only that the OS made a
+        // process; whether the plugin behind it loaded is a fact only the child
+        // has. Claiming it here without asking is what reported a module whose
+        // plugin never loaded as loaded, with the failure surfacing hops away.
+        const LogosCore::LoadOutcome outcome = loader->awaitLoad(
+            name, hostStaysSilent().load() ? kSilentHostGrace : kLoadVerdictTimeout);
+
+        if (outcome.verdict == LogosCore::LoadVerdict::Failed) {
+            spdlog::error("Failed to load module {}: {}", name, outcome.reason);
+            loader->terminate(name);   // no-op when the child is already gone
+            abandonLoadAttempt(name);
+            logos::ModuleStateObserver::instance().record(
+                name, logos::module_state::kLoading, logos::module_state::kError,
+                instanceId, pid, outcome.reason);
+            return false;
+        }
+
+        if (outcome.verdict == LogosCore::LoadVerdict::Unknown) {
+            hostStaysSilent().store(true);
+            spdlog::warn("Module {} never reported whether its plugin loaded; "
+                         "treating it as loaded. Its module host predates the "
+                         "load-status line, so a failed load here is only "
+                         "detectable if the process dies.", name);
+        }
+
+        // Settles a death that arrived while we waited together with the
+        // registry write — see commitLoad.
+        if (!commitLoad(name, loader, std::move(handle))) {
+            const char* reason = "the module process exited while it was loading";
+            spdlog::error("Failed to load module {}: {}", name, reason);
+            logos::ModuleStateObserver::instance().record(
+                name, logos::module_state::kLoading, logos::module_state::kError,
+                instanceId, pid, reason);
+            return false;
+        }
 
         TokenManager::instance().saveToken(name, authToken);
 
@@ -1081,6 +1202,8 @@ namespace ModuleManager {
         moduleTransportsMap().clear();
         accessPolicyJson().clear();  // same rationale — don't leak across restarts
         parsedEnforcePolicy().reset();
+        // Same rationale again: the next run may have a host that does report.
+        hostStaysSilent().store(false);
     }
 
     char** getLoadedModulesCStr() {

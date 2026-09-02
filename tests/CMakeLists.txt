@@ -22,6 +22,7 @@ add_executable(logos_core_tests
     test_dependency_gate.cpp
     test_module_state_observer.cpp
     test_expected_exit_marks.cpp
+    test_load_verdict.cpp
 )
 
 # Imported container/loader targets the tests drive via SubprocessManager /
