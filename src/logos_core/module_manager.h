@@ -21,6 +21,11 @@ namespace ModuleManager {
     // (see module_manager.cpp). Also used by tests to install a FakeModuleLoader.
     LogosCore::ModuleLoaderRegistry& loaders();
 
+    // Build core's LogosAPI on THIS thread, fixing the owner every client it
+    // hands out marshals to. Called from logos_core_start() so the owner is the
+    // host's main thread rather than whichever thread dialled first.
+    void anchorCoreApi();
+
     void setModulesDir(const char* modules_dir);
     void addModulesDir(const char* modules_dir);
     void setPersistenceBasePath(const char* path);

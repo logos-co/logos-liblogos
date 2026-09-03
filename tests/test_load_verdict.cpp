@@ -13,18 +13,9 @@
 // report). RealHostLoadVerdictTest repeats the first case against the actual
 // logos_host_qt, so nothing here rests on the stand-in being faithful.
 
-#include <gtest/gtest.h>
-
-#include "logos_core.h"
-#include "module_state_observer.h"
-#include "qt_test_adapter.h"
+#include "fake_module_host.h"
 
 #include <chrono>
-#include <cstdlib>
-#include <filesystem>
-#include <fstream>
-#include <set>
-#include <stdexcept>
 #include <string>
 #include <thread>
 #include <vector>
@@ -33,125 +24,13 @@
 #include <sys/wait.h>
 #include <unistd.h>
 
-namespace fs = std::filesystem;
-
 namespace {
 
-struct TmpDir {
-    fs::path path;
-
-    TmpDir() {
-        std::string tmpl = (fs::temp_directory_path() / "logos_verdict_XXXXXX").string();
-        std::vector<char> buf(tmpl.begin(), tmpl.end());
-        buf.push_back('\0');
-        if (!mkdtemp(buf.data())) throw std::runtime_error("mkdtemp failed");
-        path = buf.data();
-    }
-
-    ~TmpDir() {
-        std::error_code ec;
-        fs::remove_all(path, ec);
-    }
-};
-
-// Stand-in for logos_host_qt. Its behaviour is the first line of the file the
-// daemon names with --path, so one script covers every case and each module
-// carries its own. `exec sleep` matters: a plain `sleep` would leave the shell
-// as the process the container signals and the sleep behind it orphaned.
-constexpr const char* kFakeHostScript = R"sh(#!/bin/sh
-path=""
-while [ $# -gt 0 ]; do
-  case "$1" in
-    -p|--path) path="$2"; shift 2 ;;
-    *) shift ;;
-  esac
-done
-case "$(head -n 1 "$path" 2>/dev/null)" in
-  die)         exit 3 ;;
-  report-fail) printf '%s\n' "@logos-load-status failed undefined symbol: logos_module_install" ; exit 1 ;;
-  report-ok)   printf '%s\n' "@logos-load-status ok" ; exec sleep 300 ;;
-  report-ok-then-die) printf '%s\n' "@logos-load-status ok" ; exit 0 ;;
-  *)           exec sleep 300 ;;
-esac
-)sh";
-
-std::set<std::string> loadedModuleNames() {
-    std::set<std::string> names;
-    char** arr = logos_core_get_loaded_modules();
-    if (!arr) return names;
-    for (int i = 0; arr[i]; ++i) {
-        names.insert(arr[i]);
-        delete[] arr[i];
-    }
-    delete[] arr;
-    return names;
-}
-
-// Shared by both fixtures: a module is registered as known with a placeholder
-// binary, the load runs for real, and the lifecycle feed is captured.
-class LoadVerdictFixture : public ::testing::Test {
+class LoadVerdictTest : public FakeHostFixture {
 protected:
     void SetUp() override {
-        logos_core_terminate_all();
-        logos_core_clear();
-
-        auto& o = logos::ModuleStateObserver::instance();
-        o.setSink({});
-        o.clearPending();
-        seen.clear();
-        o.setSink([this](const std::vector<logos::ModuleTransition>& batch) {
-            for (const auto& t : batch) seen.push_back(t);
-        });
-    }
-
-    void TearDown() override {
-        auto& o = logos::ModuleStateObserver::instance();
-        o.setSink({});
-        o.clearPending();
-        unsetenv("LOGOS_HOST_PATH");
-        logos_core_terminate_all();
-        logos_core_clear();
-    }
-
-    void plantModule(const std::string& name, const std::string& contents) {
-        fs::path binary = tmp.path / (name + "_plugin.so");
-        std::ofstream f(binary);
-        f << contents << "\n";
-        f.close();
-        logos_core_register_module(name.c_str(), binary.string().c_str());
-        ASSERT_TRUE(logos_core_is_module_known(name.c_str()));
-    }
-
-    bool sawTransitionTo(const std::string& name, const std::string& state) const {
-        for (const auto& t : seen)
-            if (t.module == name && t.newState == state) return true;
-        return false;
-    }
-
-    std::string reasonFor(const std::string& name, const std::string& state) const {
-        for (const auto& t : seen)
-            if (t.module == name && t.newState == state && t.reason.has_value())
-                return *t.reason;
-        return {};
-    }
-
-    TmpDir tmp;
-    std::vector<logos::ModuleTransition> seen;
-};
-
-class LoadVerdictTest : public LoadVerdictFixture {
-protected:
-    void SetUp() override {
-        LoadVerdictFixture::SetUp();
-
-        fs::path fakeHost = tmp.path / "fake_logos_host";
-        std::ofstream f(fakeHost);
-        f << kFakeHostScript;
-        f.close();
-        fs::permissions(fakeHost, fs::perms::owner_all | fs::perms::group_exec |
-                                      fs::perms::others_exec);
-        ASSERT_TRUE(fs::exists(fakeHost));
-        setenv("LOGOS_HOST_PATH", fakeHost.c_str(), 1);
+        FakeHostFixture::SetUp();
+        useFakeHost();
     }
 };
 
@@ -231,10 +110,10 @@ TEST_F(LoadVerdictTest, HostThatLoadsThenDies_IsNotLeftMarkedLoaded) {
 // The same defect against the real logos_host_qt, asked to load a file that is
 // not a plugin at all. Nothing here depends on the stand-in above behaving like
 // the host; the only stand-in is the module.
-class RealHostLoadVerdictTest : public LoadVerdictFixture {
+class RealHostLoadVerdictTest : public FakeHostFixture {
 protected:
     void SetUp() override {
-        LoadVerdictFixture::SetUp();
+        FakeHostFixture::SetUp();
 
         const char* host = std::getenv("TEST_REAL_HOST");
         // A skip renders as a pass, so the check sets LOGOS_REQUIRE_TEST_FIXTURES
