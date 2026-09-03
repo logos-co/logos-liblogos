@@ -53,7 +53,8 @@ namespace {
     //   fleet          shared per-module; exclusive for whatever moves the
     //                  whole loaded set (clear, terminateAll, unload cascade)
     //   module         one per name, held for that module's whole load/unload
-    //   spawn          the fork itself, which is not safe concurrently
+    //   spawn          process creation, bounded rather than made safe -- see
+    //                  spawnMutex
     //   config         the transport map and access policy a load reads
     //
     // Not here: ModuleRegistry has its own; inFlight/expectedExit are taken on
@@ -100,15 +101,21 @@ namespace {
         return false;
     }
 
-    // SPAWNING is serialized even though loads are not, and this is not
-    // belt-and-braces. The container spawns through Boost.Process v2, whose
-    // POSIX launcher fork()s and then has the PARENT block on an exec-status
-    // pipe with no timeout. fork() clones only the calling thread, so a child
-    // that inherits a lock another thread was holding — the malloc arena is the
-    // classic one — deadlocks before execve, and the parent waits on that pipe
-    // forever. Measured, not theorised: two concurrent loads hung Linux CI for
-    // the full 6 h job timeout, leaving a single-threaded, never-exec'd fork of
-    // the test binary beside a zombie sibling.
+    // SPAWNING is serialized even though loads are not. What this DOES buy is
+    // an upper bound on concurrent process creation from this path; what it
+    // does NOT buy is fork safety, and the earlier version of this comment
+    // claimed otherwise. ModuleContainer does not promise a container spawns
+    // without forking, and a fork here is unsafe because this process is
+    // multithreaded: the container's own io thread is a second thread and can
+    // hold an asio-internal lock at fork time. One spawner is enough to
+    // deadlock — reproduced 3/3 with spawning fully serialized.
+    //
+    // The real fix belongs to the container and landed there
+    // (logos-container-subprocess#7, posix_spawn). This stays because liblogos
+    // cannot verify it: the launcher is a choice made by a dependency of a
+    // dependency that liblogos neither pins nor can see, and the failure mode
+    // is a multi-hour hang rather than a red test. Removing it wants a test
+    // HERE that would catch a forking loader first.
     //
     // It costs almost nothing. Spawning is ~2 ms; the wait for the child's
     // verdict is ~34 ms warm and hundreds cold, and THAT is what this change
