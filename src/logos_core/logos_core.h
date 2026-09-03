@@ -90,14 +90,15 @@ LOGOS_CORE_EXPORT char** logos_core_get_known_modules();
 // already running. Proceeding would take the fleet lock recursively, which is
 // undefined behaviour; the single lock this replaced deadlocked outright.
 //
-// This is not yet a licence to load from any thread. Two post-load steps are
-// Qt-affine: the readiness watch builds objects owned by the CALLING thread
-// (a short-lived worker per load strands them on a dead thread and wedges
-// teardown), and the token handoff drives a QtRO replica through
-// informModuleToken, which — unlike invokeRemoteMethod — does not marshal to
-// its owner thread. So today concurrency is available to a caller driving
-// loads from the one thread that owns core's LogosAPI, and widening it needs
-// that marshalling fixed in logos-protocol first.
+// Which thread. Core's outbound calls all run on the thread that called
+// logos_core_start() — inline when you are that thread, posted to it when you
+// are not — so a load off it neither strands Qt objects on a dying worker nor
+// deadlocks against the owner. Two consequences for an off-thread caller:
+// the capability-module registration and the readiness watch complete
+// ASYNCHRONOUSLY after the call returns, and they need the owner thread to be
+// running its event loop. A caller that needs the registration to have
+// happened before it proceeds should load from the owner thread, where it
+// still runs inline and in order.
 LOGOS_CORE_EXPORT int logos_core_load_module(const char* module_name, bool with_dependencies);
 
 // Unload a specific module by name.

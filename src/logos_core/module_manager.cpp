@@ -9,7 +9,10 @@
 #include <logos_module_loader/format_loader_factory.h>
 #include <spdlog/spdlog.h>
 #include <nlohmann/json.hpp>
+#include <QCoreApplication>
+#include <QMetaObject>
 #include <QString>
+#include <QThread>
 #include <QVariant>
 #include <QVariantList>
 #include <algorithm>
@@ -44,13 +47,12 @@ namespace {
     }
 
     // Load locks, in the order they must be taken: fleet -> module ->
-    // capabilityRpc -> config. One lock over the whole path made every load
+    // config. One lock over the whole path made every load
     // queue behind every other one whatever module it named.
     //
     //   fleet          shared per-module; exclusive for whatever moves the
     //                  whole loaded set (clear, terminateAll, unload cascade)
     //   module         one per name, held for that module's whole load/unload
-    //   capabilityRpc  core's calls to capability_module, one at a time
     //   config         the transport map and access policy a load reads
     //
     // Not here: ModuleRegistry has its own; inFlight/expectedExit are taken on
@@ -66,19 +68,12 @@ namespace {
         return m;
     }
 
-    // Not recursive: nothing that holds it may call something that takes it.
-    std::mutex& capabilityRpcMutex() {
-        static std::mutex m;
-        return m;
-    }
-
     // RE-ENTRANCY, on one thread, and it is not hypothetical: requestObject and
     // informModuleToken spin nested Qt event loops, so a load a frontend posted
     // with a queued connection can be delivered INSIDE one already running.
     // Proceeding would take fleetMutex shared recursively — undefined behaviour,
-    // and a deadlock against a queued writer — and capabilityRpcMutex, which is
-    // not recursive at all. The old global lock deadlocked outright here, so
-    // refusing loses nothing that ever worked.
+    // and a deadlock against a queued writer. The old global lock deadlocked
+    // outright here, so refusing loses nothing that ever worked.
     bool& threadIsInsideLoad() {
         static thread_local bool inside = false;
         return inside;
@@ -324,6 +319,26 @@ namespace {
         return *api;
     }
 
+    // Core's outbound dials, on the owner thread. getClient and
+    // invokeRemoteMethod marshal there with a BlockingQueuedConnection, so a
+    // dial from a thread holding a load lock WAITS for the owner — while the
+    // owner blocks on that same lock during its own load, un-pumped. That edge
+    // is the whole deadlock class; posting instead of waiting removes it, and
+    // the owner then reaches every dial on its own thread where the marshal is
+    // a no-op. Inline when we ARE the owner (every shipped host, and the tests)
+    // or when there is no event loop to post to, so the common path is
+    // unchanged — same thread, same order, same timing.
+    template <typename Fn>
+    void runOnOwner(Fn&& fn) {
+        if (!QCoreApplication::instance() ||
+            QThread::currentThread() == coreApi().thread()) {
+            fn();
+            return;
+        }
+        QMetaObject::invokeMethod(&coreApi(), std::forward<Fn>(fn),
+                                  Qt::QueuedConnection);
+    }
+
     // Dial `name` from a long-lived "core" LogosAPI. Prefer the operator's first
     // configured transport; fall back to the global default (LocalSocket).
     // Needed because the single-arg getClient() always uses the global default,
@@ -385,13 +400,14 @@ namespace {
             restrictions = policy->restrictions;
         }
 
-        std::lock_guard<std::mutex> g(capabilityRpcMutex());
-        for (const auto& restriction : restrictions) {
-            if (std::find(kExemptTargets.begin(), kExemptTargets.end(),
-                          restriction.target) != kExemptTargets.end())
-                continue;
-            registerRestrictionRpc(restriction.target, restriction.allowedCallers);
-        }
+        runOnOwner([restrictions]() {
+            for (const auto& restriction : restrictions) {
+                if (std::find(kExemptTargets.begin(), kExemptTargets.end(),
+                              restriction.target) != kExemptTargets.end())
+                    continue;
+                registerRestrictionRpc(restriction.target, restriction.allowedCallers);
+            }
+        });
     }
 
     // A module may only call modules it declared as a dependency, so `target`'s
@@ -428,7 +444,6 @@ namespace {
         return callers;
     }
 
-    // Callers hold capabilityRpcMutex(); it is not recursive.
     void pushDerivedRestrictionForTarget(const std::string& target) {
         if (!registryInstance().isLoaded("capability_module"))
             return;
@@ -440,40 +455,40 @@ namespace {
     // On load/unload of `name`, re-push the targets whose caller set changed:
     // its declared dependencies, plus `name` itself.
     //
-    // Serialized: each push reads the loaded set, and interleaving two would
-    // let the last word come from a reader that ran before the other module
-    // committed. Every load refreshes after its own commitLoad, so ordering
-    // them means the last one has seen every commit before it.
+    // Each push reads the loaded set, so the pushes have to be ordered against
+    // each other or the last word can come from a reader that ran before the
+    // other module committed. The owner thread's queue is that order now — a
+    // mutex here would be held across the dial, which is the edge runOnOwner
+    // exists to remove.
     void refreshDerivedRestrictionsForDependenciesOf(const std::string& name) {
         if (!registryInstance().isLoaded("capability_module"))
             return;
-        std::lock_guard<std::mutex> g(capabilityRpcMutex());
-        for (const auto& dep : registryInstance().moduleDependencies(name, /*recursive=*/false))
-            pushDerivedRestrictionForTarget(dep);
-        pushDerivedRestrictionForTarget(name);
+        runOnOwner([name]() {
+            for (const auto& dep : registryInstance().moduleDependencies(name, /*recursive=*/false))
+                pushDerivedRestrictionForTarget(dep);
+            pushDerivedRestrictionForTarget(name);
+        });
     }
 
     void notifyCapabilityModule(const std::string& name, const std::string& token) {
         if (!registryInstance().isLoaded("capability_module"))
             return;
 
-        // Serialized, but NOT made safe by it: informModuleToken has no
-        // runOnOwnerThread marshalling (unlike invokeRemoteMethod) and a QtRO
-        // replica is thread-AFFINE, not merely non-reentrant. Until that is
-        // fixed in logos-protocol, loads must come from the owner thread.
-        std::lock_guard<std::mutex> g(capabilityRpcMutex());
+        // On the owner thread, which the 3-arg informModuleToken needs for a
+        // second reason: it has no marshal of its own at the pinned protocol,
+        // and a QtRO replica is thread-AFFINE, not merely non-reentrant.
+        runOnOwner([name, token]() {
+            const std::string capabilityModuleToken =
+                TokenManager::instance().getToken(std::string("capability_module"));
 
-        TokenManager& tokenManager = TokenManager::instance();
-        std::string capabilityModuleToken = tokenManager.getToken(std::string("capability_module"));
-
-        LogosAPIClient* client = capabilityModuleClient();
-
-        // INBOUND half of load-time identity: capability stores (name, token)
-        // so authorize can name the caller from the presented token rather
-        // than from a self-asserted fromModuleName.
-        if (!client->informModuleToken(capabilityModuleToken, name, token)) {
-            spdlog::warn("Failed to register token with capability module for: {}", name);
-        }
+            // INBOUND half of load-time identity: capability stores (name, token)
+            // so authorize can name the caller from the presented token rather
+            // than from a self-asserted fromModuleName.
+            if (!capabilityModuleClient()->informModuleToken(
+                    capabilityModuleToken, name, token)) {
+                spdlog::warn("Failed to register token with capability module for: {}", name);
+            }
+        });
     }
 
     // ── THE modules_state FEED ───────────────────────────────────────────────
@@ -524,6 +539,9 @@ namespace {
         registryInstance().beginPublishWatch(name);
         const uint64_t epoch = registryInstance().loadEpoch(name);
 
+        // The client and its replica are built by this call, so it decides
+        // which thread owns them — the owner's, never the loading worker's.
+        runOnOwner([name, instanceId, pid, epoch]() {
         moduleClient(name)->whenObjectAvailable(
             QString::fromStdString(name),
             [name, instanceId, pid, epoch](bool ready) {
@@ -535,6 +553,7 @@ namespace {
                          logos::module_state::kReady, instanceId, pid);
                 o.flush();   // no ScopedModuleStateFlush in scope out here
             });
+        });
     }
 
     // Everything the host knows, as a ModuleListing, for apply_snapshot.
@@ -631,6 +650,7 @@ namespace {
         if (!registryInstance().isLoaded(kModulesState))
             return;
 
+        runOnOwner([batch]() {
         LogosAPIClient* client = modulesStateClient();
         for (const logos::ModuleTransition& t : batch) {
             QVariantList args;
@@ -651,6 +671,7 @@ namespace {
                 args,
                 [](QVariant) {});
         }
+        });
     }
 
     // Called once modules_state is loaded. The snapshot waits for it to
@@ -659,6 +680,7 @@ namespace {
     // timeout on this thread.
     void enableModulesStateFeed() {
         logos::ModuleStateObserver::instance().setSink(&pushTransitions);
+        runOnOwner([]() {
         modulesStateClient()->whenObjectAvailable(
             QString::fromUtf8(kModulesState),
             [](bool ready) {
@@ -667,6 +689,7 @@ namespace {
                 else
                     spdlog::warn("modules_state never became available; no snapshot pushed");
             });
+        });
     }
 
     void disableModulesStateFeed() {
@@ -1234,13 +1257,10 @@ namespace ModuleManager {
         // entries, then derived for anything already loaded (usually nothing —
         // only the exempt capability_module is up here).
         pushAccessRestrictionsToCapabilityModule();
-        {
-            // Ordered against the per-load refreshes for the same reason they
-            // are ordered against each other.
-            std::lock_guard<std::mutex> g(capabilityRpcMutex());
+        runOnOwner([]() {
             for (const auto& loaded : registryInstance().loadedModuleNames())
                 pushDerivedRestrictionForTarget(loaded);
-        }
+        });
 
         return true;
     }
