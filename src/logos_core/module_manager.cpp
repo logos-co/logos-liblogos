@@ -47,12 +47,13 @@ namespace {
     }
 
     // Load locks, in the order they must be taken: fleet -> module ->
-    // config. One lock over the whole path made every load
-    // queue behind every other one whatever module it named.
+    // spawn -> config. One lock over the whole path made every load queue
+    // behind every other one whatever module it named.
     //
     //   fleet          shared per-module; exclusive for whatever moves the
     //                  whole loaded set (clear, terminateAll, unload cascade)
     //   module         one per name, held for that module's whole load/unload
+    //   spawn          the fork itself, which is not safe concurrently
     //   config         the transport map and access policy a load reads
     //
     // Not here: ModuleRegistry has its own; inFlight/expectedExit are taken on
@@ -97,6 +98,24 @@ namespace {
         spdlog::error("Refusing a re-entrant load of {}: this thread is already "
                       "inside a load or unload", name);
         return false;
+    }
+
+    // SPAWNING is serialized even though loads are not, and this is not
+    // belt-and-braces. The container spawns through Boost.Process v2, whose
+    // POSIX launcher fork()s and then has the PARENT block on an exec-status
+    // pipe with no timeout. fork() clones only the calling thread, so a child
+    // that inherits a lock another thread was holding — the malloc arena is the
+    // classic one — deadlocks before execve, and the parent waits on that pipe
+    // forever. Measured, not theorised: two concurrent loads hung Linux CI for
+    // the full 6 h job timeout, leaving a single-threaded, never-exec'd fork of
+    // the test binary beside a zombie sibling.
+    //
+    // It costs almost nothing. Spawning is ~2 ms; the wait for the child's
+    // verdict is ~34 ms warm and hundreds cold, and THAT is what this change
+    // exists to overlap. It stays outside this lock.
+    std::mutex& spawnMutex() {
+        static std::mutex m;
+        return m;
     }
 
     // Grows only: erasing an entry would race with whoever is holding it.
@@ -872,7 +891,12 @@ namespace {
         beginLoadAttempt(name);
 
         LogosCore::LoadedModuleHandle handle;
-        if (!loader->load(desc, onTerminated, handle)) {
+        bool started;
+        {
+            std::lock_guard<std::mutex> g(spawnMutex());
+            started = loader->load(desc, onTerminated, handle);
+        }
+        if (!started) {
             abandonLoadAttempt(name);
             logos::ModuleStateObserver::instance().record(
                 name, logos::module_state::kLoading, logos::module_state::kError,
