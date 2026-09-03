@@ -72,6 +72,35 @@ TEST_F(LoadConcurrencyTest, DifferentModulesLoadConcurrently) {
         << " ms for two " << kSlowHostDelay.count() << " ms loads";
 }
 
+// Two dependency CHAINS that share a dependency. Each caller asks for its own
+// target with_dependencies, so both resolve the same shared_dep first — and it
+// must be brought up once, by whichever gets there first, with the other
+// answered by the already-loaded no-op inside the same lock.
+TEST_F(LoadConcurrencyTest, ChainsSharingADependencyBringItUpOnce) {
+    plantModule("shared_dep", "slow-ok");
+    plantModule("alpha_app", "slow-ok");
+    plantModule("beta_app", "slow-ok");
+
+    const char* dep[] = { "shared_dep" };
+    logos_core_register_module_dependencies("alpha_app", dep, 1);
+    logos_core_register_module_dependencies("beta_app", dep, 1);
+
+    std::atomic<int> succeeded{0};
+    std::thread a([&] { succeeded += logos_core_load_module("alpha_app", true); });
+    std::thread b([&] { succeeded += logos_core_load_module("beta_app", true); });
+    a.join();
+    b.join();
+
+    EXPECT_EQ(succeeded.load(), 2);
+    EXPECT_TRUE(logos_core_is_module_loaded("shared_dep"));
+    EXPECT_TRUE(logos_core_is_module_loaded("alpha_app"));
+    EXPECT_TRUE(logos_core_is_module_loaded("beta_app"));
+
+    EXPECT_EQ(spawnCount("shared_dep"), 1);
+    EXPECT_EQ(spawnCount("alpha_app"), 1);
+    EXPECT_EQ(spawnCount("beta_app"), 1);
+}
+
 // The same module named by two callers at once is one load, not two. Both
 // callers are told it is up — "already loaded" is a successful no-op, which
 // callers rely on as "ensure loaded" — but only one host may be started.
