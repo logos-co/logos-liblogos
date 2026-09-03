@@ -65,7 +65,8 @@ LOGOS_CORE_EXPORT char** logos_core_get_known_modules();
 // before the call. This idempotency is load-bearing for callers that
 // use it as a guard ("make sure X is up before I use it").
 // Returns 0 only when the module is unknown, dependency resolution
-// fails, or an actual load step (not an already-loaded no-op) fails.
+// fails, an actual load step (not an already-loaded no-op) fails, or the
+// call is RE-ENTRANT — see the concurrency note below.
 // Aborts the process if `module_name` is NULL.
 //
 // "Loaded" here means the module's plugin loaded in its host process, not
@@ -75,6 +76,28 @@ LOGOS_CORE_EXPORT char** logos_core_get_known_modules();
 // plugin fails to load answers 0 with the reason in the log and on the
 // modules_state feed. A host too old to report anything is not treated as
 // a failure: the call falls back to what it always did and warns.
+//
+// CONCURRENCY. Because the call blocks for the whole bring-up, loads of
+// DIFFERENT modules run at the same time: each takes only its own module's
+// lock. Two callers naming the SAME module are still one load — the second
+// waits and is then answered by the "already loaded" no-op above, so it never
+// starts a second host.
+//
+// A load may NOT be started from inside one, even on the same thread: it is
+// refused and answers 0 (or 1 if that module is already up). This is reachable
+// without threads — a call out to capability_module spins a nested Qt event
+// loop, so a load posted with a queued connection can be delivered inside one
+// already running. Proceeding would take the fleet lock recursively, which is
+// undefined behaviour; the single lock this replaced deadlocked outright.
+//
+// This is not yet a licence to load from any thread. Two post-load steps are
+// Qt-affine: the readiness watch builds objects owned by the CALLING thread
+// (a short-lived worker per load strands them on a dead thread and wedges
+// teardown), and the token handoff drives a QtRO replica through
+// informModuleToken, which — unlike invokeRemoteMethod — does not marshal to
+// its owner thread. So today concurrency is available to a caller driving
+// loads from the one thread that owns core's LogosAPI, and widening it needs
+// that marshalling fixed in logos-protocol first.
 LOGOS_CORE_EXPORT int logos_core_load_module(const char* module_name, bool with_dependencies);
 
 // Unload a specific module by name.

@@ -15,7 +15,9 @@
 #include <algorithm>
 #include <atomic>
 #include <chrono>
+#include <memory>
 #include <mutex>
+#include <shared_mutex>
 #include <cassert>
 #include <cstring>
 #include <optional>
@@ -40,15 +42,82 @@ namespace {
         return instance;
     }
 
-    std::mutex& loadMutex() {
-        static std::mutex mutex;
-        return mutex;
+    // Load locks, in the order they must be taken: fleet -> module ->
+    // capabilityRpc -> config. One lock over the whole path made every load
+    // queue behind every other one whatever module it named.
+    //
+    //   fleet          shared per-module; exclusive for whatever moves the
+    //                  whole loaded set (clear, terminateAll, unload cascade)
+    //   module         one per name, held for that module's whole load/unload
+    //   capabilityRpc  core's calls to capability_module, one at a time
+    //   config         the transport map and access policy a load reads
+    //
+    // Not here: ModuleRegistry has its own; inFlight/expectedExit are taken on
+    // the asio thread and must never wait behind a load; and the observer is
+    // never dispatched under any of them (RULE 1 in module_state_observer.h).
+    std::shared_mutex& fleetMutex() {
+        static std::shared_mutex m;
+        return m;
+    }
+
+    std::shared_mutex& configMutex() {
+        static std::shared_mutex m;
+        return m;
+    }
+
+    // Not recursive: nothing that holds it may call something that takes it.
+    std::mutex& capabilityRpcMutex() {
+        static std::mutex m;
+        return m;
+    }
+
+    // RE-ENTRANCY, on one thread, and it is not hypothetical: requestObject and
+    // informModuleToken spin nested Qt event loops, so a load a frontend posted
+    // with a queued connection can be delivered INSIDE one already running.
+    // Proceeding would take fleetMutex shared recursively — undefined behaviour,
+    // and a deadlock against a queued writer — and capabilityRpcMutex, which is
+    // not recursive at all. The old global lock deadlocked outright here, so
+    // refusing loses nothing that ever worked.
+    bool& threadIsInsideLoad() {
+        static thread_local bool inside = false;
+        return inside;
+    }
+
+    struct ScopedLoadEntry {
+        const bool reentrant;
+        ScopedLoadEntry() : reentrant(threadIsInsideLoad()) {
+            if (!reentrant) threadIsInsideLoad() = true;
+        }
+        ~ScopedLoadEntry() {
+            if (!reentrant) threadIsInsideLoad() = false;
+        }
+    };
+
+    // "Already loaded" stays a truthful yes even here — the registry has its own
+    // lock, so answering it needs none of ours.
+    bool refuseReentrantLoad(const std::string& name) {
+        if (registryInstance().isLoaded(name))
+            return true;
+        spdlog::error("Refusing a re-entrant load of {}: this thread is already "
+                      "inside a load or unload", name);
+        return false;
+    }
+
+    // Grows only: erasing an entry would race with whoever is holding it.
+    std::mutex& moduleMutex(const std::string& name) {
+        static std::mutex mapMutex;
+        static std::unordered_map<std::string, std::unique_ptr<std::mutex>> locks;
+        std::lock_guard<std::mutex> g(mapMutex);
+        auto& slot = locks[name];
+        if (!slot) slot = std::make_unique<std::mutex>();
+        return *slot;
     }
 
     // Per-module transport set, keyed by module name. Set by the
     // daemon before the corresponding module loads (capability_module
     // before logos_core_start; user modules before loadModule). Empty
     // = inherit the global default. See module_manager.h for details.
+    // Guarded by configMutex().
     std::unordered_map<std::string, std::string>& moduleTransportsMap() {
         static std::unordered_map<std::string, std::string> m;
         return m;
@@ -67,8 +136,8 @@ namespace {
     // So teardown announces intent here before terminate(); a name NOT in this
     // set died without being asked to.
     //
-    // Its own mutex, not loadMutex(): the callback runs on the container's
-    // background asio thread and must never wait behind a load in progress.
+    // Its own mutex, not any of the load locks: the callback runs on the
+    // container's background asio thread and must never wait behind a load.
     std::mutex& expectedExitMutex() {
         static std::mutex m;
         return m;
@@ -170,7 +239,8 @@ namespace {
     // exited without being asked to", once per module — which is both wrong and
     // the single most alarming thing this feed can say.
     //
-    // Callers hold loadMutex(), so the loaded set cannot move underneath.
+    // Callers hold fleetMutex() EXCLUSIVELY, so the loaded set cannot move
+    // underneath: every load and unload holds it shared for its whole span.
     void markAllLoadedExitsExpected() {
         for (const std::string& n : registryInstance().loadedModuleNames())
             markExitExpected(n);
@@ -187,7 +257,7 @@ namespace {
         expectedExits().clear();
     }
 
-    // Both guarded by loadMutex(). parsedEnforcePolicy is set only in enforce mode.
+    // Both guarded by configMutex(). parsedEnforcePolicy is set only in enforce mode.
     std::string& accessPolicyJson() {
         static std::string s;
         return s;
@@ -245,13 +315,21 @@ namespace {
     // Needed because the single-arg getClient() always uses the global default,
     // which hangs against a tcp-only module that never bound a LocalSocket.
     LogosAPIClient* moduleClient(const std::string& name) {
-        static LogosAPI* s_coreApi = nullptr;
-        if (!s_coreApi)
-            s_coreApi = new LogosAPI(std::string("core"));
+        // Leaked on purpose (it outlives every client it hands out) and
+        // initialised once — the `if (!p) p = new ...` here raced.
+        static LogosAPI* s_coreApi = new LogosAPI(std::string("core"));
 
-        if (auto it = moduleTransportsMap().find(name);
-            it != moduleTransportsMap().end() && !it->second.empty()) {
-            const auto ts = logos::transportSetFromJsonString(it->second);
+        // Copied out: setModuleTransports can rewrite the entry.
+        std::string transportSetJson;
+        {
+            std::shared_lock<std::shared_mutex> g(configMutex());
+            if (auto it = moduleTransportsMap().find(name);
+                it != moduleTransportsMap().end())
+                transportSetJson = it->second;
+        }
+
+        if (!transportSetJson.empty()) {
+            const auto ts = logos::transportSetFromJsonString(transportSetJson);
             if (!ts.empty())
                 return s_coreApi->getClient(QString::fromStdString(name), ts.front());
         }
@@ -287,11 +365,18 @@ namespace {
     void pushAccessRestrictionsToCapabilityModule() {
         if (!registryInstance().isLoaded("capability_module"))
             return;
-        const auto& policy = parsedEnforcePolicy();
-        if (!policy)
-            return;
+        // Copied out: the RPCs below must not run under configMutex.
+        std::vector<LogosCore::AccessRestriction> restrictions;
+        {
+            std::shared_lock<std::shared_mutex> g(configMutex());
+            const auto& policy = parsedEnforcePolicy();
+            if (!policy)
+                return;
+            restrictions = policy->restrictions;
+        }
 
-        for (const auto& restriction : policy->restrictions) {
+        std::lock_guard<std::mutex> g(capabilityRpcMutex());
+        for (const auto& restriction : restrictions) {
             if (std::find(kExemptTargets.begin(), kExemptTargets.end(),
                           restriction.target) != kExemptTargets.end())
                 continue;
@@ -302,18 +387,21 @@ namespace {
     // A module may only call modules it declared as a dependency, so `target`'s
     // allowed callers are its loaded dependents plus the trusted set. Empty when
     // exempt or no enforce policy (fail-open); explicit policy overrides verbatim.
-    std::vector<std::string> computeDerivedAllowedCallersLocked(const std::string& target) {
+    std::vector<std::string> derivedAllowedCallersFor(const std::string& target) {
         if (std::find(kExemptTargets.begin(), kExemptTargets.end(), target)
                 != kExemptTargets.end())
             return {};
 
-        const auto& policy = parsedEnforcePolicy();
-        if (!policy)
-            return {};
+        {
+            std::shared_lock<std::shared_mutex> g(configMutex());
+            const auto& policy = parsedEnforcePolicy();
+            if (!policy)
+                return {};
 
-        for (const auto& r : policy->restrictions)
-            if (r.target == target)
-                return r.allowedCallers;
+            for (const auto& r : policy->restrictions)
+                if (r.target == target)
+                    return r.allowedCallers;
+        }
 
         // Deduped; no dependents => trusted only (deny-by-default for peers).
         std::vector<std::string> callers;
@@ -330,19 +418,26 @@ namespace {
         return callers;
     }
 
+    // Callers hold capabilityRpcMutex(); it is not recursive.
     void pushDerivedRestrictionForTarget(const std::string& target) {
         if (!registryInstance().isLoaded("capability_module"))
             return;
-        auto callers = computeDerivedAllowedCallersLocked(target);
+        auto callers = derivedAllowedCallersFor(target);
         if (!callers.empty())
             registerRestrictionRpc(target, callers);
     }
 
     // On load/unload of `name`, re-push the targets whose caller set changed:
     // its declared dependencies, plus `name` itself.
+    //
+    // Serialized: each push reads the loaded set, and interleaving two would
+    // let the last word come from a reader that ran before the other module
+    // committed. Every load refreshes after its own commitLoad, so ordering
+    // them means the last one has seen every commit before it.
     void refreshDerivedRestrictionsForDependenciesOf(const std::string& name) {
         if (!registryInstance().isLoaded("capability_module"))
             return;
+        std::lock_guard<std::mutex> g(capabilityRpcMutex());
         for (const auto& dep : registryInstance().moduleDependencies(name, /*recursive=*/false))
             pushDerivedRestrictionForTarget(dep);
         pushDerivedRestrictionForTarget(name);
@@ -351,6 +446,12 @@ namespace {
     void notifyCapabilityModule(const std::string& name, const std::string& token) {
         if (!registryInstance().isLoaded("capability_module"))
             return;
+
+        // Serialized, but NOT made safe by it: informModuleToken has no
+        // runOnOwnerThread marshalling (unlike invokeRemoteMethod) and a QtRO
+        // replica is thread-AFFINE, not merely non-reentrant. Until that is
+        // fixed in logos-protocol, loads must come from the owner thread.
+        std::lock_guard<std::mutex> g(capabilityRpcMutex());
 
         TokenManager& tokenManager = TokenManager::instance();
         std::string capabilityModuleToken = tokenManager.getToken(std::string("capability_module"));
@@ -399,7 +500,7 @@ namespace {
     }
 
     // Observe readiness: arm a one-shot watch and return. Never waits -- rule 1
-    // forbids blocking or dispatching under loadMutex(), and the callback lands
+    // forbids blocking or dispatching under a load lock, and the callback lands
     // on this thread's event loop with no lock held.
     //
     // Only armed when a sink is installed; without one nothing consumes the
@@ -564,6 +665,8 @@ namespace {
         logos::ModuleStateObserver::instance().setSink({});
     }
 
+    // Callers hold fleetMutex(). Takes `name`'s own lock, so two callers of one
+    // module are one load and two callers of different modules are two.
     bool loadModuleInternal(const char* moduleName) {
         std::string name(moduleName);
 
@@ -571,6 +674,10 @@ namespace {
             spdlog::warn("Cannot load unknown module: {}", name);
             return false;
         }
+
+        // Wraps the already-loaded check below too: outside it, two callers
+        // racing on one name would both see "not loaded" and both spawn.
+        std::lock_guard<std::mutex> moduleGuard(moduleMutex(name));
 
         // "Already loaded" is a successful no-op, not a failure.
         // Callers (basecamp's PluginLoader::loadCoreDependencies,
@@ -622,9 +729,12 @@ namespace {
         // calling load. The loader threads it through to the child via
         // a CLI argument so the child's LogosAPIProvider binds the right
         // listeners. Modules without an entry inherit the global default.
-        if (auto it = moduleTransportsMap().find(name);
-            it != moduleTransportsMap().end()) {
-            desc.transportSetJson = it->second;
+        {
+            std::shared_lock<std::shared_mutex> g(configMutex());
+            if (auto it = moduleTransportsMap().find(name);
+                it != moduleTransportsMap().end()) {
+                desc.transportSetJson = it->second;
+            }
         }
 
         // ── Protocol-version load gate ─────────────────────────────────
@@ -703,7 +813,7 @@ namespace {
         // them apart; see its definition.
         //
         // This is the one seam that flushes inline: it is not under
-        // loadMutex(), so there is no lock to get out from under, and a crash
+        // a load lock, so there is no lock to get out from under, and a crash
         // is the transition a consumer most needs promptly.
         auto onTerminated = [](const std::string& n) {
             // Marks the module unloaded and, if a load is in flight, hands the
@@ -751,7 +861,7 @@ namespace {
             // already be running on the asio thread, reports this as a crash.
             markExitExpected(name);
             loader->terminate(name);
-            // Same reason unloadModuleInternalLocked() consumes below: the
+            // Same reason unloadModuleInternal() consumes below: the
             // container drops the callback for a teardown it performed, so this
             // mark has nothing left to consume it. Before the attempt is
             // abandoned, so a termination racing us is still swallowed by it and
@@ -822,10 +932,12 @@ namespace {
         return true;
     }
 
-    // Unload helper that assumes loadMutex() is already held by the caller.
-    // unloadModuleWithDependents() needs a single lock span so a late-arriving
-    // load can't interleave between tearing down the dependents and the target.
-    bool unloadModuleInternalLocked(const std::string& name) {
+    // Callers hold fleetMutex(): shared for a single unload, exclusive for the
+    // cascade, which needs one span so a load cannot interleave between the
+    // dependents and the target. Takes `name`'s lock like the load path does.
+    bool unloadModuleInternal(const std::string& name) {
+        std::lock_guard<std::mutex> moduleGuard(moduleMutex(name));
+
         if (!registryInstance().isLoaded(name)) {
             spdlog::warn("Cannot unload module (not loaded): {}", name);
             return false;
@@ -917,12 +1029,12 @@ namespace ModuleManager {
 
     void setModuleTransports(const std::string& moduleName,
                              const std::string& transportSetJson) {
-        // Same mutex as loadModule()'s read of the map (see line ~122
-        // for the lookup). Without this, an operator can race with
-        // an in-flight loadModule and the child gets garbled JSON
-        // (or sees an empty transport set after the operator
-        // overwrote what the child was about to read).
-        std::lock_guard<std::mutex> g(loadMutex());
+        // Same mutex as loadModuleInternal's read of the map, and
+        // moduleClient()'s. Without this, an operator can race with an
+        // in-flight load and the child gets garbled JSON (or sees an empty
+        // transport set after the operator overwrote what it was about to
+        // read).
+        std::unique_lock<std::shared_mutex> g(configMutex());
         if (transportSetJson.empty())
             moduleTransportsMap().erase(moduleName);
         else
@@ -930,7 +1042,7 @@ namespace ModuleManager {
     }
 
     // THE deny-by-default switch. `mode: "enforce"` is the whole flag: it is
-    // what turns the derived restrictions on (computeDerivedAllowedCallersLocked
+    // what turns the derived restrictions on (derivedAllowedCallersFor
     // returns {} without it, so core registers nothing and capability_module
     // leaves every target open). Anything else — no policy, empty policy,
     // unparseable policy, a different mode — is OFF, i.e. exactly the behaviour
@@ -942,7 +1054,7 @@ namespace ModuleManager {
     // operator who mistyped `"mode":"enforced"` would otherwise get a
     // wide-open runtime and a clean log.
     void setAccessPolicy(const std::string& policyJson) {
-        std::lock_guard<std::mutex> g(loadMutex());  // guards the read at push time
+        std::unique_lock<std::shared_mutex> g(configMutex());  // guards the read at push time
         accessPolicyJson() = policyJson;
         // Cache the parse only in enforce mode; malformed/non-enforce stays empty.
         parsedEnforcePolicy().reset();
@@ -999,14 +1111,21 @@ namespace ModuleManager {
     bool loadModule(const char* moduleName) {
         // BEFORE the lock guard, so it is destroyed after it. See rule 1.
         logos::ScopedModuleStateFlush stateFlusher;
-        std::lock_guard lock(loadMutex());
+        ScopedLoadEntry entry;
+        if (entry.reentrant) return refuseReentrantLoad(moduleName);
+        std::shared_lock<std::shared_mutex> fleet(fleetMutex());
         return loadModuleInternal(moduleName);
     }
 
     bool loadModuleWithDependencies(const char* moduleName) {
         // BEFORE the lock guard, so it is destroyed after it. See rule 1.
         logos::ScopedModuleStateFlush stateFlusher;
-        std::lock_guard lock(loadMutex());
+        ScopedLoadEntry entry;
+        if (entry.reentrant) return refuseReentrantLoad(moduleName);
+        // Shared, not exclusive: the chain below takes each module's own lock
+        // in turn and releases it before the next, so two chains sharing a
+        // dependency make the second one a no-op instead of a second child.
+        std::shared_lock<std::shared_mutex> fleet(fleetMutex());
 
         std::string name(moduleName);
 
@@ -1063,7 +1182,9 @@ namespace ModuleManager {
     bool initializeModulesState() {
         // BEFORE the lock guard, so it is destroyed after it. See rule 1.
         logos::ScopedModuleStateFlush stateFlusher;
-        std::lock_guard lock(loadMutex());
+        ScopedLoadEntry entry;
+        if (entry.reentrant) return refuseReentrantLoad("modules_state");
+        std::shared_lock<std::shared_mutex> fleet(fleetMutex());
 
         if (!registryInstance().isKnown("modules_state")) {
             spdlog::debug("modules_state is not installed; lifecycle feed stays off");
@@ -1080,7 +1201,9 @@ namespace ModuleManager {
     bool initializeCapabilityModule() {
         // BEFORE the lock guard, so it is destroyed after it. See rule 1.
         logos::ScopedModuleStateFlush stateFlusher;
-        std::lock_guard lock(loadMutex());
+        ScopedLoadEntry entry;
+        if (entry.reentrant) return refuseReentrantLoad("capability_module");
+        std::shared_lock<std::shared_mutex> fleet(fleetMutex());
 
         if (!registryInstance().isKnown("capability_module"))
             return false;
@@ -1094,8 +1217,13 @@ namespace ModuleManager {
         // entries, then derived for anything already loaded (usually nothing —
         // only the exempt capability_module is up here).
         pushAccessRestrictionsToCapabilityModule();
-        for (const auto& loaded : registryInstance().loadedModuleNames())
-            pushDerivedRestrictionForTarget(loaded);
+        {
+            // Ordered against the per-load refreshes for the same reason they
+            // are ordered against each other.
+            std::lock_guard<std::mutex> g(capabilityRpcMutex());
+            for (const auto& loaded : registryInstance().loadedModuleNames())
+                pushDerivedRestrictionForTarget(loaded);
+        }
 
         return true;
     }
@@ -1103,14 +1231,28 @@ namespace ModuleManager {
     bool unloadModule(const char* moduleName) {
         // BEFORE the lock guard, so it is destroyed after it. See rule 1.
         logos::ScopedModuleStateFlush stateFlusher;
-        std::lock_guard lock(loadMutex());
-        return unloadModuleInternalLocked(std::string(moduleName));
+        ScopedLoadEntry entry;
+        if (entry.reentrant) {
+            spdlog::error("Refusing a re-entrant unload of {}: this thread is "
+                          "already inside a load or unload", moduleName);
+            return false;
+        }
+        std::shared_lock<std::shared_mutex> fleet(fleetMutex());
+        return unloadModuleInternal(std::string(moduleName));
     }
 
     bool unloadModuleWithDependents(const char* moduleName) {
         // BEFORE the lock guard, so it is destroyed after it. See rule 1.
         logos::ScopedModuleStateFlush stateFlusher;
-        std::lock_guard lock(loadMutex());
+        ScopedLoadEntry entry;
+        if (entry.reentrant) {
+            spdlog::error("Refusing a re-entrant unload cascade of {}: this "
+                          "thread is already inside a load or unload", moduleName);
+            return false;
+        }
+        // EXCLUSIVE: the whole cascade is one span, so a load cannot slip in
+        // between tearing down the dependents and the target.
+        std::unique_lock<std::shared_mutex> fleet(fleetMutex());
 
         std::string name(moduleName);
 
@@ -1165,7 +1307,7 @@ namespace ModuleManager {
         bool allSucceeded = true;
         for (const std::string& n : teardownOrder) {
             if (!registryInstance().isLoaded(n)) continue;
-            if (!unloadModuleInternalLocked(n)) {
+            if (!unloadModuleInternal(n)) {
                 spdlog::warn("Failed to unload module during cascade: {}", n);
                 allSucceeded = false;
             }
@@ -1177,7 +1319,15 @@ namespace ModuleManager {
     void terminateAll() {
         // BEFORE the lock guard, so it is destroyed after it. See rule 1.
         logos::ScopedModuleStateFlush stateFlusher;
-        std::lock_guard lock(loadMutex());
+        ScopedLoadEntry entry;
+        if (entry.reentrant) {
+            spdlog::error("Refusing a re-entrant fleet teardown: this thread is "
+                          "already inside a load or unload");
+            return;
+        }
+        // EXCLUSIVE: markAllLoadedExitsExpected needs the loaded set to hold
+        // still, and every load and unload holds this shared for its span.
+        std::unique_lock<std::shared_mutex> fleet(fleetMutex());
         // Announce before tearing down, or every module reports as a crash.
         markAllLoadedExitsExpected();
         loaderRegistry().terminateAll();
@@ -1188,7 +1338,15 @@ namespace ModuleManager {
     void clear() {
         // BEFORE the lock guard, so it is destroyed after it. See rule 1.
         logos::ScopedModuleStateFlush stateFlusher;
-        std::lock_guard lock(loadMutex());
+        ScopedLoadEntry entry;
+        if (entry.reentrant) {
+            spdlog::error("Refusing a re-entrant fleet teardown: this thread is "
+                          "already inside a load or unload");
+            return;
+        }
+        // EXCLUSIVE: markAllLoadedExitsExpected needs the loaded set to hold
+        // still, and every load and unload holds this shared for its span.
+        std::unique_lock<std::shared_mutex> fleet(fleetMutex());
         // Announce before tearing down, or every module reports as a crash.
         markAllLoadedExitsExpected();
         loaderRegistry().terminateAll();
@@ -1199,9 +1357,13 @@ namespace ModuleManager {
         // restart in the same process (or a unit test that calls
         // clear() between scenarios) would inherit the previous
         // run's transport map and bind unexpected ports.
-        moduleTransportsMap().clear();
-        accessPolicyJson().clear();  // same rationale — don't leak across restarts
-        parsedEnforcePolicy().reset();
+
+        {
+            std::unique_lock<std::shared_mutex> cfg(configMutex());
+            moduleTransportsMap().clear();
+            accessPolicyJson().clear();  // same rationale — don't leak across restarts
+            parsedEnforcePolicy().reset();
+        }
         // Same rationale again: the next run may have a host that does report.
         hostStaysSilent().store(false);
     }
@@ -1277,11 +1439,10 @@ namespace ModuleManager {
     }
 
     std::vector<std::string> computeDerivedAllowedCallers(const std::string& target) {
-        std::lock_guard lock(loadMutex());
-        return computeDerivedAllowedCallersLocked(target);
+        return derivedAllowedCallersFor(target);
     }
 
-    // No loadMutex(): the real caller (pushSnapshot, from whenObjectAvailable)
+    // No fleet lock: the real caller (pushSnapshot, from whenObjectAvailable)
     // holds no lock either, and allModulesInfo takes the registry's own.
     std::string buildSnapshotListingJson() {
         return buildSnapshotListing().dump();
