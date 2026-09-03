@@ -27,6 +27,7 @@
 #include <boost/uuid/uuid_generators.hpp>
 #include <boost/uuid/uuid_io.hpp>
 #include "logos_api.h"
+#include "logos_thread_marshal.h"
 #include "logos_api_client.h"
 #include "logos_module.h"
 #include "logos_protocol.h"
@@ -310,15 +311,24 @@ namespace {
         return result;
     }
 
+    // THE OWNER THREAD, chosen rather than raced for. LogosAPI is a QObject that
+    // binds its provider — and on a Qt-affine transport its node and socket — to
+    // the thread that CONSTRUCTS it, and every client it hands out inherits that
+    // owner. Left lazy that was whichever thread dialled first, which with loads
+    // running off the main thread can be one that never pumps. anchorCoreApi()
+    // settles it from logos_core_start(). No marshal in this initializer: a magic
+    // static that blocks on another thread deadlocks against that thread waiting
+    // on the static's own guard. Leaked on purpose — it outlives its clients.
+    LogosAPI& coreApi() {
+        static LogosAPI* api = new LogosAPI(std::string("core"));
+        return *api;
+    }
+
     // Dial `name` from a long-lived "core" LogosAPI. Prefer the operator's first
     // configured transport; fall back to the global default (LocalSocket).
     // Needed because the single-arg getClient() always uses the global default,
     // which hangs against a tcp-only module that never bound a LocalSocket.
     LogosAPIClient* moduleClient(const std::string& name) {
-        // Leaked on purpose (it outlives every client it hands out) and
-        // initialised once — the `if (!p) p = new ...` here raced.
-        static LogosAPI* s_coreApi = new LogosAPI(std::string("core"));
-
         // Copied out: setModuleTransports can rewrite the entry.
         std::string transportSetJson;
         {
@@ -331,9 +341,9 @@ namespace {
         if (!transportSetJson.empty()) {
             const auto ts = logos::transportSetFromJsonString(transportSetJson);
             if (!ts.empty())
-                return s_coreApi->getClient(QString::fromStdString(name), ts.front());
+                return coreApi().getClient(QString::fromStdString(name), ts.front());
         }
-        return s_coreApi->getClient(name);
+        return coreApi().getClient(name);
     }
 
     LogosAPIClient* capabilityModuleClient() {
@@ -1006,6 +1016,13 @@ namespace ModuleManager {
 
     ModuleRegistry& registry() {
         return registryInstance();
+    }
+
+    void anchorCoreApi() {
+        // Single-threaded at startup, so constructing here cannot race the
+        // static's guard; the marshal only matters for a host that starts off
+        // the Qt main thread.
+        logos::runOnQtMainThread([]() { coreApi(); });
     }
 
     LogosCore::ModuleLoaderRegistry& loaders() {

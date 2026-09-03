@@ -23,6 +23,8 @@ void logos_core_add_modules_dir(const char* modules_dir) {
 void logos_core_start() {
     logos::initLogging();
     LogosInstance::id();
+    // Before anything dials: this thread becomes the owner of every client.
+    ModuleManager::anchorCoreApi();
     ModuleManager::discoverInstalledModules();
     ModuleManager::initializeCapabilityModule();
     // After capability_module: this one is optional, and its snapshot back-fills
