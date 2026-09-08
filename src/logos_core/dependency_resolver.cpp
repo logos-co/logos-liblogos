@@ -2,6 +2,7 @@
 #include <spdlog/spdlog.h>
 #include <unordered_set>
 #include <unordered_map>
+#include <algorithm>
 #include <deque>
 #include <functional>
 #include <string>
@@ -61,8 +62,12 @@ namespace DependencyResolver {
     ResolveResult resolve(const std::vector<std::string>& requested,
                           IsKnownFn isKnown,
                           GetDependenciesFn getDependencies,
-                          GetDependenciesFn getOptionalDependencies) {
+                          GetDependenciesFn getOptionalDependencies,
+                          OptionalLoad optionalLoad) {
         ResolveResult out;
+
+        const bool bestEffort =
+            optionalLoad == OptionalLoad::BestEffort && getOptionalDependencies;
 
         std::unordered_set<std::string> modulesToLoad;
         std::deque<std::string> queue(requested.begin(), requested.end());
@@ -87,6 +92,25 @@ namespace DependencyResolver {
                     queue.push_back(depName);
                 }
             }
+
+            // Best effort: an optional dependency joins the closure only if it
+            // is INSTALLED. `isKnown` is the whole test, and the reason an
+            // unknown one is skipped here rather than queued is that the queue
+            // records anything unknown as `missing` — which would turn "not
+            // installed" into a resolution failure and undo the property this
+            // dependency kind exists for.
+            if (bestEffort) {
+                for (const std::string& optName : getOptionalDependencies(moduleName)) {
+                    if (optName.empty() || modulesToLoad.count(optName))
+                        continue;
+                    if (isKnown(optName)) {
+                        queue.push_back(optName);
+                    } else {
+                        spdlog::debug("Optional dependency '{}' of '{}' is not installed; skipping",
+                                      optName, moduleName);
+                    }
+                }
+            }
         }
 
         if (!out.missing.empty()) {
@@ -96,6 +120,31 @@ namespace DependencyResolver {
                 joined += out.missing[i];
             }
             spdlog::warn("Missing dependencies detected: {}", joined);
+        }
+
+        // Which of those are tolerable to fail: everything the REQUIRED edges
+        // alone could not have reached. Computed by re-walking the hard graph
+        // from `requested` and subtracting, rather than by tagging nodes as
+        // they are queued, because a module can be reached BOTH ways and the
+        // order in which the queue happens to reach it must not decide whether
+        // its failure is fatal. Required wins, always.
+        if (bestEffort) {
+            std::unordered_set<std::string> requiredOnly;
+            std::deque<std::string> hardQueue(requested.begin(), requested.end());
+            while (!hardQueue.empty()) {
+                std::string n = hardQueue.front();
+                hardQueue.pop_front();
+                if (requiredOnly.count(n) || !isKnown(n))
+                    continue;
+                requiredOnly.insert(n);
+                for (const std::string& depName : getDependencies(n))
+                    if (!depName.empty() && !requiredOnly.count(depName))
+                        hardQueue.push_back(depName);
+            }
+            for (const std::string& n : modulesToLoad)
+                if (!requiredOnly.count(n))
+                    out.bestEffort.push_back(n);
+            std::sort(out.bestEffort.begin(), out.bestEffort.end());
         }
 
         // Hard edges decide BOTH the closure and whether this is a cycle.

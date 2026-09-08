@@ -21,7 +21,37 @@ namespace DependencyResolver {
         std::vector<std::string> missing;
         bool hasCycle = false;
 
+        // Names in `order` that are there ONLY because a best-effort optional
+        // edge pulled them in. A caller must tolerate their load failing;
+        // everything else in `order` is required by something.
+        //
+        // Empty unless OptionalLoad::BestEffort was asked for. A module that is
+        // ALSO reachable by a required edge is not listed: required wins, so a
+        // dependency that something genuinely needs never becomes tolerable
+        // just because a third module also named it optionally.
+        std::vector<std::string> bestEffort;
+
         bool ok() const { return missing.empty() && !hasCycle; }
+
+        bool isBestEffort(const std::string& name) const {
+            for (const std::string& n : bestEffort)
+                if (n == name) return true;
+            return false;
+        }
+    };
+
+    // What an optional dependency does to the CLOSURE. It never changes what a
+    // failure means: absent is not an error under either.
+    enum class OptionalLoad {
+        // Today's behaviour, and the default. Optional edges order modules
+        // already in the set and never add one.
+        OrderOnly,
+        // Additionally pull in every optional dependency that is KNOWN, so a
+        // dependent comes up with its optional collaborators when they are
+        // installed. An unknown one is skipped silently, and a known one that
+        // fails to load is reported through `bestEffort` rather than as a
+        // failure of the load.
+        BestEffort,
     };
 
     // `getOptionalDependencies` (metadata.json#optional_dependencies) supplies
@@ -41,7 +71,8 @@ namespace DependencyResolver {
     ResolveResult resolve(const std::vector<std::string>& requested,
                           IsKnownFn isKnown,
                           GetDependenciesFn getDependencies,
-                          GetDependenciesFn getOptionalDependencies = nullptr);
+                          GetDependenciesFn getOptionalDependencies = nullptr,
+                          OptionalLoad optionalLoad = OptionalLoad::OrderOnly);
 }
 
 #endif // DEPENDENCY_RESOLVER_H

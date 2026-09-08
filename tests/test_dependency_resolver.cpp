@@ -402,6 +402,104 @@ TEST_F(DependencyResolverTest, OptionalDependency_NotPulledIntoClosure) {
     EXPECT_EQ(indexOf(v, "b"), -1) << "an optional dependency must not extend the closure";
 }
 
+// ---------------------------------------------------------------------------
+// Best-effort optional loading (OptionalLoad::BestEffort).
+//
+// The same edges, one difference: they EXPAND the closure when the optional
+// dependency is installed. What they still never do is fail — absent is
+// skipped, and the caller is handed the set whose load failure it must swallow.
+// ---------------------------------------------------------------------------
+
+TEST_F(DependencyResolverTest, BestEffort_PullsInAnInstalledOptionalDependency) {
+    logos_core_register_module("a", "/a");
+    logos_core_register_module("b", "/b");
+    const char* optA[] = {"b"};
+    logos_core_register_module_optional_dependencies("a", optA, 1);
+
+    const char* names[] = {"a"};
+    char** result = logos_core_resolve_dependencies_best_effort(names, 1);
+    auto v = resolvedToVec(result);
+    freeResolved(result);
+
+    ASSERT_EQ(v.size(), 2u) << "an INSTALLED optional dependency joins the closure";
+    // ...and ahead of its dependent, so the dependent's startup calls land.
+    EXPECT_LT(indexOf(v, "b"), indexOf(v, "a"));
+}
+
+TEST_F(DependencyResolverTest, BestEffort_SkipsAnUninstalledOptionalDependencyInSilence) {
+    logos_core_register_module("a", "/a");
+    const char* optA[] = {"ghost"};
+    logos_core_register_module_optional_dependencies("a", optA, 1);
+
+    const char* names[] = {"a"};
+    char** result = logos_core_resolve_dependencies_best_effort(names, 1);
+    auto v = resolvedToVec(result);
+    freeResolved(result);
+
+    // Not installed is not missing. If this ever reports `ghost`, resolution
+    // fails and the dependent does not load — the exact outcome the optional
+    // kind exists to prevent.
+    ASSERT_EQ(v.size(), 1u);
+    EXPECT_EQ(v[0], "a");
+}
+
+TEST_F(DependencyResolverTest, BestEffort_ReportsWhatIsTolerableToFail) {
+    logos_core_register_module("a", "/a");
+    logos_core_register_module("b", "/b");
+    const char* optA[] = {"b"};
+    logos_core_register_module_optional_dependencies("a", optA, 1);
+
+    const char* names[] = {"a"};
+    char** result = logos_core_resolve_best_effort_names(names, 1);
+    auto v = resolvedToVec(result);
+    freeResolved(result);
+
+    // `b` is in the order only because it happened to be installed, so its
+    // failure must not fail the load of `a`.
+    ASSERT_EQ(v.size(), 1u);
+    EXPECT_EQ(v[0], "b");
+}
+
+TEST_F(DependencyResolverTest, BestEffort_RequiredWinsWhenAModuleIsBothKinds) {
+    // c is REQUIRED by a and merely optional to b. Reached either way, it is
+    // required — a naive implementation that tags nodes as the queue reaches
+    // them would call it tolerable whenever b happened to be visited first,
+    // and a genuinely required dependency's failure would stop being fatal.
+    logos_core_register_module("a", "/a");
+    logos_core_register_module("b", "/b");
+    logos_core_register_module("c", "/c");
+    const char* depsA[] = {"c"};
+    logos_core_register_module_dependencies("a", depsA, 1);
+    const char* optB[] = {"c"};
+    logos_core_register_module_optional_dependencies("b", optB, 1);
+
+    const char* names[] = {"a", "b"};
+    char** result = logos_core_resolve_best_effort_names(names, 2);
+    auto v = resolvedToVec(result);
+    freeResolved(result);
+
+    EXPECT_EQ(indexOf(v, "c"), -1) << "c is required by a; its failure stays fatal";
+}
+
+TEST_F(DependencyResolverTest, BestEffort_StillBreaksCyclesRatherThanReportingThem) {
+    // a requires b; b optionally depends on a — the shape optional deps exist
+    // to express. Expanding the closure must not turn it into a cycle.
+    logos_core_register_module("a", "/a");
+    logos_core_register_module("b", "/b");
+    const char* depsA[] = {"b"};
+    logos_core_register_module_dependencies("a", depsA, 1);
+    const char* optB[] = {"a"};
+    logos_core_register_module_optional_dependencies("b", optB, 1);
+
+    const char* names[] = {"a"};
+    char** result = logos_core_resolve_dependencies_best_effort(names, 1);
+    auto v = resolvedToVec(result);
+    freeResolved(result);
+
+    ASSERT_EQ(v.size(), 2u) << "resolution must still succeed";
+    EXPECT_LT(indexOf(v, "b"), indexOf(v, "a")) << "the hard edge decides the order";
+}
+
 TEST_F(DependencyResolverTest, OptionalDependency_AbsentIsNotAFailure) {
     logos_core_register_module("a", "/a");
     const char* optA[] = {"never_installed"};
