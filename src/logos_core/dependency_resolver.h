@@ -16,6 +16,21 @@ namespace DependencyResolver {
     // true when the reachable graph contains a cycle (Kahn's algorithm
     // could not consume all nodes). Callers decide policy: load paths
     // treat !ok() as a hard failure; teardown paths may ignore it.
+    // An optional dependency best-effort loading left out. Reported rather than
+    // logged because "installed, and deliberately not loaded" is invisible
+    // otherwise: the module keeps whatever state it had, so nothing on the
+    // lifecycle feed marks it, and a caller comparing what it asked for against
+    // what came up has no way to tell this from an oversight.
+    struct SkippedOptional {
+        std::string module;   // the optional dependency that was left out
+        std::string namedBy;  // the module whose metadata names it
+        // "not_installed" — the optional dependency itself is not known here.
+        // "unsatisfiable"  — it is installed, but something it REQUIRES is not;
+        //                    `detail` carries the first such module.
+        std::string reason;
+        std::string detail;
+    };
+
     struct ResolveResult {
         std::vector<std::string> order;
         std::vector<std::string> missing;
@@ -30,6 +45,11 @@ namespace DependencyResolver {
         // dependency that something genuinely needs never becomes tolerable
         // just because a third module also named it optionally.
         std::vector<std::string> bestEffort;
+
+        // Optional branches best-effort loading declined to take, in the order
+        // they were considered. Empty under OptionalLoad::OrderOnly, which
+        // declines nothing because it takes nothing.
+        std::vector<SkippedOptional> skippedOptional;
 
         bool ok() const { return missing.empty() && !hasCycle; }
 

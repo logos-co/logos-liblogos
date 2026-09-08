@@ -139,6 +139,23 @@ typedef enum {
 // still runs inline and in order.
 LOGOS_CORE_EXPORT int logos_core_load_module(const char* module_name, LogosLoadDeps deps);
 
+// Which optional dependencies LOGOS_LOAD_REQUIRED_AND_OPTIONAL would leave out
+// for `module_name`, and why. Returns a JSON array; each element is an object:
+//   "module"    the optional dependency that would not be loaded
+//   "named_by"  the module whose metadata names it optionally
+//   "reason"    "not_installed" — it is not installed here
+//               "unsatisfiable" — it is, but something it REQUIRES is not
+//   "missing"   present only for "unsatisfiable": the module that is absent
+// Returns "[]" when nothing would be left out. The string must be freed by
+// the caller. Aborts the process if `module_name` is NULL.
+//
+// A QUERY rather than an out-parameter on the load, because a skipped module
+// is otherwise invisible: it keeps whatever state it had, so nothing appears on
+// the lifecycle feed and nothing distinguishes "deliberately left out" from
+// "nobody ever asked for it". Deterministic given what is installed, so calling
+// it before a load predicts, and calling it after explains.
+LOGOS_CORE_EXPORT char* logos_core_optional_load_report(const char* module_name);
+
 // Unload a specific module by name.
 // When with_dependents is true, also unloads every loaded module that
 // (transitively) depends on it. Dependents come down first (leaves-first)

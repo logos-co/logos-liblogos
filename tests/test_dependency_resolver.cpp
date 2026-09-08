@@ -559,6 +559,54 @@ TEST_F(DependencyResolverTest, BestEffort_AnUnsatisfiableBranchIsDroppedWhole) {
     EXPECT_EQ(v[0], "app");
 }
 
+TEST_F(DependencyResolverTest, BestEffort_ReportsAnUninstalledOptionalDependency) {
+    logos_core_register_module("app", "/app");
+    const char* optApp[] = {"ghost"};
+    logos_core_register_module_optional_dependencies("app", optApp, 1);
+
+    char* json = logos_core_optional_load_report("app");
+    const std::string report(json ? json : "");
+    delete[] json;
+
+    EXPECT_NE(report.find("\"module\":\"ghost\""), std::string::npos) << report;
+    EXPECT_NE(report.find("\"named_by\":\"app\""), std::string::npos) << report;
+    EXPECT_NE(report.find("\"reason\":\"not_installed\""), std::string::npos) << report;
+    // Nothing to blame but the module itself, so no third name is invented.
+    EXPECT_EQ(report.find("\"missing\""), std::string::npos) << report;
+}
+
+TEST_F(DependencyResolverTest, BestEffort_ReportsWhichRequirementMadeABranchUnsatisfiable) {
+    logos_core_register_module("app", "/app");
+    logos_core_register_module("extra", "/extra");
+    const char* optApp[] = {"extra"};
+    logos_core_register_module_optional_dependencies("app", optApp, 1);
+    const char* depsExtra[] = {"ghost"};
+    logos_core_register_module_dependencies("extra", depsExtra, 1);
+
+    char* json = logos_core_optional_load_report("app");
+    const std::string report(json ? json : "");
+    delete[] json;
+
+    // The useful half: not just that `extra` was left out, but that `ghost` is
+    // why — otherwise a reader has to re-derive the branch by hand.
+    EXPECT_NE(report.find("\"module\":\"extra\""), std::string::npos) << report;
+    EXPECT_NE(report.find("\"reason\":\"unsatisfiable\""), std::string::npos) << report;
+    EXPECT_NE(report.find("\"missing\":\"ghost\""), std::string::npos) << report;
+}
+
+TEST_F(DependencyResolverTest, BestEffort_ReportsNothingWhenEveryBranchIsTaken) {
+    logos_core_register_module("app", "/app");
+    logos_core_register_module("extra", "/extra");
+    const char* optApp[] = {"extra"};
+    logos_core_register_module_optional_dependencies("app", optApp, 1);
+
+    char* json = logos_core_optional_load_report("app");
+    const std::string report(json ? json : "");
+    delete[] json;
+
+    EXPECT_EQ(report, "[]") << "a report that always says something says nothing";
+}
+
 TEST_F(DependencyResolverTest, BestEffort_AnOptionalDepWithAMissingRequiredDepIsNotFatal) {
     // app -opt-> extra -req-> ghost(absent). `extra` cannot be loaded, so it
     // should be left out — but NOTHING here may fail the load of `app`, which

@@ -69,6 +69,11 @@ int logos_core_load_module(const char* module_name, LogosLoadDeps deps) {
                module_name, DependencyResolver::OptionalLoad::OrderOnly) ? 1 : 0;
 }
 
+char* logos_core_optional_load_report(const char* module_name) {
+    if (!module_name) { logos::logger("core").critical("logos_core_optional_load_report: module_name must not be null"); std::abort(); }
+    return ModuleManager::optionalLoadReportCStr(module_name);
+}
+
 int logos_core_unload_module(const char* module_name, bool with_dependents) {
     if (!module_name) { logos::logger("core").critical("logos_core_unload_module: module_name must not be null"); std::abort(); }
     if (with_dependents)

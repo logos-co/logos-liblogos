@@ -1508,6 +1508,29 @@ namespace ModuleManager {
         );
     }
 
+    std::string optionalLoadReportJson(const std::string& moduleName) {
+        nlohmann::json out = nlohmann::json::array();
+        for (const auto& s : resolveDependenciesBestEffort({moduleName}).skippedOptional) {
+            nlohmann::json entry;
+            entry["module"] = s.module;
+            entry["named_by"] = s.namedBy;
+            entry["reason"] = s.reason;
+            // Present only when there is one to name: "not_installed" is about
+            // the optional dependency itself and has no third module to blame.
+            if (!s.detail.empty())
+                entry["missing"] = s.detail;
+            out.push_back(std::move(entry));
+        }
+        return out.dump();
+    }
+
+    char* optionalLoadReportCStr(const char* moduleName) {
+        std::string json = optionalLoadReportJson(std::string(moduleName));
+        char* result = new char[json.size() + 1];
+        strcpy(result, json.c_str());
+        return result;
+    }
+
     std::vector<std::string> getDependencies(const std::string& name, bool recursive) {
         std::vector<std::string> deps = registryInstance().moduleDependencies(name, recursive);
         std::vector<std::string> knownDeps;

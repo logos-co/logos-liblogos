@@ -99,6 +99,11 @@ namespace ModuleManager {
 
     std::vector<std::string> resolveDependencies(const std::vector<std::string>& requestedModules);
 
+    // The optional branches LOGOS_LOAD_REQUIRED_AND_OPTIONAL would decline for
+    // `moduleName`, as a JSON array. Empty array when it would decline none.
+    std::string optionalLoadReportJson(const std::string& moduleName);
+    char* optionalLoadReportCStr(const char* moduleName);
+
     // Resolve with OptionalLoad::BestEffort, reporting BOTH the order and the
     // subset whose load failure a caller must tolerate. One call rather than
     // two because the two answers come from one walk and must agree.

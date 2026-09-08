@@ -123,6 +123,7 @@ namespace DependencyResolver {
         // Fixed point, so an optional dependency of an optional dependency is
         // reached on a later round.
         if (bestEffort) {
+            std::unordered_set<std::string> reportedSkips;
             bool grew = true;
             while (grew) {
                 grew = false;
@@ -136,23 +137,32 @@ namespace DependencyResolver {
                         // REQUIRES, gathered before anything is committed.
                         std::unordered_set<std::string> branch;
                         std::deque<std::string> probe{optName};
-                        bool satisfiable = true;
-                        while (!probe.empty() && satisfiable) {
+                        std::string blocker;
+                        while (!probe.empty() && blocker.empty()) {
                             std::string n = probe.front();
                             probe.pop_front();
                             if (branch.count(n) || modulesToLoad.count(n))
                                 continue;
-                            if (!isKnown(n)) { satisfiable = false; break; }
+                            if (!isKnown(n)) { blocker = n; break; }
                             branch.insert(n);
                             for (const std::string& d : getDependencies(n))
                                 if (!d.empty() && !branch.count(d) && !modulesToLoad.count(d))
                                     probe.push_back(d);
                         }
 
-                        if (!satisfiable) {
-                            spdlog::debug("Optional dependency '{}' of '{}' cannot be satisfied "
-                                          "(it or something it requires is not installed); skipping",
-                                          optName, holder);
+                        if (!blocker.empty()) {
+                            // Reported once per (holder, optional) pair: the
+                            // fixed-point loop revisits every holder each round,
+                            // and a declined branch stays declined.
+                            const std::string key = holder + '\0' + optName;
+                            if (reportedSkips.insert(key).second) {
+                                out.skippedOptional.push_back(SkippedOptional{
+                                    optName, holder,
+                                    blocker == optName ? "not_installed" : "unsatisfiable",
+                                    blocker == optName ? std::string{} : blocker});
+                                spdlog::debug("Optional dependency '{}' of '{}' left out: {} is not installed",
+                                              optName, holder, blocker);
+                            }
                             continue;
                         }
                         for (const std::string& n : branch)

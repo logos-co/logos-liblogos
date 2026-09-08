@@ -133,6 +133,11 @@ inline char** toCArray(const std::vector<std::string>& v)
 // answer. Two shims over one call rather than an out-parameter: a test reads
 // one property at a time, and the C-array marshalling is already the noisiest
 // thing in this file.
+inline char* logos_core_optional_load_report(const char* module_name)
+{
+    return ModuleManager::optionalLoadReportCStr(module_name);
+}
+
 inline char** logos_core_resolve_dependencies_best_effort(const char** names, int count)
 {
     std::vector<std::string> requested;
