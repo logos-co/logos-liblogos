@@ -78,12 +78,18 @@ typedef enum {
     // As above, and additionally load every optional dependency that is
     // INSTALLED, ordered ahead of the module that names it.
     //
-    // Best effort in both directions that can go wrong: one that is not
-    // installed is skipped in silence, and one that IS installed but fails to
-    // load is logged and stepped over. Neither changes the return value —
-    // nothing requires these, which is what makes them optional. Use it to
-    // bring a module up alongside collaborators that happen to be present,
-    // without making its own startup contingent on them.
+    // Best effort in every direction that can go wrong: one that is not
+    // installed is skipped in silence, one that is installed but FAILS to load
+    // is logged and stepped over, and one whose OWN required dependencies are
+    // not all installed is left out entirely. None of the three changes the
+    // return value — nothing requires these, which is what makes them optional.
+    //
+    // TRANSITIVE, and admitted whole or not at all. An optional dependency
+    // brings its own required dependencies with it, and its own optional ones
+    // are considered in turn. A branch joins only if every module it REQUIRES
+    // is installed: half of one would just fail at load time for something
+    // nobody asked for. Use it to bring a module up alongside collaborators
+    // that happen to be present, without making its startup contingent on them.
     LOGOS_LOAD_REQUIRED_AND_OPTIONAL = 2,
 } LogosLoadDeps;
 

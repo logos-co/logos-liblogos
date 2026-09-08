@@ -93,24 +93,6 @@ namespace DependencyResolver {
                 }
             }
 
-            // Best effort: an optional dependency joins the closure only if it
-            // is INSTALLED. `isKnown` is the whole test, and the reason an
-            // unknown one is skipped here rather than queued is that the queue
-            // records anything unknown as `missing` — which would turn "not
-            // installed" into a resolution failure and undo the property this
-            // dependency kind exists for.
-            if (bestEffort) {
-                for (const std::string& optName : getOptionalDependencies(moduleName)) {
-                    if (optName.empty() || modulesToLoad.count(optName))
-                        continue;
-                    if (isKnown(optName)) {
-                        queue.push_back(optName);
-                    } else {
-                        spdlog::debug("Optional dependency '{}' of '{}' is not installed; skipping",
-                                      optName, moduleName);
-                    }
-                }
-            }
         }
 
         if (!out.missing.empty()) {
@@ -120,6 +102,65 @@ namespace DependencyResolver {
                 joined += out.missing[i];
             }
             spdlog::warn("Missing dependencies detected: {}", joined);
+        }
+
+        // Best effort runs as a SECOND pass, over the required closure above.
+        //
+        // Not inline in that walk, and this is the whole of the difference: a
+        // queued name that is not installed becomes `missing`, and `missing` is
+        // a hard failure. Expanding optional edges in the same queue therefore
+        // makes an optional dependency's own unsatisfiable subtree fail the
+        // load of the module that merely NAMED it — which is the property this
+        // dependency kind exists to prevent. Measured before it was fixed: with
+        // app -opt-> extra -req-> ghost(absent), loading `app` returned 0.
+        //
+        // So a branch is admitted only if it is WHOLLY satisfiable: every
+        // module in the optional dependency's own required closure is
+        // installed. If any is not, the branch is dropped entire — loading a
+        // module whose dependencies are missing would only fail later, noisily,
+        // for something nobody required.
+        //
+        // Fixed point, so an optional dependency of an optional dependency is
+        // reached on a later round.
+        if (bestEffort) {
+            bool grew = true;
+            while (grew) {
+                grew = false;
+                std::vector<std::string> frontier(modulesToLoad.begin(), modulesToLoad.end());
+                for (const std::string& holder : frontier) {
+                    for (const std::string& optName : getOptionalDependencies(holder)) {
+                        if (optName.empty() || modulesToLoad.count(optName))
+                            continue;
+
+                        // The candidate branch: `optName` and everything it
+                        // REQUIRES, gathered before anything is committed.
+                        std::unordered_set<std::string> branch;
+                        std::deque<std::string> probe{optName};
+                        bool satisfiable = true;
+                        while (!probe.empty() && satisfiable) {
+                            std::string n = probe.front();
+                            probe.pop_front();
+                            if (branch.count(n) || modulesToLoad.count(n))
+                                continue;
+                            if (!isKnown(n)) { satisfiable = false; break; }
+                            branch.insert(n);
+                            for (const std::string& d : getDependencies(n))
+                                if (!d.empty() && !branch.count(d) && !modulesToLoad.count(d))
+                                    probe.push_back(d);
+                        }
+
+                        if (!satisfiable) {
+                            spdlog::debug("Optional dependency '{}' of '{}' cannot be satisfied "
+                                          "(it or something it requires is not installed); skipping",
+                                          optName, holder);
+                            continue;
+                        }
+                        for (const std::string& n : branch)
+                            modulesToLoad.insert(n);
+                        grew = grew || !branch.empty();
+                    }
+                }
+            }
         }
 
         // Which of those are tolerable to fail: everything the REQUIRED edges

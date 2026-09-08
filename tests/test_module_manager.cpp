@@ -434,6 +434,25 @@ TEST_F(ModuleManagerTest, BestEffort_AFailingOptionalDependencyDoesNotFailTheLoa
         << "it really did fail — otherwise this test proves nothing";
 }
 
+TEST_F(ModuleManagerTest, BestEffort_AnOptionalDepWhoseOwnRequiredDepIsMissingIsNotFatal) {
+    // app -opt-> extra -req-> ghost(not installed).
+    // `extra` is unloadable, but `app` only NAMED it as optional. Nothing here
+    // may fail app's load — the resolver reports `ghost` as missing, and
+    // missing is what loadModuleWithDependencies treats as a hard failure.
+    logos_core_register_module("app", "/fake/app");
+    logos_core_register_module("extra", "/fake/extra");
+    const char* optApp[] = {"extra"};
+    logos_core_register_module_optional_dependencies("app", optApp, 1);
+    const char* depsExtra[] = {"ghost"};
+    logos_core_register_module_dependencies("extra", depsExtra, 1);
+    logos_core_mark_module_loaded("app");
+
+    EXPECT_EQ(logos_core_load_module("app", LOGOS_LOAD_REQUIRED_AND_OPTIONAL), 1)
+        << "an optional dependency that cannot be satisfied must be left out, "
+           "not turned into a resolution failure for the module naming it";
+    EXPECT_EQ(logos_core_is_module_loaded("app"), 1);
+}
+
 TEST_F(ModuleManagerTest, BestEffort_TheSameFailureIsStillFatalForARequiredDependency) {
     logos_core_register_module("app", "/fake/app");
     logos_core_register_module("extra", "/fake/extra");

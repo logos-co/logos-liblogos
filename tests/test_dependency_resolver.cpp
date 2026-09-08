@@ -500,6 +500,85 @@ TEST_F(DependencyResolverTest, BestEffort_StillBreaksCyclesRatherThanReportingTh
     EXPECT_LT(indexOf(v, "b"), indexOf(v, "a")) << "the hard edge decides the order";
 }
 
+// Transitive shape: what an optional dependency drags in behind it.
+TEST_F(DependencyResolverTest, BestEffort_PullsTheRequiredDepsOfAnOptionalDep) {
+    // app -opt-> extra -req-> helper
+    logos_core_register_module("app", "/app");
+    logos_core_register_module("extra", "/extra");
+    logos_core_register_module("helper", "/helper");
+    const char* optApp[] = {"extra"};
+    logos_core_register_module_optional_dependencies("app", optApp, 1);
+    const char* depsExtra[] = {"helper"};
+    logos_core_register_module_dependencies("extra", depsExtra, 1);
+
+    const char* names[] = {"app"};
+    char** result = logos_core_resolve_dependencies_best_effort(names, 1);
+    auto v = resolvedToVec(result);
+    freeResolved(result);
+
+    ASSERT_EQ(v.size(), 3u) << "an optional dep brings its own required deps";
+    EXPECT_LT(indexOf(v, "helper"), indexOf(v, "extra"));
+}
+
+TEST_F(DependencyResolverTest, BestEffort_ReachesAnOptionalDepOfAnOptionalDep) {
+    // app -opt-> extra -opt-> deeper. The second hop is only reachable after
+    // `extra` joins the set, so this is what the fixed-point loop is for.
+    logos_core_register_module("app", "/app");
+    logos_core_register_module("extra", "/extra");
+    logos_core_register_module("deeper", "/deeper");
+    const char* optApp[] = {"extra"};
+    logos_core_register_module_optional_dependencies("app", optApp, 1);
+    const char* optExtra[] = {"deeper"};
+    logos_core_register_module_optional_dependencies("extra", optExtra, 1);
+
+    const char* names[] = {"app"};
+    char** result = logos_core_resolve_dependencies_best_effort(names, 1);
+    auto v = resolvedToVec(result);
+    freeResolved(result);
+
+    EXPECT_EQ(v.size(), 3u) << "best effort is transitive through optional edges";
+    EXPECT_NE(indexOf(v, "deeper"), -1);
+}
+
+TEST_F(DependencyResolverTest, BestEffort_AnUnsatisfiableBranchIsDroppedWhole) {
+    // app -opt-> extra -req-> ghost(absent). `extra` is installed, but it
+    // cannot run, so admitting it would only produce a load that fails.
+    logos_core_register_module("app", "/app");
+    logos_core_register_module("extra", "/extra");
+    const char* optApp[] = {"extra"};
+    logos_core_register_module_optional_dependencies("app", optApp, 1);
+    const char* depsExtra[] = {"ghost"};
+    logos_core_register_module_dependencies("extra", depsExtra, 1);
+
+    const char* names[] = {"app"};
+    char** result = logos_core_resolve_dependencies_best_effort(names, 1);
+    auto v = resolvedToVec(result);
+    freeResolved(result);
+
+    ASSERT_EQ(v.size(), 1u) << "the whole branch goes, not just the missing leaf";
+    EXPECT_EQ(v[0], "app");
+}
+
+TEST_F(DependencyResolverTest, BestEffort_AnOptionalDepWithAMissingRequiredDepIsNotFatal) {
+    // app -opt-> extra -req-> ghost(absent). `extra` cannot be loaded, so it
+    // should be left out — but NOTHING here may fail the load of `app`, which
+    // merely named `extra` as optional.
+    logos_core_register_module("app", "/app");
+    logos_core_register_module("extra", "/extra");
+    const char* optApp[] = {"extra"};
+    logos_core_register_module_optional_dependencies("app", optApp, 1);
+    const char* depsExtra[] = {"ghost"};
+    logos_core_register_module_dependencies("extra", depsExtra, 1);
+
+    const char* names[] = {"app"};
+    char** result = logos_core_resolve_dependencies_best_effort(names, 1);
+    auto v = resolvedToVec(result);
+    freeResolved(result);
+
+    EXPECT_NE(indexOf(v, "app"), -1) << "app must still resolve";
+    EXPECT_EQ(indexOf(v, "ghost"), -1) << "an absent module is never in the order";
+}
+
 TEST_F(DependencyResolverTest, OptionalDependency_AbsentIsNotAFailure) {
     logos_core_register_module("a", "/a");
     const char* optA[] = {"never_installed"};
