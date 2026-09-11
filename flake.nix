@@ -25,7 +25,14 @@
     logos-container.url = "github:logos-co/logos-container";
     logos-module-loader.url = "github:logos-co/logos-module-loader";
     default-container.url = "github:logos-co/logos-container-subprocess";
+    # The default loader LINKS logos-protocol, and this process loads it, so a
+    # revision of its own means two of every function-local static in there.
+    # Only the protocol-carrying chain follows: the rest of its inputs are lock
+    # size, not correctness, and deep follows have broken this repo before.
     default-module-loader.url = "github:logos-co/logos-module-loader-qt";
+    default-module-loader.inputs.logos-protocol.follows = "logos-protocol";
+    default-module-loader.inputs.logos-cpp-sdk.follows = "logos-cpp-sdk";
+    default-module-loader.inputs.logos-qt-sdk.follows = "logos-qt-sdk";
     logos-package-manager.url = "github:logos-co/logos-package-manager";
   };
 
