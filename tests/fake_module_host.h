@@ -56,6 +56,9 @@ struct TmpDir {
 // `slow-ok` stalls a whole second before reporting. It is not a timeout to be
 // waited out: it is the window a test needs a second host to turn up inside,
 // wide enough that a loaded machine cannot close it.
+//
+// `pdeathsig-ok` arms PR_SET_PDEATHSIG before reporting, as logos_host_qt does
+// (Linux only: needs util-linux's setpriv).
 constexpr const char* kFakeHostScript = R"sh(#!/bin/sh
 path=""
 while [ $# -gt 0 ]; do
@@ -73,6 +76,7 @@ case "$(head -n 1 "$path" 2>/dev/null)" in
   report-ok)   mark report ; printf '%s\n' "@logos-load-status ok" ; exec sleep 300 ;;
   report-ok-then-die) mark report ; printf '%s\n' "@logos-load-status ok" ; exit 0 ;;
   slow-ok)     sleep 1 ; mark report ; printf '%s\n' "@logos-load-status ok" ; exec sleep 300 ;;
+  pdeathsig-ok) mark report ; exec setpriv --pdeathsig KILL sh -c 'printf "%s\n" "@logos-load-status ok"; exec sleep 300' ;;
   *)           exec sleep 300 ;;
 esac
 )sh";
