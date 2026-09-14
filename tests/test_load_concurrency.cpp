@@ -24,10 +24,13 @@
 #include "subprocess_manager.h"
 
 #include <atomic>
+#include <chrono>
 #include <memory>
 #include <string>
 #include <thread>
 #include <unordered_set>
+
+#include <signal.h>
 
 namespace {
 
@@ -138,6 +141,29 @@ TEST_F(LoadConcurrencyTest, SameModuleLoadsOnlyOnce) {
     EXPECT_TRUE(logos_core_is_module_loaded("solo"));
     EXPECT_EQ(spawnCount("solo"), 1);
 }
+
+#ifdef __linux__
+// The real host arms PR_SET_PDEATHSIG, which Linux sends when the THREAD that
+// spawned it exits, so a module loaded from a worker must outlive that worker.
+TEST_F(LoadConcurrencyTest, ModuleLoadedFromAnExitedThreadStaysLoaded) {
+    plantModule("orphan", "pdeathsig-ok");
+
+    std::thread loader([] {
+        EXPECT_EQ(logos_core_load_module("orphan", LOGOS_LOAD_MODULE_ONLY), 1)
+            << "the stand-in host needs setpriv (util-linux) on PATH";
+    });
+    loader.join();
+
+    // A host killed with its thread is reaped and unloaded within milliseconds.
+    std::this_thread::sleep_for(std::chrono::milliseconds(500));
+    EXPECT_TRUE(logos_core_is_module_loaded("orphan"))
+        << "the host died when the thread that loaded it exited:" << hostEventLog();
+    const auto pids = ModuleManager::getModuleProcessIds();
+    const auto it = pids.find("orphan");
+    ASSERT_NE(it, pids.end());
+    EXPECT_EQ(::kill(static_cast<pid_t>(it->second), 0), 0);
+}
+#endif
 
 }  // namespace
 

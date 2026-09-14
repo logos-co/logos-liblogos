@@ -214,7 +214,10 @@
           pluginExt = if pkgs.stdenv.isDarwin then "dylib" else "so";
         in {
           tests = pkgs.runCommand "logos-liblogos-tests" {
-            nativeBuildInputs = [ testsPkg ] ++ pkgs.lib.optionals pkgs.stdenv.isLinux [ pkgs.qt6.qtbase ];
+            nativeBuildInputs = [ testsPkg ] ++ pkgs.lib.optionals pkgs.stdenv.isLinux [
+              pkgs.qt6.qtbase
+              pkgs.util-linux   # setpriv, for the stand-in host that arms PR_SET_PDEATHSIG
+            ];
           } ''
             export QT_QPA_PLATFORM=offscreen
             ${pkgs.lib.optionalString pkgs.stdenv.isLinux ''
