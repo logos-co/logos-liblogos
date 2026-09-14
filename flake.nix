@@ -24,7 +24,7 @@
     process-stats.url = "github:logos-co/process-stats";
     logos-container.url = "github:logos-co/logos-container";
     logos-module-loader.url = "github:logos-co/logos-module-loader";
-    default-container.url = "github:logos-co/logos-container-subprocess/ef8c5d51838e1c01ad7d0abeee7e0dd37b52a22a";
+    default-container.url = "github:logos-co/logos-container-subprocess";
     # The default loader LINKS logos-protocol, and this process loads it, so a
     # revision of its own means two of every function-local static in there.
     # Only the protocol-carrying chain follows: the rest of its inputs are lock
