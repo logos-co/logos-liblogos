@@ -43,18 +43,15 @@
       forAllSystems = f: nixpkgs.lib.genAttrs systems (system: f {
         inherit system;
         pkgs = import nixpkgs { inherit system; };
-        logosSdk = logos-cpp-sdk.packages.${system}.default;
-        logosProtocolPkg = logos-protocol.packages.${system}.default;
-        logosQtSdk = logos-qt-sdk.packages.${system}.default;
-        logosQtHost = logos-plugin-qt.packages.${system}.logos-qt-host;
+        logosProtocolPkg = logos-protocol.packages.${system}.logos-protocol-plain;
         capabilityModule = logos-capability-module.packages.${system}.default;
         modulesStateModule = logos-modules-state-module.packages.${system}.default;
-        logosModule = logos-module.packages.${system}.default;
         processStats = process-stats.packages.${system}.default;
         logosContainer = logos-container.packages.${system}.default;
         logosModuleLoader = logos-module-loader.packages.${system}.default;
         defaultContainer = default-container.packages.${system}.default;
-        defaultModuleLoader = default-module-loader.packages.${system}.default;
+        defaultModuleLoader = default-module-loader.packages.${system}.logos-module-loader-qt-lib;
+        defaultModuleHosts = default-module-loader.packages.${system}.logos-module-loader-qt-bin;
         logosPackageManager = logos-package-manager.packages.${system}.lib;
         logosPackageManagerPortable = logos-package-manager.packages.${system}.lib-portable;
       });
@@ -81,24 +78,21 @@
             if system == "x86_64-windows"
             then logos-nix.lib.mkWindowsPkgs { buildSystem = windowsBuildSystem; }
             else import nixpkgs { inherit system; };
-          logosSdk = logos-cpp-sdk.packages.${system}.default;
-          logosProtocolPkg = logos-protocol.packages.${system}.default;
-          logosQtSdk = logos-qt-sdk.packages.${system}.default;
-          logosQtHost = logos-plugin-qt.packages.${system}.logos-qt-host;
+          logosProtocolPkg = logos-protocol.packages.${system}.logos-protocol-plain;
           capabilityModule = logos-capability-module.packages.${system}.default;
           modulesStateModule = logos-modules-state-module.packages.${system}.default;
-          logosModule = logos-module.packages.${system}.default;
           processStats = process-stats.packages.${system}.default;
           logosContainer = logos-container.packages.${system}.default;
           logosModuleLoader = logos-module-loader.packages.${system}.default;
           defaultContainer = default-container.packages.${system}.default;
-          defaultModuleLoader = default-module-loader.packages.${system}.default;
+          defaultModuleLoader = default-module-loader.packages.${system}.logos-module-loader-qt-lib;
+          defaultModuleHosts = default-module-loader.packages.${system}.logos-module-loader-qt-bin;
           logosPackageManager = logos-package-manager.packages.${system}.lib;
           logosPackageManagerPortable = logos-package-manager.packages.${system}.lib-portable;
         });
     in
     {
-      packages = forAllTargets ({ pkgs, system, logosSdk, logosProtocolPkg, logosQtSdk, logosQtHost, capabilityModule, modulesStateModule, logosModule, processStats, logosContainer, logosModuleLoader, defaultContainer, defaultModuleLoader, logosPackageManager, logosPackageManagerPortable }:
+      packages = forAllTargets ({ pkgs, system, logosProtocolPkg, capabilityModule, modulesStateModule, processStats, logosContainer, logosModuleLoader, defaultContainer, defaultModuleLoader, defaultModuleHosts, logosPackageManager, logosPackageManagerPortable }:
         let
           # The built-in default container + format-loader implementations — the
           # single place the default is chosen. Each is just the package; it
@@ -110,11 +104,11 @@
 
           # Common configuration (dev, default)
           common = import ./nix/default.nix {
-            inherit pkgs logosSdk logosProtocolPkg logosQtSdk logosQtHost logosModule processStats logosContainer logosModuleLoader logosPackageManager containerImpl formatLoaderImpl;
+            inherit pkgs logosProtocolPkg processStats logosContainer logosModuleLoader logosPackageManager containerImpl formatLoaderImpl;
           };
           # Common configuration (portable)
           commonPortable = import ./nix/default.nix {
-            inherit pkgs logosSdk logosProtocolPkg logosQtSdk logosQtHost logosModule processStats logosContainer logosModuleLoader containerImpl formatLoaderImpl;
+            inherit pkgs logosProtocolPkg processStats logosContainer logosModuleLoader containerImpl formatLoaderImpl;
             logosPackageManager = logosPackageManagerPortable;
             portableBuild = true;
           };
@@ -143,14 +137,14 @@
             common = commonPortable;
             portableBuild = true;
           };
-          bin = import ./nix/bin.nix { inherit pkgs common build lib modules formatLoaderImpl; };
-          include = import ./nix/include.nix { inherit pkgs common src logosSdk; inherit logosProtocolPkg logosQtSdk logosQtHost; };
+          bin = import ./nix/bin.nix { inherit pkgs common build lib modules; moduleHosts = defaultModuleHosts; };
+          include = import ./nix/include.nix { inherit pkgs common src logosProtocolPkg; };
           tests = import ./nix/tests.nix { inherit pkgs common build; };
 
           # Portable package components
           libPortable = import ./nix/lib.nix { inherit pkgs; common = commonPortable; build = buildPortable; };
-          binPortable = import ./nix/bin.nix { inherit pkgs formatLoaderImpl; common = commonPortable; build = buildPortable; lib = libPortable; modules = modulesPortable; };
-          includePortable = import ./nix/include.nix { inherit pkgs src logosSdk; inherit logosProtocolPkg logosQtSdk logosQtHost; common = commonPortable; };
+          binPortable = import ./nix/bin.nix { inherit pkgs; common = commonPortable; build = buildPortable; lib = libPortable; modules = modulesPortable; moduleHosts = defaultModuleHosts; };
+          includePortable = import ./nix/include.nix { inherit pkgs src logosProtocolPkg; common = commonPortable; };
 
           # Combined package (dev)
           #
@@ -162,11 +156,7 @@
           #     fatal error: nlohmann/json.hpp: No such file or directory
           # until it was set on the join too.
           #
-          # nlohmann is needed because this output re-exports the Qt host runtime
-          # headers, two of which (logos_provider_object.h, logos_qt_arg_decode.h)
-          # include <nlohmann/json.hpp>. Consumers going through
-          # find_package(logos-qt-host) get it transitively; consumers taking the
-          # include directory directly do not.
+          # nlohmann is used by the C++ side of the plain protocol headers.
           liblogos = pkgs.symlinkJoin {
             name = "logos-liblogos";
             paths = [ bin lib include ];
@@ -205,7 +195,7 @@
         }
       );
 
-      checks = forAllSystems ({ pkgs, system, defaultModuleLoader, ... }:
+      checks = forAllSystems ({ pkgs, system, defaultModuleHosts, ... }:
         let
           testsPkg = self.packages.${system}.logos-liblogos-tests;
           # Real Qt plugin used by RealPluginRegistryTest (TEST_PLUGIN env var).
@@ -215,28 +205,24 @@
         in {
           tests = pkgs.runCommand "logos-liblogos-tests" {
             nativeBuildInputs = [ testsPkg ] ++ pkgs.lib.optionals pkgs.stdenv.isLinux [
-              pkgs.qt6.qtbase
               pkgs.util-linux   # setpriv, for the stand-in host that arms PR_SET_PDEATHSIG
             ];
           } ''
-            export QT_QPA_PLATFORM=offscreen
-            ${pkgs.lib.optionalString pkgs.stdenv.isLinux ''
-              export QT_PLUGIN_PATH="${pkgs.qt6.qtbase}/${pkgs.qt6.qtbase.qtPluginPrefix}"
-            ''}
             export TEST_PLUGIN="${capabilityModulePkg}/lib/capability_module_plugin.${pluginExt}"
             # The only binaries in reach whose embedded metadata declares an
             # object-form dependency -- one carrying a version range, one whose
             # constraint is not a string (no shipped module declares either), so
             # they are what cover the production discovery -> gate path.
             # Staged into the tests package itself by tests/CMakeLists.txt.
-            export TEST_PLUGIN_DEP_RANGE="${testsPkg}/lib/dep_range_fixture_plugin.${pluginExt}"
-            export TEST_PLUGIN_DEP_MALFORMED="${testsPkg}/lib/dep_malformed_fixture_plugin.${pluginExt}"
+            export TEST_PLUGIN_DEP_RANGE="${testsPkg}/lib/dep_range_fixture_plugin.fixture"
+            export TEST_PLUGIN_DEP_MALFORMED="${testsPkg}/lib/dep_malformed_fixture_plugin.fixture"
             # Turns a missing fixture into a red run instead of a skip. A skip
             # renders as a pass, which would hand back the coverage hole.
             # The real module host, for RealHostLoadVerdictTest: the load-verdict
             # tests otherwise only prove the stand-in host is handled, and the
             # defect they cover is about what the REAL child does.
-            export TEST_REAL_HOST="${defaultModuleLoader}/bin/logos_host_qt"
+            export TEST_REAL_HOST="${defaultModuleHosts}/bin/logos_host_qt"
+            export LOGOS_HOST_PATH="$TEST_REAL_HOST"
             export LOGOS_REQUIRE_TEST_FIXTURES=1
             for f in "$TEST_PLUGIN_DEP_RANGE" "$TEST_PLUGIN_DEP_MALFORMED" "$TEST_REAL_HOST"; do
               if [ ! -f "$f" ]; then

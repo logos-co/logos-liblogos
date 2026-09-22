@@ -1,94 +1,14 @@
-set(CMAKE_AUTOMOC ON)
-
-set(_default_sdk_root "${CMAKE_CURRENT_SOURCE_DIR}/../vendor/logos-cpp-sdk")
-if(NOT DEFINED LOGOS_CPP_SDK_ROOT OR LOGOS_CPP_SDK_ROOT STREQUAL "")
-  set(LOGOS_CPP_SDK_ROOT "${_default_sdk_root}")
-endif()
-
-get_filename_component(LOGOS_CPP_SDK_ROOT "${LOGOS_CPP_SDK_ROOT}" ABSOLUTE)
-
-# The SDK stack since the Qt split: logos-protocol (transports + lp_* C
-# ABI), logos-qt-host (LogosAPI + provider glue — the Qt HOST RUNTIME this
-# library links), logos-cpp-sdk (Qt-free std headers). The `logos_sdk` alias
-# is kept so the rest of this file (and the host targets) stay unchanged;
-# it points at logos-qt-host, whose link interface chains logos-protocol
-# and its OpenSSL/Boost/nlohmann deps.
-#
-# The host runtime used to be COMPILED INTO logos-qt-sdk and reached here as
-# logos-qt-sdk::logos_qt_sdk. The code now lives in logos-plugin-qt, which
-# publishes it as logos-qt-host::logos_qt_host. logos-qt-sdk keeps only the
-# developer layer (the UI plugin context, the LpBridge/wire headers, the Qt
-# generator) — none of which this library compiles against — so the host
-# runtime is found DIRECTLY here rather than arriving as a transitive
-# dependency of find_package(logos-qt-sdk). This repo still consumes
-# logos-qt-sdk as a nix input, but only to re-export those developer headers
-# from nix/include.nix; nothing in this CMake build needs it.
+# liblogos is a Qt-free parent process. It links only the plain protocol C ABI;
+# logos_host_qt remains available as the compatibility child for Qt plugins.
 if(NOT DEFINED LOGOS_PROTOCOL_ROOT AND DEFINED ENV{LOGOS_PROTOCOL_ROOT})
   set(LOGOS_PROTOCOL_ROOT "$ENV{LOGOS_PROTOCOL_ROOT}")
 endif()
-if(NOT DEFINED LOGOS_QT_HOST_ROOT AND DEFINED ENV{LOGOS_QT_HOST_ROOT})
-  set(LOGOS_QT_HOST_ROOT "$ENV{LOGOS_QT_HOST_ROOT}")
-endif()
-
-if(EXISTS "${LOGOS_PROTOCOL_ROOT}/lib/cmake/logos-protocol"
-   AND EXISTS "${LOGOS_QT_HOST_ROOT}/lib/cmake/logos-qt-host")
+if(EXISTS "${LOGOS_PROTOCOL_ROOT}/lib/cmake/logos-protocol")
   message(STATUS "Using logos-protocol at ${LOGOS_PROTOCOL_ROOT}")
-  message(STATUS "Using logos-qt-host at ${LOGOS_QT_HOST_ROOT}")
   find_package(logos-protocol REQUIRED
     PATHS "${LOGOS_PROTOCOL_ROOT}/lib/cmake/logos-protocol" NO_DEFAULT_PATH)
-  find_package(logos-qt-host REQUIRED
-    PATHS "${LOGOS_QT_HOST_ROOT}/lib/cmake/logos-qt-host" NO_DEFAULT_PATH)
-  if(NOT TARGET logos_sdk)
-    add_library(logos_sdk INTERFACE IMPORTED)
-    # The SHARED Qt host runtime, not the static archive. This is the line that
-    # replaces the whole-archive + generated-.def block further down: it makes
-    # liblogos_core a CONSUMER of the runtime rather than its provider, so
-    # TokenManager / LogosAPIClient / LogosAPI each have exactly one definition
-    # in the process because there is exactly one library defining them.
-    #
-    # logos_qt_host_shared itself PUBLIC-links logos_protocol_shared, so the
-    # protocol half arrives transitively and correctly layered -- it is asserted
-    # in logos-plugin-qt by checks.shared-runtime-layering.
-    target_link_libraries(logos_sdk INTERFACE logos-qt-host::logos_qt_host_shared)
-  endif()
 else()
-  message(FATAL_ERROR "logos-protocol / logos-qt-host not found. Set "
-                      "LOGOS_PROTOCOL_ROOT and LOGOS_QT_HOST_ROOT to built packages.")
-endif()
-
-# Qt-free base SDK headers (logos_module_context.h etc.) — header-only.
-if(EXISTS "${LOGOS_CPP_SDK_ROOT}/lib/cmake/logos-cpp-sdk")
-  find_package(logos-cpp-sdk REQUIRED
-    PATHS "${LOGOS_CPP_SDK_ROOT}/lib/cmake/logos-cpp-sdk" NO_DEFAULT_PATH)
-  if(NOT TARGET logos_headers)
-    add_library(logos_headers INTERFACE IMPORTED)
-    target_link_libraries(logos_headers INTERFACE logos-cpp-sdk::logos_headers)
-  endif()
-  target_link_libraries(logos_sdk INTERFACE logos-cpp-sdk::logos_headers)
-endif()
-
-# Find logos-module library
-if(DEFINED LOGOS_MODULE_ROOT AND EXISTS "${LOGOS_MODULE_ROOT}/lib")
-  message(STATUS "Using logos-module at ${LOGOS_MODULE_ROOT}")
-  
-  find_library(LOGOS_MODULE_LIBRARY
-    NAMES logos_module
-    PATHS "${LOGOS_MODULE_ROOT}/lib"
-    NO_DEFAULT_PATH
-  )
-  
-  if(NOT LOGOS_MODULE_LIBRARY)
-    message(FATAL_ERROR "logos_module library not found in ${LOGOS_MODULE_ROOT}/lib")
-  endif()
-  
-  # Create an imported target for logos_module
-  add_library(logos_module STATIC IMPORTED)
-  set_target_properties(logos_module PROPERTIES
-    IMPORTED_LOCATION "${LOGOS_MODULE_LIBRARY}"
-    INTERFACE_INCLUDE_DIRECTORIES "${LOGOS_MODULE_ROOT}/include"
-  )
-else()
-  message(STATUS "LOGOS_MODULE_ROOT not set, logos-module will need to be provided")
+  message(FATAL_ERROR "logos-protocol not found. Set LOGOS_PROTOCOL_ROOT to the plain package.")
 endif()
 
 # Find process-stats library
@@ -220,43 +140,9 @@ target_compile_definitions(logos_core PRIVATE LOGOS_CORE_LIBRARY)
 # Do not reinstate it; if the C API ever stops being exported, the cause is a
 # missing LOGOS_CORE_EXPORT on a declaration, not a missing linker flag.
 #
-# The C API is not the whole story, and the rest of it is no longer solved here.
-#
-# Narrowing the export table to the C API left every in-process image with its
-# own statically linked copy of the shared C++ runtime -- and therefore its own
-# TokenManager singleton, so a capability token saved by the host was invisible
-# to the UI plugin and every cross-module call was refused. This file used to
-# close that gap by absorbing liblogos_protocol.a and liblogos_qt_host.a whole
-# (--whole-archive) and re-publishing their symbols through a generated .def, so
-# that liblogos_core became the single provider for types it does not own.
-#
-# It is not the provider any more. logos-protocol and logos-qt-host now ship
-# REAL SHARED LIBRARIES that own their own symbols -- liblogos_protocol exports
-# its table from a generated .def of its own (logos-protocol#65), and
-# liblogos_qt_host owns LogosAPI (logos-plugin-qt#22). liblogos_core links them
-# like any other dependency and IMPORTS the runtime instead of defining it.
-#
-# So this whole block is gone, along with cmake/gen-shared-exports.sh. What
-# replaces it is one line: logos_sdk carries logos_qt_host_shared rather than
-# the static archive, near the top of this file.
-#
-# WHAT DID NOT CHANGE is the invariant. The runtime must still exist exactly
-# once per process; it is now enforced by there being one shared library per
-# type rather than by one image absorbing everything. Consumers still empty
-# their static archives (that was logos-basecamp/cmake/LogosSharedFromDll.cmake,
-# deleted in logos-basecamp#348 and logos-logoscore-cli#98 once they linked the
-# shared libraries directly and had no second static copy left to suppress) so ld
-# cannot pull an archive member that would redefine an imported symbol, and
-# logos-basecamp/nix/symbol-gate.nix still asserts the result.
-#
-# OUT-OF-PROCESS consumers are deliberately unaffected: module plugins and
-# ui_qml backends keep linking the STATIC archive, because each runs in its own
-# process where its own copy is the CORRECT per-process singleton, and because a
-# .lgx records an empty nix closure and could not carry a shared library anyway.
-#
-# Full rationale, including why the consumer-side __declspec(dllimport) is the
-# load-bearing half rather than the export, lives in
-# logos-protocol/cpp/logos_shared_api.h.
+# liblogos_core links the Qt-free protocol runtime directly. Qt plugin loading
+# and the legacy Qt SDK live in logos_host_qt, a separate child executable, so
+# no shared Qt/SDK singleton needs to be exported from the parent library.
 
 # Portable build: selects portable LGX variants instead of dev variants
 option(LOGOS_PORTABLE_BUILD "Build for portable variant selection" OFF)
@@ -323,17 +209,14 @@ else()
   message(FATAL_ERROR "LOGOS_PACKAGE_MANAGER_ROOT not set or ${LOGOS_PACKAGE_MANAGER_ROOT}/lib does not exist")
 endif()
 
-# Link Qt libraries, SDK, module library, and package-manager library.
+# Link the Qt-free parent runtime and package-manager library.
 # The container/format-loader implementations are linked through the generic,
 # build-selected `LogosContainerImpl::impl` / `LogosFormatLoaderImpl::impl`
 # targets (each comes from a find_package config that carries its own deps);
 # `logos_container` is the shared contract. liblogos names no specific
 # implementation here.
 target_link_libraries(logos_core PUBLIC
-    Qt${QT_VERSION_MAJOR}::Core
-    Qt${QT_VERSION_MAJOR}::RemoteObjects
-    logos_sdk
-    logos_module
+    logos-protocol::logos_protocol_plain
     process_stats
     logos_container
     LogosContainerImpl::impl
@@ -350,16 +233,7 @@ target_include_directories(logos_core PRIVATE
     ${CMAKE_CURRENT_SOURCE_DIR}
     ${CMAKE_CURRENT_SOURCE_DIR}/logos_core
     ${CMAKE_CURRENT_SOURCE_DIR}/module_loaders
-    ${Qt${QT_VERSION_MAJOR}_INCLUDE_DIRS}
 )
-
-# Add logos_module include directory if available
-if(DEFINED LOGOS_MODULE_ROOT AND EXISTS "${LOGOS_MODULE_ROOT}/include")
-  target_include_directories(logos_core PRIVATE
-    ${LOGOS_MODULE_ROOT}/include
-    ${LOGOS_MODULE_ROOT}/include/module_lib
-  )
-endif()
 
 # Add process-stats include directory if available
 if(DEFINED PROCESS_STATS_ROOT AND EXISTS "${PROCESS_STATS_ROOT}/include")
@@ -367,28 +241,10 @@ if(DEFINED PROCESS_STATS_ROOT AND EXISTS "${PROCESS_STATS_ROOT}/include")
 endif()
 
 
-# Add SDK include directory if using built SDK
-if(EXISTS "${LOGOS_CPP_SDK_ROOT}/lib" AND EXISTS "${LOGOS_CPP_SDK_ROOT}/include")
-  target_include_directories(logos_core PRIVATE 
-    ${LOGOS_CPP_SDK_ROOT}/include
-    ${LOGOS_CPP_SDK_ROOT}/include/cpp
-    ${LOGOS_CPP_SDK_ROOT}/include/core
-  )
-else()
-  target_include_directories(logos_core PRIVATE ${LOGOS_CPP_SDK_ROOT}/cpp)
-endif()
-
 # Set RPATH settings for the library
 if(APPLE)
-    set(_qt_runtime_paths "@loader_path")
-    if(DEFINED Qt${QT_VERSION_MAJOR}_DIR)
-        get_filename_component(_qt_lib_dir "${Qt${QT_VERSION_MAJOR}_DIR}/../.." REALPATH)
-        list(APPEND _qt_runtime_paths "${_qt_lib_dir}")
-    endif()
-    list(REMOVE_DUPLICATES _qt_runtime_paths)
-
     set_target_properties(logos_core PROPERTIES
-        INSTALL_RPATH "${_qt_runtime_paths}"
+        INSTALL_RPATH "@loader_path"
         INSTALL_NAME_DIR "@rpath"
         BUILD_WITH_INSTALL_NAME_DIR TRUE
         BUILD_WITH_INSTALL_RPATH TRUE)

@@ -32,17 +32,20 @@ let
     # and still succeeds.
     shopt -s nullglob
     plugins=(${m.pkg}/lib/*.dylib ${m.pkg}/lib/*.so ${m.pkg}/lib/*.dll)
+    pluginFile=""
     for lib in "''${plugins[@]}"; do
       cp "$lib" $out/modules/${m.name}/
+      if [ -z "$pluginFile" ]; then
+        pluginFile="$(basename "$lib")"
+      fi
     done
 
-    # Determine the plugin filename that was copied
-    pluginFile=""
-    for f in $out/modules/${m.name}/*; do
-      if [ -f "$f" ]; then
-        pluginFile="$(basename "$f")"
-        break
-      fi
+    # Plain modules carry discovery metadata next to the native library. Keep
+    # the sidecar adjacent when assembling the built-in module directory; the
+    # Qt-free parent reads it without loading the module image.
+    sidecars=(${m.pkg}/lib/*.metadata.json)
+    for metadata in "''${sidecars[@]}"; do
+      cp "$metadata" $out/modules/${m.name}/
     done
 
     if [ -z "$pluginFile" ]; then
