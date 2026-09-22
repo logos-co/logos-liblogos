@@ -4,6 +4,7 @@
 let
   # Extract the package-manager root from CMake flags
   logosPackageManagerRoot = common.env.LOGOS_PACKAGE_MANAGER_ROOT;
+  logosProtocolRoot = common.env.LOGOS_PROTOCOL_ROOT;
 in
 pkgs.runCommand "${common.pname}-lib-${common.version}"
   {
@@ -15,6 +16,18 @@ pkgs.runCommand "${common.pname}-lib-${common.version}"
     if [ -d ${build}/lib ]; then
       cp -r ${build}/lib/* $out/lib/
     fi
+
+    # liblogos and its embedding executable must resolve the SAME plain
+    # protocol image so token registries and provider credentials are shared.
+    # Carry that runtime beside liblogos_core on every platform.
+    for f in ${logosProtocolRoot}/lib/liblogos_protocol_plain.so* \
+             ${logosProtocolRoot}/lib/liblogos_protocol_plain.dylib \
+             ${logosProtocolRoot}/lib/liblogos_protocol_plain.dll* \
+             ${logosProtocolRoot}/bin/liblogos_protocol_plain.dll; do
+      if [ -f "$f" ]; then
+        cp -L "$f" $out/lib/
+      fi
+    done
 
     # Fail loudly rather than shipping a lib output with no RUNTIME artifact.
     # Verified failure this guards against: drop `RUNTIME DESTINATION lib` from
