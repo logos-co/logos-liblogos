@@ -1,9 +1,11 @@
 #include "logos_core.h"
 #include "logging/logos_log.h"
 #include "module_manager.h"
-#include <logos_instance.h>
 #include <process_stats/process_stats.h>
-#include "token_manager.h"
+#include "logos_protocol.h"
+#include <atomic>
+#include <chrono>
+#include <random>
 #include <cstdlib>
 #include <cstring>
 #include <string>
@@ -20,10 +22,27 @@ void logos_core_add_modules_dir(const char* modules_dir) {
     ModuleManager::addModulesDir(modules_dir);
 }
 
+namespace {
+void ensureInstanceId() {
+    if (const char* current = std::getenv("LOGOS_INSTANCE_ID"); current && *current)
+        return;
+    std::random_device random;
+    const auto ticks = static_cast<unsigned long long>(
+        std::chrono::steady_clock::now().time_since_epoch().count());
+    const std::string value = std::to_string(ticks ^ random());
+#ifdef _WIN32
+    _putenv_s("LOGOS_INSTANCE_ID", value.c_str());
+#else
+    ::setenv("LOGOS_INSTANCE_ID", value.c_str(), 1);
+#endif
+}
+}
+
 void logos_core_start() {
     logos::initLogging();
-    LogosInstance::id();
-    // Before anything dials: this thread becomes the owner of every client.
+    // Hosts inherit this value and therefore publish at the endpoint the
+    // parent-side plain clients derive independently.
+    ensureInstanceId();
     ModuleManager::anchorCoreApi();
     ModuleManager::discoverInstalledModules();
     ModuleManager::initializeCapabilityModule();
@@ -108,7 +127,9 @@ char* logos_core_process_module(const char* module_path) {
 char* logos_core_get_token(const char* key) {
     if (!key) { logos::logger("core").critical("logos_core_get_token: key must not be null"); std::abort(); }
 
-    std::string token = TokenManager::instance().getToken(std::string(key));
+    char* stored = lp_token_get(key);
+    std::string token = stored ? stored : "";
+    lp_string_free(stored);
     if (token.empty()) return nullptr;
 
     char* result = new char[token.size() + 1];

@@ -26,9 +26,12 @@ bool isValidModuleName(const std::string& name);
 
 struct ModuleInfo {
     std::string path;
-    // The module's full embedded metadata as a compact JSON string, read once
-    // at discovery time via ModuleLib::LogosModule (no plugin instantiation).
-    // Empty when the plugin exposes no readable metadata.
+    // Loader format selected from trusted build metadata. Native C ABI modules
+    // use "native-cdylib"; current Qt plugins remain "qt-plugin".
+    std::string format = "qt-plugin";
+    // The module's full metadata as compact JSON, read once from its adjacent
+    // sidecar. Current Qt plugins without a sidecar are inspected by
+    // logos_host_qt in a short-lived compatibility subprocess.
     std::string metadataJson;
     // The module's own version, from that embedded metadata. Empty when the
     // plugin carries no version stamp; a dependent's range is evaluated
@@ -82,6 +85,8 @@ public:
 
     bool isKnown(const std::string& name) const;
     std::string modulePath(const std::string& name) const;
+    std::string moduleFormat(const std::string& name) const;
+    nlohmann::json moduleMetadata(const std::string& name) const;
     // A JSON array describing every known module: one object per module with
     // its name, path, loaded flag, load timestamp (loaded_at, unix seconds; 0
     // when not loaded), direct dependencies, direct dependents, and full

@@ -39,10 +39,7 @@ pkgs.stdenv.mkDerivation {
     # Reconfigure to generate test targets
     cmake -B build -S ${build.src} \
       -GNinja \
-      -DLOGOS_CPP_SDK_ROOT=${common.env.LOGOS_CPP_SDK_ROOT} \
       -DLOGOS_PROTOCOL_ROOT=${common.env.LOGOS_PROTOCOL_ROOT} \
-      -DLOGOS_QT_HOST_ROOT=${common.env.LOGOS_QT_HOST_ROOT} \
-      -DLOGOS_MODULE_ROOT=${common.env.LOGOS_MODULE_ROOT} \
       -DPROCESS_STATS_ROOT=${common.env.PROCESS_STATS_ROOT} \
       -DLOGOS_CONTAINER_ROOT=${common.env.LOGOS_CONTAINER_ROOT} \
       -DLOGOS_MODULE_LOADER_ROOT=${common.env.LOGOS_MODULE_LOADER_ROOT} \
@@ -84,7 +81,7 @@ pkgs.stdenv.mkDerivation {
     # were added to close.
     for _name in dep_range_fixture_plugin dep_malformed_fixture_plugin; do
       _fixture=""
-      for cand in $out/lib/$_name.so $out/lib/$_name.dylib; do
+      for cand in $out/lib/$_name.fixture; do
         [ -f "$cand" ] && _fixture="$cand"
       done
       if [ -z "$_fixture" ]; then
@@ -112,13 +109,10 @@ pkgs.stdenv.mkDerivation {
       # changed nothing and the suite still died with
       #   error while loading shared libraries: liblogos_qt_host.so
       # while the same commit passed on macOS, which does not go through here.
-      # OpenSSL (libssl, libcrypto) is needed because the SDK's plain-C++ TLS
-      # transport links it transitively — without this the wrapped binary
-      # dies with `libssl.so.3: cannot open shared object`.
-      _rpath="$out/lib:${common.env.LOGOS_PROTOCOL_ROOT}/lib:${common.env.LOGOS_QT_HOST_ROOT}/lib:${pkgs.boost}/lib:${common.env.LOGOS_PACKAGE_MANAGER_ROOT}/lib:${pkgs.gtest}/lib:${pkgs.qt6.qtbase}/lib:${pkgs.qt6.qtremoteobjects}/lib:${pkgs.spdlog}/lib:${pkgs.fmt}/lib:${pkgs.openssl.out}/lib:${pkgs.stdenv.cc.cc.lib}/lib"
+      _rpath="$out/lib:${common.env.LOGOS_PROTOCOL_ROOT}/lib:${pkgs.boost}/lib:${common.env.LOGOS_PACKAGE_MANAGER_ROOT}/lib:${pkgs.gtest}/lib:${pkgs.spdlog}/lib:${pkgs.fmt}/lib:${pkgs.stdenv.cc.cc.lib}/lib"
       patchelf --set-rpath "$_rpath" $out/bin/logos_core_tests || true
       # Fix RPATH on liblogos_core.so so it can find its transitive deps (e.g. libboost_process, spdlog, fmt, libssl)
-      _rpath_lib="$out/lib:${common.env.LOGOS_PROTOCOL_ROOT}/lib:${common.env.LOGOS_QT_HOST_ROOT}/lib:${pkgs.boost}/lib:${common.env.LOGOS_PACKAGE_MANAGER_ROOT}/lib:${pkgs.qt6.qtbase}/lib:${pkgs.qt6.qtremoteobjects}/lib:${pkgs.spdlog}/lib:${pkgs.fmt}/lib:${pkgs.openssl.out}/lib:${pkgs.stdenv.cc.cc.lib}/lib"
+      _rpath_lib="$out/lib:${common.env.LOGOS_PROTOCOL_ROOT}/lib:${pkgs.boost}/lib:${common.env.LOGOS_PACKAGE_MANAGER_ROOT}/lib:${pkgs.spdlog}/lib:${pkgs.fmt}/lib:${pkgs.stdenv.cc.cc.lib}/lib"
       patchelf --set-rpath "$_rpath_lib" $out/lib/liblogos_core.so || true
     ''}
     
