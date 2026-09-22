@@ -5,9 +5,9 @@
 desktop app) builds on. This doc-test exercises **this** liblogos commit
 end-to-end through the headless `logoscore` runtime:
 
-1. Build the `logoscore` CLI, **overriding its `logos-liblogos` input with the
-   commit under test and its `logos-protocol` input with the plain-transport
-   branch** — so the runtime has the protocol package required by this commit.
+1. Build the plain `logoscore` CLI, **overriding its `logos-liblogos` input
+   with the commit under test and its `logos-protocol` input with the
+   plain-transport branch** — so the runtime matches this commit.
 2. Build the `lgpm` local package manager.
 3. Build [`test_basic_module`](https://github.com/logos-co/logos-test-modules)
    as an `.lgx` package straight from its own flake, and install it into a
@@ -46,24 +46,24 @@ Verify: `nix flake --help >/dev/null 2>&1 && echo "Flakes enabled"`
 
 ## Step 1: Build logoscore against this liblogos
 
-Build the `logoscore` CLI from its published flake, but **override its
+Build the plain `logoscore` CLI feature branch, but **override its
 `logos-liblogos` input** so it links against the commit under test rather
-than the latest release. Override its protocol input too: the CLI's
-master lock predates `logos-protocol-plain`. The result is symlinked to
-`./logos/`.
+than the latest release. Override its protocol input too so the entire
+runtime uses the matching plain-transport implementation. The result is
+symlinked to `./logos/`.
 
 > The override URL is what pins liblogos to a specific commit: the doc-test
 > runner expands a release placeholder on it to a concrete ref. Locally that
 > is this checkout's `HEAD` (see `run.sh`); in CI it is the commit being
 > tested. With no pin it falls back to latest `master`.
 
-> The CLI itself tracks `master`. The protocol override supplies the plain
-> runtime required by this liblogos commit until the transport branch lands.
+> The CLI feature branch is used until the Qt-free runtime lands on
+> `master`; the two overrides select this liblogos commit and its protocol.
 
 ### 1.1 Build the CLI with the liblogos override
 
 ```bash
-nix build 'github:logos-co/logos-logoscore-cli' \
+nix build 'github:logos-co/logos-logoscore-cli/codex/qt-free-logoscore' \
   --override-input logos-liblogos 'github:logos-co/logos-liblogos' \
   --override-input logos-protocol 'github:logos-co/logos-protocol/codex/qt-remote-plain' \
   --out-link ./logos
