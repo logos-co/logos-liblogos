@@ -9,8 +9,8 @@ intro: |
   end-to-end through the headless `logoscore` runtime:
 
   1. Build the `logoscore` CLI, **overriding its `logos-liblogos` input with the
-     commit under test** — so the runtime you exercise is built against the code
-     in this repository, not the latest published release.
+     commit under test and its `logos-protocol` input with the plain-transport
+     branch** — so the runtime has the protocol package required by this commit.
   2. Build the `lgpm` local package manager.
   3. Build [`test_basic_module`](https://github.com/logos-co/logos-test-modules)
      as an `.lgx` package straight from its own flake, and install it into a
@@ -49,25 +49,24 @@ sections:
     text: |
       Build the `logoscore` CLI from its published flake, but **override its
       `logos-liblogos` input** so it links against the commit under test rather
-      than the latest release. The result is symlinked to `./logos/`.
+      than the latest release. Override its protocol input too: the CLI's
+      master lock predates `logos-protocol-plain`. The result is symlinked to
+      `./logos/`.
 
       > The override URL is what pins liblogos to a specific commit: the doc-test
       > runner expands a release placeholder on it to a concrete ref. Locally that
       > is this checkout's `HEAD` (see `run.sh`); in CI it is the commit being
       > tested. With no pin it falls back to latest `master`.
 
-      > The CLI itself tracks `master`, deliberately. Only `logos-liblogos` is
-      > overridden, so everything else in the closure must be a revision that
-      > liblogos' current runtime pairs with — the shared-runtime split landed as
-      > one pin set across logos-protocol, logos-plugin-qt, logos-liblogos and
-      > this CLI, and an older CLI rev pinned here silently reintroduces a second
-      > copy of the runtime in the process.
+      > The CLI itself tracks `master`. The protocol override supplies the plain
+      > runtime required by this liblogos commit until the transport branch lands.
     steps:
       - title: "Build the CLI with the liblogos override"
-        run: "nix build 'github:logos-co/logos-logoscore-cli' --override-input logos-liblogos 'github:logos-co/logos-liblogos{release}' --out-link ./logos"
+        run: "nix build 'github:logos-co/logos-logoscore-cli' --override-input logos-liblogos 'github:logos-co/logos-liblogos{release}' --override-input logos-protocol 'github:logos-co/logos-protocol/codex/qt-remote-plain' --out-link ./logos"
         code_block: |
           nix build 'github:logos-co/logos-logoscore-cli' \
             --override-input logos-liblogos 'github:logos-co/logos-liblogos' \
+            --override-input logos-protocol 'github:logos-co/logos-protocol/codex/qt-remote-plain' \
             --out-link ./logos
         check_file: "logos/bin/logoscore"
         post_text: |
