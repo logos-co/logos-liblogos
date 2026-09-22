@@ -31,6 +31,7 @@
     # size, not correctness, and deep follows have broken this repo before.
     default-module-loader.url = "github:logos-co/logos-module-loader-qt/codex/qt-remote-plain-loader-qt";
     default-module-loader.inputs.logos-protocol.follows = "logos-protocol";
+    default-module-loader.inputs.logos-plugin-qt.follows = "logos-plugin-qt";
     default-module-loader.inputs.logos-cpp-sdk.follows = "logos-cpp-sdk";
     default-module-loader.inputs.logos-qt-sdk.follows = "logos-qt-sdk";
     logos-package-manager.url = "github:logos-co/logos-package-manager";

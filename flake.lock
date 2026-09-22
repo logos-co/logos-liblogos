@@ -33,6 +33,9 @@
         "logos-module": "logos-module",
         "logos-module-loader": "logos-module-loader",
         "logos-nix": "logos-nix_5",
+        "logos-plugin-qt": [
+          "logos-plugin-qt"
+        ],
         "logos-protocol": [
           "logos-protocol"
         ],
