@@ -6,7 +6,7 @@
     nixpkgs.follows = "logos-nix/nixpkgs";
     logos-cpp-sdk.url = "github:logos-co/logos-cpp-sdk";
     logos-cpp-sdk.inputs.logos-protocol.follows = "logos-protocol";
-    logos-protocol.url = "github:logos-co/logos-protocol";
+    logos-protocol.url = "github:logos-co/logos-protocol/codex/qt-remote-plain";
     # ONE logos-protocol, and ONE logos-qt-host, in the closure. qt-host bakes
     # sizeof(LogosAPIClient) into its own `operator new` while logos-protocol
     # defines the constructor, so a second protocol here is an 8-byte heap
@@ -16,7 +16,7 @@
     logos-qt-sdk.url = "github:logos-co/logos-qt-sdk";
     logos-qt-sdk.inputs.logos-protocol.follows = "logos-protocol";
     logos-qt-sdk.inputs.logos-plugin-qt.follows = "logos-plugin-qt";
-    logos-plugin-qt.url = "github:logos-co/logos-plugin-qt";
+    logos-plugin-qt.url = "github:logos-co/logos-plugin-qt/codex/qt-remote-plain-plugin";
     logos-plugin-qt.inputs.logos-protocol.follows = "logos-protocol";
     logos-capability-module.url = "github:logos-co/logos-capability-module";
     logos-modules-state-module.url = "github:logos-co/logos-modules-state-module";
@@ -29,7 +29,7 @@
     # revision of its own means two of every function-local static in there.
     # Only the protocol-carrying chain follows: the rest of its inputs are lock
     # size, not correctness, and deep follows have broken this repo before.
-    default-module-loader.url = "github:logos-co/logos-module-loader-qt";
+    default-module-loader.url = "github:logos-co/logos-module-loader-qt/codex/qt-remote-plain-loader-qt";
     default-module-loader.inputs.logos-protocol.follows = "logos-protocol";
     default-module-loader.inputs.logos-cpp-sdk.follows = "logos-cpp-sdk";
     default-module-loader.inputs.logos-qt-sdk.follows = "logos-qt-sdk";
