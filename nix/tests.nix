@@ -109,10 +109,10 @@ pkgs.stdenv.mkDerivation {
       # changed nothing and the suite still died with
       #   error while loading shared libraries: liblogos_qt_host.so
       # while the same commit passed on macOS, which does not go through here.
-      _rpath="$out/lib:${common.env.LOGOS_PROTOCOL_ROOT}/lib:${pkgs.boost}/lib:${common.env.LOGOS_PACKAGE_MANAGER_ROOT}/lib:${pkgs.gtest}/lib:${pkgs.spdlog}/lib:${pkgs.fmt}/lib:${pkgs.stdenv.cc.cc.lib}/lib"
+      _rpath="$out/lib:${common.env.LOGOS_PROTOCOL_ROOT}/lib:${pkgs.boost}/lib:${pkgs.openssl.out}/lib:${common.env.LOGOS_PACKAGE_MANAGER_ROOT}/lib:${pkgs.gtest}/lib:${pkgs.spdlog}/lib:${pkgs.fmt}/lib:${pkgs.stdenv.cc.cc.lib}/lib"
       patchelf --set-rpath "$_rpath" $out/bin/logos_core_tests || true
       # Fix RPATH on liblogos_core.so so it can find its transitive deps (e.g. libboost_process, spdlog, fmt, libssl)
-      _rpath_lib="$out/lib:${common.env.LOGOS_PROTOCOL_ROOT}/lib:${pkgs.boost}/lib:${common.env.LOGOS_PACKAGE_MANAGER_ROOT}/lib:${pkgs.spdlog}/lib:${pkgs.fmt}/lib:${pkgs.stdenv.cc.cc.lib}/lib"
+      _rpath_lib="$out/lib:${common.env.LOGOS_PROTOCOL_ROOT}/lib:${pkgs.boost}/lib:${pkgs.openssl.out}/lib:${common.env.LOGOS_PACKAGE_MANAGER_ROOT}/lib:${pkgs.spdlog}/lib:${pkgs.fmt}/lib:${pkgs.stdenv.cc.cc.lib}/lib"
       patchelf --set-rpath "$_rpath_lib" $out/lib/liblogos_core.so || true
     ''}
     
