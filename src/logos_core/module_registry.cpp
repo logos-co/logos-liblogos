@@ -1,3 +1,9 @@
+#ifdef _WIN32
+// Boost.Process uses Boost.Asio, which requires WinSock2 to be selected before
+// protocol headers transitively include windows.h.
+#include <winsock2.h>
+#endif
+
 #include "module_registry.h"
 #include "module_state_observer.h"
 #include <spdlog/spdlog.h>
@@ -13,7 +19,11 @@
 #include <sstream>
 #include <unordered_set>
 #include <boost/dll/runtime_symbol_info.hpp>
+#if __has_include(<boost/process/v1.hpp>)
+#include <boost/process/v1.hpp>
+#else
 #include <boost/process.hpp>
+#endif
 #include <package_manager_lib.h>
 
 namespace logos {
@@ -94,7 +104,11 @@ std::optional<nlohmann::json> inspectQtMetadata(
 {
     const auto host = qtHostPath(moduleDirs);
     if (!host) return std::nullopt;
+#if __has_include(<boost/process/v1.hpp>)
+    namespace bp = boost::process::v1;
+#else
     namespace bp = boost::process;
+#endif
     try {
         bp::ipstream output;
         bp::child child(host->string(), "--inspect", modulePath,
