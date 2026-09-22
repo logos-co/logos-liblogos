@@ -216,7 +216,7 @@ endif()
 # `logos_container` is the shared contract. liblogos names no specific
 # implementation here.
 target_link_libraries(logos_core PUBLIC
-    logos-protocol::logos_protocol_plain
+    logos-protocol::logos_protocol_plain_shared
     process_stats
     logos_container
     LogosContainerImpl::impl
