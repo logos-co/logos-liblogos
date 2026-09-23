@@ -45,6 +45,10 @@ bool isValidModuleName(const std::string& name) {
     }
     if (name == "." || name == "..")
         return false;
+    // Core's own key in its token store: a module loaded under it would file
+    // its token over core's credential.
+    if (name == "core")
+        return false;
     return true;
 }
 
