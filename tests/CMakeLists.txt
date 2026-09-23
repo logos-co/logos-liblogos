@@ -19,6 +19,7 @@ add_executable(logos_core_tests
     test_load_concurrency.cpp
     test_modules_state_feed.cpp
     test_instance_persistence.cpp
+    test_core_outbound.cpp
 )
 
 # Imported container/loader targets the tests drive via SubprocessManager /
