@@ -6,6 +6,8 @@
 #include <atomic>
 #include <chrono>
 #include <random>
+#include <cstdint>
+#include <cstdio>
 #include <cstdlib>
 #include <cstring>
 #include <string>
@@ -26,10 +28,15 @@ namespace {
 void ensureInstanceId() {
     if (const char* current = std::getenv("LOGOS_INSTANCE_ID"); current && *current)
         return;
+    // Twelve hex digits, as the Qt runtime's LogosInstance::id() made them:
+    // the id is in every socket path, and macOS caps those at 104 bytes.
     std::random_device random;
-    const auto ticks = static_cast<unsigned long long>(
-        std::chrono::steady_clock::now().time_since_epoch().count());
-    const std::string value = std::to_string(ticks ^ random());
+    const std::uint64_t bits = (static_cast<std::uint64_t>(random()) << 32 | random())
+        ^ static_cast<std::uint64_t>(std::chrono::steady_clock::now().time_since_epoch().count());
+    char text[13];
+    std::snprintf(text, sizeof text, "%012llx",
+                  static_cast<unsigned long long>(bits & 0xffffffffffffULL));
+    const std::string value = text;
 #ifdef _WIN32
     _putenv_s("LOGOS_INSTANCE_ID", value.c_str());
 #else
