@@ -1948,3 +1948,51 @@ TEST_F(DenyByDefaultFlagTest, FlagIsReversible) {
     ModuleManager::setAccessPolicy("");
     EXPECT_TRUE(derived("target").empty());
 }
+
+// Detector: module metadata is untrusted. A field of the wrong type used to
+// escape nlohmann's typed value() as type_error.302 through
+// logos_core_process_module and abort the runtime.
+class MalformedMetadataTest : public ::testing::Test {
+protected:
+    TmpDir dir;
+
+    void SetUp() override { clearModuleState(); }
+    void TearDown() override { clearModuleState(); }
+
+    std::string install(const std::string& stem, const std::string& metadata) {
+        const fs::path binary = dir.path / (stem + ".so");
+        std::ofstream(binary) << "not a real module";
+        std::ofstream(dir.path / (stem + ".metadata.json")) << metadata;
+        return binary.string();
+    }
+
+    std::string process(const std::string& path) {
+        char* name = nullptr;
+        EXPECT_NO_THROW(name = logos_core_process_module(path.c_str()));
+        if (!name) return {};
+        std::string registered(name);
+        delete[] name;
+        return registered;
+    }
+};
+
+TEST_F(MalformedMetadataTest, WrongTypedFieldsAreRefusedNotFatal) {
+    EXPECT_EQ(process(install("numeric_name", R"({"name":5})")), "");
+    EXPECT_EQ(process(install("numeric_transport",
+                              R"({"name":"numeric_transport","transport":7})")), "");
+    EXPECT_EQ(process(install("unknown_transport",
+                              R"({"name":"unknown_transport","transport":"carrier_pigeon"})")), "");
+    // The Qt-era reader treated a non-string version as empty; keep that.
+    EXPECT_EQ(process(install("numeric_version",
+                              R"({"name":"numeric_version","version":1.0})")), "numeric_version");
+}
+
+TEST_F(MalformedMetadataTest, NonStringSignerIsAMalformedConstraint) {
+    const std::string name = process(install("signed_fixture",
+        R"({"name":"signed_fixture","dependencies":[{"name":"dep","signer":7},"",{"name":""}]})"));
+    ASSERT_EQ(name, "signed_fixture");
+    const auto entries = ModuleManager::registry().moduleDependencyEntries(name);
+    ASSERT_EQ(entries.size(), 1u) << "empty dependency names must not become edges";
+    EXPECT_EQ(entries[0].name, "dep");
+    EXPECT_TRUE(entries[0].malformedConstraint);
+}
