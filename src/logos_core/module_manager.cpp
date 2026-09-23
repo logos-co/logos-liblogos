@@ -26,6 +26,7 @@
 #include <optional>
 #include <unordered_map>
 #include <unordered_set>
+#include <map>
 #include <boost/uuid/uuid.hpp>
 #include <boost/uuid/uuid_generators.hpp>
 #include <boost/uuid/uuid_io.hpp>
@@ -44,6 +45,36 @@ namespace {
     ModuleRegistry& registryInstance() {
         static ModuleRegistry instance;
         return instance;
+    }
+
+    struct TokenListener {
+        void (*callback)(const char*, const char*, void*) = nullptr;
+        void* userData = nullptr;
+    };
+
+    std::mutex& tokenListenerMutex() {
+        static std::mutex mutex;
+        return mutex;
+    }
+
+    TokenListener& tokenListener() {
+        static TokenListener listener;
+        return listener;
+    }
+
+    // What the listener replays when installed.
+    std::map<std::string, std::string>& savedTokens() {
+        static std::map<std::string, std::string> tokens;
+        return tokens;
+    }
+
+    // Under one lock with the listener's replay, so it never sees a stale token.
+    void saveCoreToken(const std::string& key, const std::string& token) {
+        std::lock_guard<std::mutex> lock(tokenListenerMutex());
+        TokenManager::instance().saveToken(key, token);
+        savedTokens()[key] = token;
+        const TokenListener& listener = tokenListener();
+        if (listener.callback) listener.callback(key.c_str(), token.c_str(), listener.userData);
     }
 
     // Load locks, in the order they must be taken: fleet -> module ->
@@ -983,7 +1014,7 @@ namespace {
             return false;
         }
 
-        TokenManager::instance().saveToken(name, authToken);
+        saveCoreToken(name, authToken);
 
         notifyCapabilityModule(name, authToken);
 
@@ -1460,6 +1491,17 @@ namespace ModuleManager {
         }
         // Same rationale again: the next run may have a host that does report.
         hostStaysSilent().store(false);
+        {
+            std::lock_guard<std::mutex> lock(tokenListenerMutex());
+            savedTokens().clear();
+        }
+    }
+
+    void setTokenListener(void (*listener)(const char*, const char*, void*), void* userData) {
+        std::lock_guard<std::mutex> lock(tokenListenerMutex());
+        tokenListener() = {listener, userData};
+        if (!listener) return;
+        for (const auto& [key, token] : savedTokens()) listener(key.c_str(), token.c_str(), userData);
     }
 
     char** getLoadedModulesCStr() {
