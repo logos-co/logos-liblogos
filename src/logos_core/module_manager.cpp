@@ -22,6 +22,7 @@
 #include <unordered_map>
 #include <unordered_set>
 #include <filesystem>
+#include <map>
 #include <boost/uuid/uuid.hpp>
 #include <boost/uuid/uuid_generators.hpp>
 #include <boost/uuid/uuid_io.hpp>
@@ -33,6 +34,37 @@ namespace {
     ModuleRegistry& registryInstance() {
         static ModuleRegistry instance;
         return instance;
+    }
+
+    struct TokenListener {
+        void (*callback)(const char*, const char*, void*) = nullptr;
+        void* userData = nullptr;
+    };
+
+    std::mutex& tokenListenerMutex() {
+        static std::mutex mutex;
+        return mutex;
+    }
+
+    TokenListener& tokenListener() {
+        static TokenListener listener;
+        return listener;
+    }
+
+    // What the listener replays when installed.
+    std::map<std::string, std::string>& savedTokens() {
+        static std::map<std::string, std::string> tokens;
+        return tokens;
+    }
+
+    // Under one lock with the listener's replay, so it never sees a stale token.
+    bool saveCoreToken(const std::string& key, const std::string& token) {
+        std::lock_guard<std::mutex> lock(tokenListenerMutex());
+        if (lp_token_save(key.c_str(), token.c_str()) != LP_OK) return false;
+        savedTokens()[key] = token;
+        const TokenListener& listener = tokenListener();
+        if (listener.callback) listener.callback(key.c_str(), token.c_str(), listener.userData);
+        return true;
     }
 
     // Load locks, in the order they must be taken: fleet -> module ->
@@ -1008,7 +1040,7 @@ namespace {
             return false;
         }
 
-        if (lp_token_save(name.c_str(), authToken.c_str()) != LP_OK) {
+        if (!saveCoreToken(name, authToken)) {
             spdlog::error("Failed to save auth token for {}", name);
             return false;
         }
@@ -1497,6 +1529,17 @@ namespace ModuleManager {
         }
         // Same rationale again: the next run may have a host that does report.
         hostStaysSilent().store(false);
+        {
+            std::lock_guard<std::mutex> lock(tokenListenerMutex());
+            savedTokens().clear();
+        }
+    }
+
+    void setTokenListener(void (*listener)(const char*, const char*, void*), void* userData) {
+        std::lock_guard<std::mutex> lock(tokenListenerMutex());
+        tokenListener() = {listener, userData};
+        if (!listener) return;
+        for (const auto& [key, token] : savedTokens()) listener(key.c_str(), token.c_str(), userData);
     }
 
     char** getLoadedModulesCStr() {

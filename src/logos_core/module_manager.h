@@ -86,6 +86,9 @@ namespace ModuleManager {
     void terminateAll();
     void clear();
 
+    // See logos_core_set_token_listener.
+    void setTokenListener(void (*listener)(const char*, const char*, void*), void* userData);
+
     char** getLoadedModulesCStr();
     char** getKnownModulesCStr();
 

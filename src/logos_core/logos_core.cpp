@@ -137,6 +137,10 @@ char* logos_core_get_token(const char* key) {
     return result;
 }
 
+void logos_core_set_token_listener(LogosCoreTokenListener listener, void* user_data) {
+    ModuleManager::setTokenListener(listener, user_data);
+}
+
 char* logos_core_get_module_stats() {
     return ProcessStats::getModuleStats(ModuleManager::getModuleProcessIds());
 }
