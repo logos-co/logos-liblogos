@@ -858,7 +858,11 @@ namespace {
         if (fs::is_directory(moduleDir, error)) {
             for (fs::directory_iterator it(moduleDir, error), end;
                  !error && it != end; it.increment(error)) {
-                if (it->is_directory()) existing.push_back(it->path().filename().string());
+                // A hidden entry (a backup tool's ".snapshots") is not an
+                // instance; QDir skipped them.
+                const std::string name = it->path().filename().string();
+                if (!name.empty() && name.front() != '.' && it->is_directory())
+                    existing.push_back(name);
             }
         }
         std::sort(existing.begin(), existing.end());
