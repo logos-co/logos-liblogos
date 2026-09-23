@@ -138,7 +138,7 @@ bool canInspect(const fs::path& host)
     return entry->second;
 }
 
-std::optional<nlohmann::json> inspectQtMetadata(
+std::optional<nlohmann::json> spawnInspect(
     const std::string& modulePath, const std::vector<std::string>& moduleDirs)
 {
     std::optional<fs::path> host;
@@ -169,6 +169,38 @@ std::optional<nlohmann::json> inspectQtMetadata(
                      exception.what());
         return std::nullopt;
     }
+}
+
+// An --inspect spawn costs 40-100 ms and discovery repeats on every refresh, so
+// a binary is asked once until its size or mtime changes.
+std::optional<nlohmann::json> inspectQtMetadata(
+    const std::string& modulePath, const std::vector<std::string>& moduleDirs)
+{
+    struct Inspected {
+        std::uintmax_t size = 0;
+        fs::file_time_type modified;
+        nlohmann::json metadata;
+    };
+    static std::mutex mutex;
+    static std::map<std::string, Inspected> cache;
+    std::error_code sizeError;
+    std::error_code timeError;
+    const std::uintmax_t size = fs::file_size(modulePath, sizeError);
+    const fs::file_time_type modified = fs::last_write_time(modulePath, timeError);
+    const bool identified = !sizeError && !timeError;
+    if (identified) {
+        std::lock_guard<std::mutex> lock(mutex);
+        const auto found = cache.find(modulePath);
+        if (found != cache.end() && found->second.size == size
+            && found->second.modified == modified)
+            return found->second.metadata;
+    }
+    auto metadata = spawnInspect(modulePath, moduleDirs);
+    if (metadata && identified) {
+        std::lock_guard<std::mutex> lock(mutex);
+        cache[modulePath] = {size, modified, *metadata};
+    }
+    return metadata;
 }
 
 // Metadata is untrusted input: a field of the wrong type reads as absent
@@ -304,7 +336,7 @@ void ModuleRegistry::discoverInstalledModules() {
         // self-asserted name embedded in the plugin binary. processModuleInternal
         // refuses the plugin if its embedded metadata name disagrees, so a
         // package cannot register under a privileged name it doesn't own.
-        std::string moduleName = processModuleInternal(mod.mainFilePath, mod.name);
+        std::string moduleName = processModuleInternal(mod.mainFilePath, mod.name, mod.version);
         if (moduleName.empty()) {
             spdlog::warn("Failed to process module: {}", mod.mainFilePath);
             continue;
@@ -379,8 +411,20 @@ std::string ModuleRegistry::processModule(const std::string& modulePath) {
 }
 
 std::string ModuleRegistry::processModuleInternal(const std::string& modulePath,
-                                                  const std::string& trustedName) {
-    if (auto sidecar = readMetadataSidecar(modulePath)) {
+                                                  const std::string& trustedName,
+                                                  const std::string& trustedVersion) {
+    auto sidecar = readMetadataSidecar(modulePath);
+    // lgpm copies a package over its module directory, so one that ships no
+    // sidecar leaves the previous install's behind, describing another binary.
+    if (sidecar && !trustedVersion.empty()) {
+        const std::string described = stringField(*sidecar, "version");
+        if (!described.empty() && described != trustedVersion) {
+            spdlog::warn("Ignoring the metadata sidecar of {}: it describes version {}, "
+                         "the installed package is {}", modulePath, described, trustedVersion);
+            sidecar.reset();
+        }
+    }
+    if (sidecar) {
         const std::string embedded = stringField(*sidecar, "name");
         if (embedded.empty()) {
             spdlog::warn("Module metadata sidecar has no name: {}", modulePath);
