@@ -371,10 +371,10 @@ namespace {
         return value;
     }
 
-    // The plain runtime speaks the QtRO wire directly. A legacy Qt module still
-    // advertises "qt_remote" in its configuration; from this process that means
-    // the compatible Qt-free implementation. Other transports are rejected
-    // explicitly instead of accidentally pulling their Qt factory into core.
+    // Core dials the first transport a module was configured with, as it always
+    // has. A local one is QtRO, which from this process means qt_remote_plain;
+    // tcp and tcp_ssl are dialled as configured, so a module that listens on
+    // nothing else is still reachable.
     std::string plainTransportFor(const std::string& name) {
         nlohmann::json config = nlohmann::json::object();
         std::string configured;
@@ -390,8 +390,11 @@ namespace {
             else if (set.is_object())
                 config = std::move(set);
         }
-        const std::string protocol = config.value("protocol", "qt_remote_plain");
-        if (protocol != "qt_remote" && protocol != "qt_remote_plain") {
+        const auto field = config.find("protocol");
+        const std::string protocol = field != config.end() && field->is_string()
+            ? field->get<std::string>() : "qt_remote_plain";
+        if (protocol == "tcp" || protocol == "tcp_ssl") return config.dump();
+        if (protocol != "local" && protocol != "qt_remote" && protocol != "qt_remote_plain") {
             spdlog::warn("Core cannot use configured transport '{}' for {}; using "
                          "qt_remote_plain", protocol, name);
         }
@@ -416,8 +419,19 @@ namespace {
         clients().erase(name);
     }
 
+    // Core's pushes to capability_module read the loaded set, then dial it.
+    // Loads run concurrently, so one push runs at a time: the last to run read
+    // the last state, and a stale caller list cannot land after a fresh one. A
+    // push dials only capability_module, which never calls back into core, so a
+    // caller holding a load lock can wait here.
+    std::recursive_mutex& ownerMutex() {
+        static std::recursive_mutex mutex;
+        return mutex;
+    }
+
     template <typename Fn>
     void runOnOwner(Fn&& fn) {
+        std::lock_guard<std::recursive_mutex> lock(ownerMutex());
         std::forward<Fn>(fn)();
     }
 
@@ -646,8 +660,7 @@ namespace {
     //
     // Each push reads the loaded set, so the pushes have to be ordered against
     // each other or the last word can come from a reader that ran before the
-    // other module committed. runOnOwner supplies that order without holding a
-    // mutex across the dial.
+    // other module committed. runOnOwner runs them one at a time.
     void refreshDerivedRestrictionsForDependenciesOf(const std::string& name) {
         if (!registryInstance().isLoaded("capability_module"))
             return;
