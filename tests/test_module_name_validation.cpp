@@ -33,6 +33,14 @@ TEST(ModuleNameValidation, RejectsPathSeparatorsAndTraversal) {
     EXPECT_FALSE(::logos::isValidModuleName("."));
 }
 
+// Detector: a package named "core" was discovered, and loading it filed its
+// token under core's own key, overwriting core's credential.
+TEST(ModuleNameValidation, RejectsTheHostsOwnName) {
+    EXPECT_FALSE(::logos::isValidModuleName("core"));
+    EXPECT_TRUE(::logos::isValidModuleName("core_module"));
+    EXPECT_TRUE(::logos::isValidModuleName("capability_module"));
+}
+
 TEST(ModuleNameValidation, RejectsEmptyControlAndOverlong) {
     EXPECT_FALSE(::logos::isValidModuleName(""));
     EXPECT_FALSE(::logos::isValidModuleName(std::string("evil\0hidden", 10)));  // embedded NUL
