@@ -1,4 +1,5 @@
 #include <gtest/gtest.h>
+#include <optional>
 #include "logos_core.h"
 #include "logos_core/dependency_gate.h"
 #include "logos_core/module_state_observer.h"
@@ -863,6 +864,43 @@ TEST_F(RealModuleRegistryTest, ProcessModule_RegistersRealModule) {
     EXPECT_NE(std::string(name), "");
     EXPECT_EQ(logos_core_is_module_known(name), 1);
     EXPECT_EQ(logos_core_is_module_loaded(name), 0);
+    delete[] name;
+}
+
+// Detector: LOGOS_HOST_PATH naming a host from before --inspect hid every
+// module without a metadata sidecar, though a current host sat where discovery
+// also looks.
+TEST_F(RealModuleRegistryTest, AConfiguredHostWithoutInspectDoesNotHideModules) {
+    const char* realHost = std::getenv("TEST_REAL_HOST");
+    if (!realHost || !fs::exists(realHost)) GTEST_SKIP() << "TEST_REAL_HOST not set";
+    char* discovered = logos_core_process_module(modulePath.c_str());
+    ASSERT_NE(discovered, nullptr);
+    const std::string expected(discovered);
+    delete[] discovered;
+    clearModuleState();
+
+    TmpDir root;
+    const fs::path oldHost = root.path / "old_logos_host";
+    std::ofstream(oldHost) << "#!/bin/sh\necho 'The following argument was not expected: "
+                              "--inspect' >&2\nexit 109\n";
+    fs::permissions(oldHost, fs::perms::owner_all);
+    fs::create_directories(root.path / "modules");
+    fs::create_directories(root.path / "bin");
+    fs::create_symlink(realHost, root.path / "bin" / "logos_host_qt");
+    // The binary without the sidecar its package ships: only --inspect names it.
+    const fs::path copy = root.path / "modules" / fs::path(modulePath).filename();
+    fs::copy_file(modulePath, copy);
+
+    const char* saved = std::getenv("LOGOS_HOST_PATH");
+    const std::optional<std::string> previous =
+        saved ? std::optional<std::string>(saved) : std::nullopt;
+    setenv("LOGOS_HOST_PATH", oldHost.c_str(), 1);
+    logos_core_add_modules_dir((root.path / "modules").c_str());
+    char* name = logos_core_process_module(copy.c_str());
+    if (previous) setenv("LOGOS_HOST_PATH", previous->c_str(), 1);
+    else unsetenv("LOGOS_HOST_PATH");
+    ASSERT_NE(name, nullptr) << "a module without a sidecar was not discovered";
+    EXPECT_EQ(std::string(name), expected);
     delete[] name;
 }
 

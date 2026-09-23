@@ -11,6 +11,7 @@
 #include <cstdlib>
 #include <ctime>
 #include <deque>
+#include <map>
 #include <mutex>
 #include <shared_mutex>
 #include <algorithm>
@@ -76,11 +77,19 @@ constexpr const char* kExecutableSuffix = ".exe";
 constexpr const char* kExecutableSuffix = "";
 #endif
 
-std::optional<fs::path> qtHostPath(const std::vector<std::string>& moduleDirs)
+#if __has_include(<boost/process/v1.hpp>)
+namespace bp = boost::process::v1;
+#else
+namespace bp = boost::process;
+#endif
+
+// Every Qt host that could read a plugin's metadata, in the order tried.
+std::vector<fs::path> qtHostCandidates(const std::vector<std::string>& moduleDirs)
 {
+    std::vector<fs::path> candidates;
     if (const char* configured = std::getenv("LOGOS_HOST_PATH"); configured && *configured) {
         fs::path candidate(configured);
-        if (fs::exists(candidate)) return candidate;
+        if (fs::exists(candidate)) candidates.push_back(candidate);
     }
     std::vector<fs::path> directories;
     try {
@@ -92,23 +101,54 @@ std::optional<fs::path> qtHostPath(const std::vector<std::string>& moduleDirs)
         directories.push_back(fs::absolute(fs::path(moduleDirs.front()) / ".." / "bin"));
     for (const auto& directory : directories) {
         for (const char* name : {"logos_host_qt", "logos_host"}) {
-            fs::path candidate = directory / (std::string(name) + kExecutableSuffix);
-            if (fs::exists(candidate)) return candidate.lexically_normal();
+            fs::path candidate = (directory / (std::string(name) + kExecutableSuffix)).lexically_normal();
+            if (fs::exists(candidate)
+                && std::find(candidates.begin(), candidates.end(), candidate) == candidates.end())
+                candidates.push_back(candidate);
         }
     }
-    return std::nullopt;
+    return candidates;
+}
+
+// A host from before --inspect rejects it, and every module without a sidecar
+// would read as having no metadata. Asked once per host.
+bool canInspect(const fs::path& host)
+{
+    static std::mutex mutex;
+    static std::map<std::string, bool> known;
+    std::lock_guard<std::mutex> lock(mutex);
+    const auto [entry, fresh] = known.try_emplace(host.string(), false);
+    if (!fresh) return entry->second;
+    try {
+        bp::ipstream output;
+        bp::child child(host.string(), "--help", bp::std_out > output, bp::std_err > bp::null);
+        std::ostringstream text;
+        text << output.rdbuf();
+        child.wait();
+        entry->second = text.str().find("--inspect") != std::string::npos;
+    } catch (const std::exception&) {
+    }
+    if (!entry->second)
+        spdlog::error("{} cannot read Qt plugin metadata (it has no --inspect); "
+                      "trying another logos_host_qt", host.string());
+    return entry->second;
 }
 
 std::optional<nlohmann::json> inspectQtMetadata(
     const std::string& modulePath, const std::vector<std::string>& moduleDirs)
 {
-    const auto host = qtHostPath(moduleDirs);
-    if (!host) return std::nullopt;
-#if __has_include(<boost/process/v1.hpp>)
-    namespace bp = boost::process::v1;
-#else
-    namespace bp = boost::process;
-#endif
+    std::optional<fs::path> host;
+    for (const auto& candidate : qtHostCandidates(moduleDirs)) {
+        if (canInspect(candidate)) {
+            host = candidate;
+            break;
+        }
+    }
+    if (!host) {
+        spdlog::error("No logos_host_qt with --inspect found (set LOGOS_HOST_PATH): "
+                      "{} has no metadata sidecar, so it cannot be discovered", modulePath);
+        return std::nullopt;
+    }
     try {
         bp::ipstream output;
         bp::child child(host->string(), "--inspect", modulePath,
