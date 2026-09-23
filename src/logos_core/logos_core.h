@@ -201,6 +201,15 @@ LOGOS_CORE_EXPORT char* logos_core_process_module(const char* module_path);
 // The returned string must be freed by the caller
 LOGOS_CORE_EXPORT char* logos_core_get_token(const char* key);
 
+// Reports every token core saves (one per loaded module) and replays the ones
+// already saved when installed. Core is Qt-free and no longer shares a Qt
+// embedder's TokenManager, so an embedder that calls modules through its own
+// LogosAPI mirrors them there. Calls are serialized and must not call back
+// into core; once NULL is installed, none is running or will run.
+typedef void (*LogosCoreTokenListener)(const char* key, const char* token, void* user_data);
+LOGOS_CORE_EXPORT void logos_core_set_token_listener(LogosCoreTokenListener listener,
+                                                     void* user_data);
+
 // Get module statistics (CPU and memory usage) for all loaded modules
 // Returns a JSON string containing array of module stats, NULL on error
 // The returned string must be freed by the caller

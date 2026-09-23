@@ -18,6 +18,7 @@
 #include <chrono>
 #include <string>
 #include <thread>
+#include <utility>
 #include <vector>
 
 #include <csignal>
@@ -78,6 +79,32 @@ TEST_F(LoadVerdictTest, HostReportsLoaded_LoadSucceeds) {
     EXPECT_EQ(logos_core_load_module("healthy", LOGOS_LOAD_MODULE_ONLY), 1);
     EXPECT_TRUE(logos_core_is_module_loaded("healthy"));
     EXPECT_TRUE(sawTransitionTo("healthy", logos::module_state::kLoaded));
+}
+
+using TokenLog = std::vector<std::pair<std::string, std::string>>;
+
+void recordToken(const char* key, const char* token, void* userData) {
+    static_cast<TokenLog*>(userData)->emplace_back(key, token);
+}
+
+// A Qt embedder (basecamp, standalone-app) no longer shares core's token
+// store; the listener is how it learns the tokens core issues.
+TEST_F(LoadVerdictTest, TokenListenerSeesEachLoadAndReplaysOnInstall) {
+    plantModule("healthy", "report-ok");
+    TokenLog live;
+    logos_core_set_token_listener(&recordToken, &live);
+    ASSERT_EQ(logos_core_load_module("healthy", LOGOS_LOAD_MODULE_ONLY), 1);
+    ASSERT_EQ(live.size(), 1u);
+    EXPECT_EQ(live[0].first, "healthy");
+    char* stored = logos_core_get_token("healthy");
+    ASSERT_NE(stored, nullptr);
+    EXPECT_EQ(live[0].second, std::string(stored));
+    delete[] stored;
+
+    TokenLog replayed;
+    logos_core_set_token_listener(&recordToken, &replayed);
+    EXPECT_EQ(replayed, live);
+    logos_core_set_token_listener(nullptr, nullptr);
 }
 
 // Compatibility: a host built before the status line existed reports nothing.
