@@ -2034,3 +2034,80 @@ TEST_F(MalformedMetadataTest, NonStringSignerIsAMalformedConstraint) {
     EXPECT_EQ(entries[0].name, "dep");
     EXPECT_TRUE(entries[0].malformedConstraint);
 }
+
+class SidecarDiscoveryTest : public ::testing::Test {
+protected:
+    TmpDir dir;
+
+    void SetUp() override { clearModuleState(); }
+    void TearDown() override { clearModuleState(); }
+
+    // An installed package (manifest version 1.0.0) whose binary is not a
+    // module, with `sidecar` beside it when given.
+    void install(const std::string& name, const std::string& sidecar = {}) {
+        createFakeModule(dir.path, name, name + "_plugin.so");
+        if (!sidecar.empty())
+            std::ofstream(dir.path / name / (name + "_plugin.metadata.json")) << sidecar;
+    }
+
+    // The metadata discovery registered `name` with, or null.
+    nlohmann::json metadataOf(const std::string& name) {
+        char* text = logos_core_get_modules_info();
+        const auto modules = nlohmann::json::parse(text ? text : "[]", nullptr, false);
+        free(text);
+        if (modules.is_array())
+            for (const auto& module : modules)
+                if (module.is_object() && module.value("name", std::string{}) == name)
+                    return module.value("metadata", nlohmann::json());
+        return nullptr;
+    }
+};
+
+// Detector: lgpm copies a package over its module directory, so a reinstall
+// that ships no sidecar kept the previous version's, and discovery trusted it.
+TEST_F(SidecarDiscoveryTest, ASidecarFromAnEarlierInstallIsIgnored) {
+    install("fresh_fixture",
+            R"({"name":"fresh_fixture","version":"1.0.0","transport":"qt_remote_plain"})");
+    install("stale_fixture", R"({"name":"stale_fixture","version":"0.9.0",)"
+                             R"("transport":"qt_remote_plain","dependencies":["ghost"]})");
+    logos_core_add_modules_dir(dir.str().c_str());
+    logos_core_refresh_modules();
+
+    const nlohmann::json fresh = metadataOf("fresh_fixture");
+    ASSERT_TRUE(fresh.is_object()) << "a sidecar for this install is still trusted";
+    EXPECT_EQ(fresh.value("version", std::string{}), "1.0.0");
+    const nlohmann::json stale = metadataOf("stale_fixture");
+    EXPECT_FALSE(stale.is_object() && stale.value("version", std::string{}) == "0.9.0")
+        << "the previous install's sidecar described this module";
+}
+
+#ifndef _WIN32
+// Detector: a binary without a sidecar was re-inspected, a 40-100 ms spawn,
+// on every refresh.
+TEST_F(SidecarDiscoveryTest, AnUnchangedBinaryIsInspectedOnce) {
+    const fs::path count = dir.path / "inspections";
+    const fs::path host = dir.path / "counting_host";
+    std::ofstream(host) << "#!/bin/sh\n"
+        "if [ \"$1\" = --help ]; then echo 'usage: --inspect <plugin>'; exit 0; fi\n"
+        "echo x >> '" << count.string() << "'\n"
+        "echo '{\"name\":\"inspected_fixture\",\"version\":\"1.0.0\"}'\n";
+    fs::permissions(host, fs::perms::owner_all);
+    install("inspected_fixture");
+
+    const char* saved = std::getenv("LOGOS_HOST_PATH");
+    const std::optional<std::string> previous =
+        saved ? std::optional<std::string>(saved) : std::nullopt;
+    setenv("LOGOS_HOST_PATH", host.c_str(), 1);
+    logos_core_add_modules_dir(dir.str().c_str());
+    logos_core_refresh_modules();
+    logos_core_refresh_modules();
+    if (previous) setenv("LOGOS_HOST_PATH", previous->c_str(), 1);
+    else unsetenv("LOGOS_HOST_PATH");
+
+    ASSERT_TRUE(metadataOf("inspected_fixture").is_object());
+    std::ifstream inspections(count);
+    int spawned = 0;
+    for (std::string line; std::getline(inspections, line);) ++spawned;
+    EXPECT_EQ(spawned, 1) << "an unchanged binary was inspected again";
+}
+#endif

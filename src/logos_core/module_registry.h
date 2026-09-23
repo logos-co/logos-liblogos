@@ -166,8 +166,11 @@ private:
     // name disagrees is REFUSED — this is the F-022 guard against a binary
     // claiming a privileged name it doesn't legitimately own. When empty (the
     // raw processModule() host API), the embedded name is used as before.
+    // `trustedVersion`, the installed package's, is what a metadata sidecar
+    // must also describe; one that disagrees is from an earlier install.
     std::string processModuleInternal(const std::string& modulePath,
-                                      const std::string& trustedName = {});
+                                      const std::string& trustedName = {},
+                                      const std::string& trustedVersion = {});
 
     // Re-derives every ModuleInfo::dependents list by inverting the
     // dependencies edges across m_modules. Called at the tail of
