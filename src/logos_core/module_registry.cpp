@@ -127,6 +127,18 @@ std::optional<nlohmann::json> inspectQtMetadata(
     }
 }
 
+// Metadata is untrusted input: a field of the wrong type reads as absent
+// instead of throwing out of logos_core_start.
+std::string stringField(const nlohmann::json& metadata, const char* key)
+{
+    const auto found = metadata.find(key);
+    return found != metadata.end() && found->is_string() ? found->get<std::string>()
+                                                         : std::string{};
+}
+
+// Same rules as the Qt-era gate: a present but non-string `version` or
+// `signer` is a malformed constraint (refused, never unconstrained), and an
+// empty name is not a dependency.
 std::vector<LogosCore::ModuleDependency> jsonDependencies(
     const nlohmann::json& metadata, const char* field)
 {
@@ -135,9 +147,11 @@ std::vector<LogosCore::ModuleDependency> jsonDependencies(
     if (found == metadata.end() || !found->is_array()) return result;
     for (const auto& entry : *found) {
         if (entry.is_string()) {
-            result.push_back({entry.get<std::string>(), {}, {}});
+            if (!entry.get<std::string>().empty())
+                result.push_back({entry.get<std::string>(), {}, {}});
         } else if (entry.is_object() && entry.contains("name")
-                   && entry["name"].is_string()) {
+                   && entry["name"].is_string()
+                   && !entry["name"].get<std::string>().empty()) {
             std::string range;
             bool malformedConstraint = false;
             if (auto version = entry.find("version"); version != entry.end()) {
@@ -145,9 +159,9 @@ std::vector<LogosCore::ModuleDependency> jsonDependencies(
                 else malformedConstraint = true;
             }
             std::string signer;
-            if (auto value = entry.find("signer");
-                value != entry.end() && value->is_string()) {
-                signer = value->get<std::string>();
+            if (auto value = entry.find("signer"); value != entry.end()) {
+                if (value->is_string()) signer = value->get<std::string>();
+                else malformedConstraint = true;
             }
             result.push_back({entry["name"].get<std::string>(), range,
                               signer, malformedConstraint});
@@ -323,9 +337,17 @@ std::string ModuleRegistry::processModule(const std::string& modulePath) {
 std::string ModuleRegistry::processModuleInternal(const std::string& modulePath,
                                                   const std::string& trustedName) {
     if (auto sidecar = readMetadataSidecar(modulePath)) {
-        const std::string embedded = sidecar->value("name", std::string{});
+        const std::string embedded = stringField(*sidecar, "name");
         if (embedded.empty()) {
             spdlog::warn("Module metadata sidecar has no name: {}", modulePath);
+            return {};
+        }
+        const auto transport = sidecar->find("transport");
+        const std::string transportName = transport == sidecar->end()
+            ? std::string{"qt_remote"} : stringField(*sidecar, "transport");
+        if (transportName != "qt_remote" && transportName != "qt_remote_plain") {
+            spdlog::warn("Refusing module {}: unsupported transport in its metadata",
+                         modulePath);
             return {};
         }
         if (!trustedName.empty() && embedded != trustedName) {
@@ -340,10 +362,9 @@ std::string ModuleRegistry::processModuleInternal(const std::string& modulePath,
         }
         ModuleInfo& info = m_modules[name];
         info.path = modulePath;
-        info.format = sidecar->value("transport", std::string{"qt_remote"})
-                == "qt_remote_plain" ? "native-cdylib" : "qt-plugin";
+        info.format = transportName == "qt_remote_plain" ? "native-cdylib" : "qt-plugin";
         info.metadataJson = sidecar->dump();
-        info.version = sidecar->value("version", std::string{});
+        info.version = stringField(*sidecar, "version");
         info.dependencies = jsonDependencies(*sidecar, "dependencies");
         info.optionalDependencies = jsonDependencies(*sidecar, "optional_dependencies");
         return name;
@@ -354,11 +375,11 @@ std::string ModuleRegistry::processModuleInternal(const std::string& modulePath,
     // loads it reads Q_PLUGIN_METADATA in metadata-only mode; this parent
     // process remains Qt-free.
     auto metadata = inspectQtMetadata(modulePath, m_modulesDirs);
-    if (!metadata || metadata->value("name", std::string{}).empty()) {
+    if (!metadata || stringField(*metadata, "name").empty()) {
         spdlog::warn("No valid metadata for module: {}", modulePath);
         return {};
     }
-    const std::string embedded = metadata->value("name", std::string{});
+    const std::string embedded = stringField(*metadata, "name");
 
     // When discovery supplies a trusted package name, the plugin's
     // embedded name MUST match it. Otherwise a package installed under an
@@ -394,7 +415,7 @@ std::string ModuleRegistry::processModuleInternal(const std::string& modulePath,
     info.path = modulePath;
     info.format = "qt-plugin";
     info.metadataJson = metadata->dump();
-    info.version = metadata->value("version", std::string{});
+    info.version = stringField(*metadata, "version");
     info.dependencies = jsonDependencies(*metadata, "dependencies");
     info.optionalDependencies = jsonDependencies(*metadata, "optional_dependencies");
 
