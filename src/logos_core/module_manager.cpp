@@ -12,6 +12,8 @@
 #include <algorithm>
 #include <atomic>
 #include <chrono>
+#include <condition_variable>
+#include <deque>
 #include <memory>
 #include <mutex>
 #include <shared_mutex>
@@ -441,22 +443,103 @@ namespace {
         return value;
     }
 
-    void invokeModuleAsync(const std::string& target, const std::string& method,
-                           const nlohmann::json& arguments) {
-        ClientPtr client = moduleClient(target);
-        if (!client) return;
-        const std::string args = arguments.dump();
-        std::thread([client = std::move(client), target, method, args] {
+    // Fire-and-forget module calls, sent one at a time in the order they were
+    // made: modules_state discards a transition older than one it has seen.
+    class OrderedCalls {
+    public:
+        struct Call {
+            std::string target;
+            std::string method;
+            std::string args;
+        };
+
+        ~OrderedCalls() {
+            std::lock_guard<std::mutex> lock(m_state->mutex);
+            m_state->stopped = true;
+            m_state->calls.clear();
+            m_state->changed.notify_all();
+        }
+
+        void post(Call call) {
+            std::lock_guard<std::mutex> lock(m_state->mutex);
+            if (m_state->stopped) return;
+            m_state->calls.push_back(std::move(call));
+            if (!m_state->running) {
+                m_state->running = true;
+                std::thread([state = m_state] { run(state); }).detach();
+            }
+            m_state->changed.notify_one();
+        }
+
+        // Drops what is queued and waits for the call in flight.
+        void stop() {
+            std::unique_lock<std::mutex> lock(m_state->mutex);
+            m_state->stopped = true;
+            m_state->calls.clear();
+            m_state->changed.notify_all();
+            if (m_state->worker == std::this_thread::get_id()) return;
+            m_state->changed.wait(lock, [&] { return !m_state->running; });
+        }
+
+        void reopen() {
+            std::lock_guard<std::mutex> lock(m_state->mutex);
+            m_state->stopped = false;
+        }
+
+    private:
+        struct State {
+            std::mutex mutex;
+            std::condition_variable changed;
+            std::deque<Call> calls;
+            bool stopped = false;
+            bool running = false;
+            std::thread::id worker;
+        };
+
+        static void run(const std::shared_ptr<State>& state) {
+            std::unique_lock<std::mutex> lock(state->mutex);
+            state->worker = std::this_thread::get_id();
+            for (;;) {
+                state->changed.wait_for(lock, std::chrono::seconds(30), [&] {
+                    return state->stopped || !state->calls.empty();
+                });
+                if (state->stopped || state->calls.empty()) break;
+                Call call = std::move(state->calls.front());
+                state->calls.pop_front();
+                lock.unlock();
+                send(call);
+                lock.lock();
+            }
+            state->running = false;
+            state->worker = {};
+            state->changed.notify_all();
+        }
+
+        static void send(const Call& call) {
+            ClientPtr client = moduleClient(call.target);
+            if (!client) return;
             char* result = nullptr;
             char* error = nullptr;
-            const int status = lp_invoke(client.get(), method.c_str(), args.c_str(),
+            const int status = lp_invoke(client.get(), call.method.c_str(), call.args.c_str(),
                                          20000, &result, &error);
             if (status != LP_OK)
-                spdlog::warn("Async RPC {}.{} failed: {}", target, method,
+                spdlog::warn("Async RPC {}.{} failed: {}", call.target, call.method,
                              error ? error : "unknown error");
             lp_string_free(result);
             lp_string_free(error);
-        }).detach();
+        }
+
+        std::shared_ptr<State> m_state = std::make_shared<State>();
+    };
+
+    OrderedCalls& orderedCalls() {
+        static OrderedCalls calls;
+        return calls;
+    }
+
+    void invokeModuleAsync(const std::string& target, const std::string& method,
+                           const nlohmann::json& arguments) {
+        orderedCalls().post({target, method, arguments.dump()});
     }
 
     std::string tokenFor(const std::string& module) {
@@ -1480,6 +1563,9 @@ namespace ModuleManager {
                           "already inside a load or unload");
             return;
         }
+        // While their target still answers; the teardown's own transitions
+        // are not sent.
+        orderedCalls().stop();
         // EXCLUSIVE: markAllLoadedExitsExpected needs the loaded set to hold
         // still, and every load and unload holds this shared for its span.
         std::unique_lock<std::shared_mutex> fleet(fleetMutex());
@@ -1492,6 +1578,7 @@ namespace ModuleManager {
             std::lock_guard<std::mutex> lock(clientMutex());
             clients().clear();
         }
+        orderedCalls().reopen();
     }
 
     void clear() {
@@ -1503,6 +1590,9 @@ namespace ModuleManager {
                           "already inside a load or unload");
             return;
         }
+        // While their target still answers; the teardown's own transitions
+        // are not sent.
+        orderedCalls().stop();
         // EXCLUSIVE: markAllLoadedExitsExpected needs the loaded set to hold
         // still, and every load and unload holds this shared for its span.
         std::unique_lock<std::shared_mutex> fleet(fleetMutex());
@@ -1533,6 +1623,7 @@ namespace ModuleManager {
             std::lock_guard<std::mutex> lock(tokenListenerMutex());
             savedTokens().clear();
         }
+        orderedCalls().reopen();
     }
 
     void setTokenListener(void (*listener)(const char*, const char*, void*), void* userData) {
