@@ -204,6 +204,35 @@
           capabilityModulePkg = logos-capability-module.packages.${system}.default;
           pluginExt = if pkgs.stdenv.isDarwin then "dylib" else "so";
         in {
+          # A Basecamp-shaped process: the installed package with the Qt host
+          # runtime linked ahead of core. The second run is the negative
+          # control: with no token listener the Qt store must stay empty.
+          qt-embedder-tokens = let
+            liblogos = self.packages.${system}.default;
+            embedder = import ./nix/qt-embedder-tests.nix {
+              inherit pkgs liblogos;
+              src = ./tests/qt_embedder;
+              logosProtocolQt = logos-protocol.packages.${system}.default;
+              logosQtHost = logos-plugin-qt.packages.${system}.logos-qt-host;
+            };
+          in pkgs.runCommand "logos-liblogos-qt-embedder-tokens" {} ''
+            export QT_QPA_PLATFORM=offscreen
+            export HOME=$TMPDIR
+            export TEST_MODULES_DIR=${liblogos}/modules
+            ${embedder}/bin/qt_embedder_tests
+            if LOGOS_TEST_NO_TOKEN_LISTENER=1 ${embedder}/bin/qt_embedder_tests > control.log 2>&1; then
+              cat control.log
+              echo "negative control: a consumer was admitted with no token listener" >&2
+              exit 1
+            fi
+            if ! grep -q "never reached the Qt store" control.log; then
+              cat control.log
+              echo "negative control failed for another reason" >&2
+              exit 1
+            fi
+            touch $out
+          '';
+
           tests = pkgs.runCommand "logos-liblogos-tests" {
             nativeBuildInputs = [ testsPkg ] ++ pkgs.lib.optionals pkgs.stdenv.isLinux [
               pkgs.util-linux   # setpriv, for the stand-in host that arms PR_SET_PDEATHSIG
