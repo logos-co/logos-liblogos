@@ -7,7 +7,7 @@
 //   - register / hasProcess / clearAll lifecycle
 //   - registerProcess is idempotent
 //   - get_process_id returns -1 for placeholder (not-yet-started) entries
-//   - start_process actually starts a real child (uses /bin/sleep)
+//   - start_process actually starts a real child (the stand-in host, as sleep)
 //   - get_process_id returns a valid PID after a real start
 //   - terminate_process removes the entry
 //   - terminateAll removes all entries
@@ -17,6 +17,7 @@
 #include "logos_core.h"
 #include "subprocess_manager.h"
 #include "qt_test_adapter.h"
+#include "test_platform.h"
 #include <atomic>
 #include <chrono>
 #include <condition_variable>
@@ -24,7 +25,6 @@
 #include <mutex>
 #include <string>
 #include <thread>
-#include <unistd.h>
 #include <utility>
 #include <vector>
 
@@ -99,16 +99,16 @@ TEST_F(ProcessManagerTest, GetProcessId_ReturnsNegativeOneForUnknown) {
 // start_process / get_process_id / terminate_process
 // ---------------------------------------------------------------------------
 
-// Helper: find sleep binary (macOS and Linux put it in different places)
+// A child that sleeps for the seconds it is given, on every platform: the
+// stand-in module host. /bin/sleep is absent from the Linux build sandbox,
+// where these tests used to skip.
 static const char* sleepBinary() {
-    if (access("/bin/sleep", X_OK) == 0) return "/bin/sleep";
-    if (access("/usr/bin/sleep", X_OK) == 0) return "/usr/bin/sleep";
-    return nullptr;
+    static const std::string path = logos_test::fakeHostPath().string();
+    return path.c_str();
 }
 
 TEST_F(ProcessManagerTest, StartProcess_ReturnsOneOnSuccess) {
     const char* sleep = sleepBinary();
-    if (!sleep) GTEST_SKIP() << "sleep binary not found";
 
     const char* args[] = {"5", nullptr};
     int ok = logos_core_start_process("sleep_test", sleep, args);
@@ -117,7 +117,6 @@ TEST_F(ProcessManagerTest, StartProcess_ReturnsOneOnSuccess) {
 
 TEST_F(ProcessManagerTest, StartProcess_HasProcessReturnsTrueAfterStart) {
     const char* sleep = sleepBinary();
-    if (!sleep) GTEST_SKIP() << "sleep binary not found";
 
     const char* args[] = {"5", nullptr};
     logos_core_start_process("sleep_has", sleep, args);
@@ -126,7 +125,6 @@ TEST_F(ProcessManagerTest, StartProcess_HasProcessReturnsTrueAfterStart) {
 
 TEST_F(ProcessManagerTest, StartProcess_GetProcessIdReturnsValidPid) {
     const char* sleep = sleepBinary();
-    if (!sleep) GTEST_SKIP() << "sleep binary not found";
 
     const char* args[] = {"5", nullptr};
     logos_core_start_process("sleep_pid", sleep, args);
@@ -145,7 +143,6 @@ TEST_F(ProcessManagerTest, StartProcess_ReturnsFalseForNonexistentExecutable) {
 
 TEST_F(ProcessManagerTest, TerminateProcess_RemovesEntry) {
     const char* sleep = sleepBinary();
-    if (!sleep) GTEST_SKIP() << "sleep binary not found";
 
     const char* args[] = {"5", nullptr};
     logos_core_start_process("sleep_term", sleep, args);
@@ -173,7 +170,6 @@ TEST_F(ProcessManagerTest, TerminateProcess_NoopForNullName) {
 
 TEST_F(ProcessManagerTest, MultipleProcesses_DistinctPids) {
     const char* sleep = sleepBinary();
-    if (!sleep) GTEST_SKIP() << "sleep binary not found";
 
     const char* args[] = {"5", nullptr};
     logos_core_start_process("proc_a", sleep, args);
@@ -189,9 +185,10 @@ TEST_F(ProcessManagerTest, MultipleProcesses_DistinctPids) {
 
 TEST_F(ProcessManagerTest, MultipleProcesses_TerminateOneKeepsOther) {
     const char* sleep = sleepBinary();
-    if (!sleep) GTEST_SKIP() << "sleep binary not found";
 
-    const char* args[] = {"5", nullptr};
+    // Outlives stopping kill_me, which can wait out the container's 5 s grace
+    // period: on Windows, a child stopped before its main thread has a queue.
+    const char* args[] = {"60", nullptr};
     logos_core_start_process("keep_me", sleep, args);
     logos_core_start_process("kill_me", sleep, args);
 
@@ -224,8 +221,8 @@ TEST_F(ProcessManagerTest, StartProcess_OnOutput_SplitsStdoutAndStderr) {
         cv.notify_all();
     };
 
-    std::vector<std::string> args = {"-c", "echo out-line; echo err-line >&2"};
-    ASSERT_TRUE(SubprocessManager::startProcess("dualstream", "/bin/sh", args, cb));
+    std::vector<std::string> args = {"--dualstream"};
+    ASSERT_TRUE(SubprocessManager::startProcess("dualstream", sleepBinary(), args, cb));
 
     std::unique_lock<std::mutex> lock(mtx);
     cv.wait_for(lock, std::chrono::seconds(5),
@@ -247,7 +244,6 @@ TEST_F(ProcessManagerTest, StartProcess_OnOutput_SplitsStdoutAndStderr) {
 
 TEST_F(ProcessManagerTest, TerminateAll_RemovesAllRunningProcesses) {
     const char* sleep = sleepBinary();
-    if (!sleep) GTEST_SKIP() << "sleep binary not found";
 
     const char* args[] = {"5", nullptr};
     logos_core_start_process("ta_1", sleep, args);

@@ -140,7 +140,9 @@
           };
           bin = import ./nix/bin.nix { inherit pkgs common build lib modules; moduleHosts = defaultModuleHosts; };
           include = import ./nix/include.nix { inherit pkgs common src logosProtocolPkg; };
-          tests = import ./nix/tests.nix { inherit pkgs common build; };
+          tests = if pkgs.stdenv.hostPlatform.isWindows
+            then import ./nix/tests-windows.nix { inherit pkgs common src bin; }
+            else import ./nix/tests.nix { inherit pkgs common build; };
 
           # Portable package components
           libPortable = import ./nix/lib.nix { inherit pkgs; common = commonPortable; build = buildPortable; };
@@ -187,11 +189,7 @@
           # Default package (dev)
           default = liblogos;
         }
-        # The test suite is POSIX-only (posix_spawn/waitpid/kill, /bin/sh) and
-        # CMake gates it off for a Windows host, so `ninja logos_core_tests`
-        # would have no such target. Not exposing the output at all beats
-        # shipping one that cannot be built.
-        // pkgs.lib.optionalAttrs (!pkgs.stdenv.hostPlatform.isWindows) {
+        // {
           logos-liblogos-tests = tests;
         }
       );
@@ -199,6 +197,7 @@
       checks = forAllSystems ({ pkgs, system, defaultModuleHosts, ... }:
         let
           testsPkg = self.packages.${system}.logos-liblogos-tests;
+          bundledModules = self.packages.${system}.logos-liblogos-modules;
           # Real Qt plugin used by RealPluginRegistryTest (TEST_PLUGIN env var).
           # capability_module is already a flake input and builds a real plugin.
           capabilityModulePkg = logos-capability-module.packages.${system}.default;
@@ -234,9 +233,7 @@
           '';
 
           tests = pkgs.runCommand "logos-liblogos-tests" {
-            nativeBuildInputs = [ testsPkg ] ++ pkgs.lib.optionals pkgs.stdenv.isLinux [
-              pkgs.util-linux   # setpriv, for the stand-in host that arms PR_SET_PDEATHSIG
-            ];
+            nativeBuildInputs = [ testsPkg ];
           } ''
             export TEST_PLUGIN="${capabilityModulePkg}/lib/capability_module_plugin.${pluginExt}"
             # The only binaries in reach whose embedded metadata declares an
@@ -254,6 +251,8 @@
             export TEST_REAL_HOST="${defaultModuleHosts}/bin/logos_host_qt"
             export LOGOS_HOST_PATH="$TEST_REAL_HOST"
             export LOGOS_REQUIRE_TEST_FIXTURES=1
+            # What the package bundles, read the way discovery reads it.
+            export TEST_BUNDLED_MODULES_DIR="${bundledModules}/modules"
             for f in "$TEST_PLUGIN_DEP_RANGE" "$TEST_PLUGIN_DEP_MALFORMED" "$TEST_REAL_HOST"; do
               if [ ! -f "$f" ]; then
                 echo "Error: constraint fixture not found at $f" >&2

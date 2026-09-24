@@ -1,0 +1,22 @@
+name: Windows
+
+on:
+  push:
+    branches: [master, main]
+  pull_request:
+    branches: [master, main]
+
+concurrency:
+  group: windows-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  windows:
+    uses: logos-co/logos-windows-ci/.github/workflows/windows-ci.yml@v1
+    secrets: inherit
+    with:
+      targets: logos-liblogos-tests
+      # The suite nix/tests-windows.nix declares, one gtest case per process.
+      tests: true
+      native-smoke: false
+      wine-smoke: false

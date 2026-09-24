@@ -8,24 +8,14 @@ class InstancePersistenceTest : public FakeHostFixture {
 protected:
     void TearDown() override {
         logos_core_set_persistence_base_path("");
+        logos_test::unsetEnv("LOGOS_TEST_GIVEN_INSTANCE");
         FakeHostFixture::TearDown();
     }
 
     // A host that writes down the instance directory it was given, then loads.
     void useRecordingHost() {
-        const fs::path host = tmp.path / "recording_host";
-        std::ofstream(host) << "#!/bin/sh\n"
-            "while [ $# -gt 0 ]; do\n"
-            "  case \"$1\" in\n"
-            "    --instance-persistence-path) echo \"$2\" > \"" << (tmp.path / "given").string()
-                                                              << "\" ; shift 2 ;;\n"
-            "    *) shift ;;\n"
-            "  esac\n"
-            "done\n"
-            "printf '%s\\n' '@logos-load-status ok'\n"
-            "exec sleep 300\n";
-        fs::permissions(host, fs::perms::owner_all);
-        setenv("LOGOS_HOST_PATH", host.c_str(), 1);
+        useFakeHost();
+        logos_test::setEnv("LOGOS_TEST_GIVEN_INSTANCE", (tmp.path / "given").string());
     }
 
     std::string givenInstance() const {
@@ -44,8 +34,8 @@ TEST_F(InstancePersistenceTest, AHiddenDirectoryIsNotAnInstance) {
     const fs::path base = tmp.path / "persistence";
     fs::create_directories(base / "probe_module" / ".snapshots");
     fs::create_directories(base / "probe_module" / "abc123def456");
-    logos_core_set_persistence_base_path(base.c_str());
-    plantModule("probe_module", "anything");
+    logos_core_set_persistence_base_path(base.string().c_str());
+    plantModule("probe_module", "report-ok");
 
     ASSERT_EQ(logos_core_load_module("probe_module", LOGOS_LOAD_MODULE_ONLY), 1);
     EXPECT_EQ(givenInstance(), "abc123def456");
@@ -56,8 +46,8 @@ TEST_F(InstancePersistenceTest, TheFirstInstanceByNameIsReused) {
     const fs::path base = tmp.path / "persistence";
     fs::create_directories(base / "probe_module" / "bbb");
     fs::create_directories(base / "probe_module" / "aaa");
-    logos_core_set_persistence_base_path(base.c_str());
-    plantModule("probe_module", "anything");
+    logos_core_set_persistence_base_path(base.string().c_str());
+    plantModule("probe_module", "report-ok");
 
     ASSERT_EQ(logos_core_load_module("probe_module", LOGOS_LOAD_MODULE_ONLY), 1);
     EXPECT_EQ(givenInstance(), "aaa");
