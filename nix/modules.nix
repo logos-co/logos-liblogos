@@ -29,15 +29,16 @@ let
 
     # Copy the plugin library. Every extension is listed explicitly -- an
     # if/elif chain, or a Unix-only pair of globs, installs NOTHING on Windows
-    # and still succeeds.
+    # and still succeeds. The manifest names the plugin by name: on Windows the
+    # DLLs it imports sit beside it, and the first of those was Qt6Core.dll.
     shopt -s nullglob
     plugins=(${m.pkg}/lib/*.dylib ${m.pkg}/lib/*.so ${m.pkg}/lib/*.dll)
     pluginFile=""
     for lib in "''${plugins[@]}"; do
       cp "$lib" $out/modules/${m.name}/
-      if [ -z "$pluginFile" ]; then
-        pluginFile="$(basename "$lib")"
-      fi
+      case "$(basename "$lib")" in
+        ${m.name}_plugin.*) pluginFile="$(basename "$lib")" ;;
+      esac
     done
 
     # Plain modules carry discovery metadata next to the native library. Keep
@@ -49,7 +50,7 @@ let
     done
 
     if [ -z "$pluginFile" ]; then
-      echo "Error: No ${m.name} library found under ${m.pkg}/lib" >&2
+      echo "Error: No ${m.name}_plugin library found under ${m.pkg}/lib" >&2
       ls -la ${m.pkg}/lib >&2 || true
       exit 1
     fi

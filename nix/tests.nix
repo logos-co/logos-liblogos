@@ -1,16 +1,14 @@
 # Builds tests
 { pkgs, common, build }:
 
-# The suite is POSIX-only (posix_spawn/waitpid/kill, /bin/sh) and CMake turns
-# LOGOS_BUILD_TESTS off for a Windows host, so there would be no
-# `logos_core_tests` target to build. Refuse loudly instead: the configurePhase
-# below hand-rolls its `cmake` invocation and never expands $cmakeFlags, so a
-# Windows instantiation would silently drop -DCMAKE_SYSTEM_NAME=Windows and
-# every entry of logosQtCrossCmakeFlags -- i.e. configure as a NATIVE build and
-# link the wrong architecture, which is far worse than an error. flake.nix
-# already withholds this attribute on Windows; this makes that non-negotiable.
+# Unix only; nix/tests-windows.nix builds the suite for Windows. This refuses
+# loudly because the configurePhase below hand-rolls its `cmake` invocation and
+# never expands $cmakeFlags, so a Windows instantiation would silently drop
+# -DCMAKE_SYSTEM_NAME=Windows and every entry of logosQtCrossCmakeFlags -- i.e.
+# configure as a NATIVE build and link the wrong architecture, which is far
+# worse than an error.
 if pkgs.stdenv.hostPlatform.isWindows then
-  throw "logos-liblogos: the logos_core test suite is POSIX-only and cannot be cross-compiled for ${pkgs.stdenv.hostPlatform.system}"
+  throw "logos-liblogos: nix/tests.nix cannot cross-compile for ${pkgs.stdenv.hostPlatform.system}; use nix/tests-windows.nix"
 else
 
 pkgs.stdenv.mkDerivation {
@@ -65,7 +63,7 @@ pkgs.stdenv.mkDerivation {
     runHook preInstall
     
     mkdir -p $out/bin
-    cp bin/logos_core_tests $out/bin/
+    cp bin/logos_core_tests bin/logos_fake_module_host $out/bin/
     
     # Copy the libraries so tests can run
     mkdir -p $out/lib

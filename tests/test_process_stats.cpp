@@ -1,51 +1,21 @@
 #include <gtest/gtest.h>
 #include <process_stats/process_stats.h>
 #include <nlohmann/json.hpp>
-#include <cstring>
-#include <string>
-#include <unordered_map>
-#include <vector>
+#include "test_platform.h"
+#include <chrono>
 #include <cstdint>
-#include <signal.h>
-#include <spawn.h>
-#include <sys/wait.h>
-#include <unistd.h>
-
-extern char** environ;
-
-// Spawn a child process and return its PID (0 on failure).
-static pid_t spawnProcess(const char* path, char* const argv[]) {
-    pid_t pid = 0;
-    posix_spawnattr_t attr;
-    posix_spawnattr_init(&attr);
-    int rc = posix_spawn(&pid, path, nullptr, &attr,
-                         const_cast<char* const*>(argv), environ);
-    posix_spawnattr_destroy(&attr);
-    return (rc == 0) ? pid : 0;
-}
-
-// Kill a child process and reap it.
-static void killProcess(pid_t pid) {
-    if (pid <= 0) return;
-    kill(pid, SIGTERM);
-    int status;
-    waitpid(pid, &status, 0);
-}
+#include <string>
+#include <thread>
+#include <unordered_map>
 
 class ProcessStatsTest : public ::testing::Test {
 protected:
-    std::vector<pid_t> m_processes;
-
     void SetUp() override {
         ProcessStats::clearHistory();
     }
 
     void TearDown() override {
         ProcessStats::clearHistory();
-        for (pid_t pid : m_processes) {
-            killProcess(pid);
-        }
-        m_processes.clear();
     }
 };
 
@@ -70,7 +40,7 @@ TEST_F(ProcessStatsTest, GetProcessStats_ReturnsZeroedStatsForZeroPid) {
 }
 
 TEST_F(ProcessStatsTest, GetProcessStats_ReturnsValidStatsForCurrentProcess) {
-    int64_t currentPid = static_cast<int64_t>(getpid());
+    int64_t currentPid = logos_test::currentPid();
 
     ProcessStats::ProcessStatsData stats = ProcessStats::getProcessStats(currentPid);
 
@@ -79,7 +49,7 @@ TEST_F(ProcessStatsTest, GetProcessStats_ReturnsValidStatsForCurrentProcess) {
 }
 
 TEST_F(ProcessStatsTest, GetProcessStats_MemoryIsNonNegative) {
-    int64_t currentPid = static_cast<int64_t>(getpid());
+    int64_t currentPid = logos_test::currentPid();
 
     ProcessStats::ProcessStatsData stats = ProcessStats::getProcessStats(currentPid);
 
@@ -87,7 +57,7 @@ TEST_F(ProcessStatsTest, GetProcessStats_MemoryIsNonNegative) {
 }
 
 TEST_F(ProcessStatsTest, GetProcessStats_CpuTimeIsNonNegative) {
-    int64_t currentPid = static_cast<int64_t>(getpid());
+    int64_t currentPid = logos_test::currentPid();
 
     ProcessStats::ProcessStatsData stats = ProcessStats::getProcessStats(currentPid);
 
@@ -95,7 +65,7 @@ TEST_F(ProcessStatsTest, GetProcessStats_CpuTimeIsNonNegative) {
 }
 
 TEST_F(ProcessStatsTest, GetProcessStats_CpuPercentIsZeroOnFirstCall) {
-    int64_t currentPid = static_cast<int64_t>(getpid());
+    int64_t currentPid = logos_test::currentPid();
 
     ProcessStats::ProcessStatsData stats = ProcessStats::getProcessStats(currentPid);
 
@@ -103,7 +73,7 @@ TEST_F(ProcessStatsTest, GetProcessStats_CpuPercentIsZeroOnFirstCall) {
 }
 
 TEST_F(ProcessStatsTest, GetProcessStats_CpuPercentUpdatesOnSecondCall) {
-    int64_t currentPid = static_cast<int64_t>(getpid());
+    int64_t currentPid = logos_test::currentPid();
 
     ProcessStats::getProcessStats(currentPid);
 
@@ -112,7 +82,7 @@ TEST_F(ProcessStatsTest, GetProcessStats_CpuPercentUpdatesOnSecondCall) {
         sum += i * 0.1;
     }
 
-    usleep(10000); // 10ms
+    std::this_thread::sleep_for(std::chrono::milliseconds(10));
 
     ProcessStats::ProcessStatsData stats = ProcessStats::getProcessStats(currentPid);
 
@@ -147,19 +117,13 @@ TEST_F(ProcessStatsTest, GetModuleStats_ReturnsNonNullPointer) {
 }
 
 TEST_F(ProcessStatsTest, GetModuleStats_ReturnsValidJsonStructure) {
-    // Spawn a real "sleep 2" child process so we have a valid PID.
-    // Use posix_spawnp to search PATH (nix sandbox has no /bin/sleep).
-    char* argv[] = {(char*)"sleep", (char*)"2", nullptr};
-    pid_t pid = 0;
-    posix_spawnattr_t attr;
-    posix_spawnattr_init(&attr);
-    int rc = posix_spawnp(&pid, "sleep", nullptr, &attr, argv, environ);
-    posix_spawnattr_destroy(&attr);
-    ASSERT_EQ(rc, 0) << "Failed to spawn sleep process: " << strerror(rc);
-    m_processes.push_back(pid);
+    // A real child that stays up, so there is a valid PID to measure.
+    logos_test::Child child;
+    ASSERT_TRUE(child.start(logos_test::fakeHostPath().string(), {"2"}))
+        << "could not start " << logos_test::fakeHostPath();
 
     std::unordered_map<std::string, int64_t> processes;
-    processes.emplace("test_module", static_cast<int64_t>(pid));
+    processes.emplace("test_module", child.pid());
 
     char* result = ProcessStats::getModuleStats(processes);
 

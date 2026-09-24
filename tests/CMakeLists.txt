@@ -22,6 +22,11 @@ add_executable(logos_core_tests
     test_core_outbound.cpp
 )
 
+# The stand-in module host the load-path tests start, beside the test binary
+# (see fake_module_host.h). Plain C++, so it builds and runs on every platform.
+add_executable(logos_fake_module_host fake_module_host_main.cpp)
+add_dependencies(logos_core_tests logos_fake_module_host)
+
 # Imported container/loader targets the tests drive via SubprocessManager /
 # CompositeModuleLoader: logos_container + logos_module_loader (the contracts),
 # and the build-selected implementation targets LogosContainerImpl::impl /
@@ -32,8 +37,14 @@ add_executable(logos_core_tests
 # each config guards with `if(NOT TARGET ...)` so this is safe.
 find_package(LogosContainerImpl REQUIRED)
 find_package(LogosFormatLoaderImpl REQUIRED)
+# On Windows the DLL exports only the C API; see logos_core_static in src/.
+if(WIN32)
+    set(_logos_core_under_test logos_core_static)
+else()
+    set(_logos_core_under_test logos_core)
+endif()
 target_link_libraries(logos_core_tests PRIVATE
-    logos_core
+    ${_logos_core_under_test}
     process_stats
     logos_container
     LogosContainerImpl::impl
@@ -46,6 +57,11 @@ target_include_directories(logos_core_tests PRIVATE
     ${CMAKE_SOURCE_DIR}/src
     ${CMAKE_SOURCE_DIR}/src/logos_core
 )
+
+# freeTcpPort() in test_core_outbound.cpp.
+if(WIN32)
+    target_link_libraries(logos_core_tests PRIVATE ws2_32)
+endif()
 
 # Propagate portable build flag to tests so manifest variant keys match
 if(LOGOS_PORTABLE_BUILD)

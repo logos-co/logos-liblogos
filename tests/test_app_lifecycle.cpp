@@ -1,6 +1,7 @@
 #include <gtest/gtest.h>
 #include "logos_core.h"
 #include "qt_test_adapter.h"
+#include "test_platform.h"
 #include <cstdlib>
 #include <cstring>
 #include <string>
@@ -118,13 +119,13 @@ TEST_F(AppLifecycleTest, Cleanup_ClearsState) {
 TEST_F(AppLifecycleTest, Start_MakesATwelveHexDigitInstanceId) {
     const char* saved = std::getenv("LOGOS_INSTANCE_ID");
     const std::string previous = saved ? saved : "";
-    unsetenv("LOGOS_INSTANCE_ID");
+    logos_test::unsetEnv("LOGOS_INSTANCE_ID");
     logos_core_add_modules_dir("/custom/modules");
     logos_core_start();
     const char* made = std::getenv("LOGOS_INSTANCE_ID");
     const std::string id = made ? made : "";
-    if (saved) setenv("LOGOS_INSTANCE_ID", previous.c_str(), 1);
-    else unsetenv("LOGOS_INSTANCE_ID");
+    if (saved) logos_test::setEnv("LOGOS_INSTANCE_ID", previous);
+    else logos_test::unsetEnv("LOGOS_INSTANCE_ID");
     EXPECT_EQ(id.size(), 12u) << id;
     EXPECT_EQ(id.find_first_not_of("0123456789abcdef"), std::string::npos) << id;
 }

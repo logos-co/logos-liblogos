@@ -28,24 +28,22 @@ if(DEFINED LOGOS_PROTOCOL_ROOT)
     list(APPEND CMAKE_INSTALL_RPATH "${LOGOS_PROTOCOL_ROOT}/lib")
 endif()
 
-# Build src first to ensure logos_core is built before modules
-add_subdirectory(src)
-
-# Tests. Gated EXPLICITLY rather than left to find_package: the suite is
-# POSIX-only (tests/test_process_stats.cpp uses <spawn.h>, <sys/wait.h>,
-# posix_spawn/waitpid/kill and `environ`; tests/test_subprocess_manager.cpp
-# spawns /bin/sh), none of which mingw-w64 provides. The default build target
-# is `all`, so an ungated tests/ subdirectory would be compiled by every
-# cross build.
+# Tests. Off by default on Windows, where only nix/tests-windows.nix builds them:
+# the default target is `all`, so the library's cross build would compile them.
+# Declared before src/, which builds the library the Windows suite links.
 #
 # The gate wraps the GTest lookup too: dropping only `add_subdirectory(tests)`
 # would still leave find_package(GTest) able to miss and fall through to the
 # FetchContent download, which dies in the nix sandbox with a misleading
 # "downloading ... failed".
-option(LOGOS_BUILD_TESTS "Build the logos_core test suite" ON)
 if(WIN32)
-    set(LOGOS_BUILD_TESTS OFF)
+    option(LOGOS_BUILD_TESTS "Build the logos_core test suite" OFF)
+else()
+    option(LOGOS_BUILD_TESTS "Build the logos_core test suite" ON)
 endif()
+
+# Build src first to ensure logos_core is built before modules
+add_subdirectory(src)
 
 if(LOGOS_BUILD_TESTS)
     # Try to find GoogleTest via find_package first (for Nix and system installations)

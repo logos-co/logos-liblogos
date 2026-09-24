@@ -5,10 +5,15 @@
 
 #include <nlohmann/json.hpp>
 
+#ifdef _WIN32
+#include <winsock2.h>
+#include <ws2tcpip.h>
+#else
 #include <arpa/inet.h>
 #include <netinet/in.h>
 #include <sys/socket.h>
 #include <unistd.h>
+#endif
 
 #include <algorithm>
 #include <chrono>
@@ -34,14 +39,26 @@ char* noMethods(void*) { return copyOut("[]"); }
 
 std::uint16_t freeTcpPort()
 {
+#ifdef _WIN32
+    WSADATA wsa;
+    WSAStartup(MAKEWORD(2, 2), &wsa);
+    const SOCKET fd = ::socket(AF_INET, SOCK_STREAM, 0);
+    using Length = int;
+#else
     const int fd = ::socket(AF_INET, SOCK_STREAM, 0);
+    using Length = socklen_t;
+#endif
     sockaddr_in address{};
     address.sin_family = AF_INET;
     address.sin_addr.s_addr = htonl(INADDR_LOOPBACK);
     ::bind(fd, reinterpret_cast<sockaddr*>(&address), sizeof(address));
-    socklen_t length = sizeof(address);
+    Length length = sizeof(address);
     ::getsockname(fd, reinterpret_cast<sockaddr*>(&address), &length);
+#ifdef _WIN32
+    ::closesocket(fd);
+#else
     ::close(fd);
+#endif
     return ntohs(address.sin_port);
 }
 
@@ -118,7 +135,7 @@ protected:
         std::ofstream(tmp.path / (name + "_plugin.metadata.json"))
             << nlohmann::json{{"name", name}, {"version", "1.0.0"},
                               {"dependencies", dependencies}}.dump();
-        char* registered = logos_core_process_module(binary.c_str());
+        char* registered = logos_core_process_module(binary.string().c_str());
         ASSERT_NE(registered, nullptr);
         delete[] registered;
     }

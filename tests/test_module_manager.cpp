@@ -4,6 +4,7 @@
 #include "logos_core/dependency_gate.h"
 #include "logos_core/module_state_observer.h"
 #include "qt_test_adapter.h"
+#include "test_platform.h"
 #include <nlohmann/json.hpp>
 #include <algorithm>
 #include <cstdlib>
@@ -21,21 +22,11 @@ static void clearModuleState() {
     logos_core_clear();
 }
 
-// RAII temporary directory (uses mkdtemp, cleaned up on destruction)
+// RAII temporary directory, removed on destruction
 struct TmpDir {
     fs::path path;
 
-    TmpDir() {
-        std::string tmpl = (fs::temp_directory_path() / "logos_test_XXXXXX").string();
-        char* buf = new char[tmpl.size() + 1];
-        memcpy(buf, tmpl.c_str(), tmpl.size() + 1);
-        if (!mkdtemp(buf)) {
-            delete[] buf;
-            throw std::runtime_error("mkdtemp failed");
-        }
-        path = buf;
-        delete[] buf;
-    }
+    TmpDir() : path(logos_test::makeTempDir("logos_test_")) {}
 
     ~TmpDir() {
         std::error_code ec;
@@ -880,13 +871,17 @@ TEST_F(RealModuleRegistryTest, AConfiguredHostWithoutInspectDoesNotHideModules) 
     clearModuleState();
 
     TmpDir root;
-    const fs::path oldHost = root.path / "old_logos_host";
-    std::ofstream(oldHost) << "#!/bin/sh\necho 'The following argument was not expected: "
-                              "--inspect' >&2\nexit 109\n";
-    fs::permissions(oldHost, fs::perms::owner_all);
+    // The stand-in host predates --inspect.
+    const fs::path oldHost = logos_test::fakeHostPath();
     fs::create_directories(root.path / "modules");
     fs::create_directories(root.path / "bin");
+#ifdef _WIN32
+    // A symlink takes a privilege Windows withholds by default; the copy finds
+    // its DLLs on PATH.
+    fs::copy_file(realHost, root.path / "bin" / "logos_host_qt.exe");
+#else
     fs::create_symlink(realHost, root.path / "bin" / "logos_host_qt");
+#endif
     // The binary without the sidecar its package ships: only --inspect names it.
     const fs::path copy = root.path / "modules" / fs::path(modulePath).filename();
     fs::copy_file(modulePath, copy);
@@ -894,14 +889,37 @@ TEST_F(RealModuleRegistryTest, AConfiguredHostWithoutInspectDoesNotHideModules) 
     const char* saved = std::getenv("LOGOS_HOST_PATH");
     const std::optional<std::string> previous =
         saved ? std::optional<std::string>(saved) : std::nullopt;
-    setenv("LOGOS_HOST_PATH", oldHost.c_str(), 1);
-    logos_core_add_modules_dir((root.path / "modules").c_str());
-    char* name = logos_core_process_module(copy.c_str());
-    if (previous) setenv("LOGOS_HOST_PATH", previous->c_str(), 1);
-    else unsetenv("LOGOS_HOST_PATH");
+    logos_test::setEnv("LOGOS_HOST_PATH", oldHost.string());
+    logos_core_add_modules_dir((root.path / "modules").string().c_str());
+    char* name = logos_core_process_module(copy.string().c_str());
+    if (previous) logos_test::setEnv("LOGOS_HOST_PATH", *previous);
+    else logos_test::unsetEnv("LOGOS_HOST_PATH");
     ASSERT_NE(name, nullptr) << "a module without a sidecar was not discovered";
     EXPECT_EQ(std::string(name), expected);
     delete[] name;
+}
+
+// Detector: the package's manifests named the first DLL beside each bundled
+// plugin, Qt6Core.dll, as its binary, so on Windows neither bundled module was
+// ever discovered. Reads the modules directory the package actually ships.
+TEST(BundledModulesTest, EachBundledModuleIsDiscoveredFromItsOwnPlugin) {
+    const char* dir = std::getenv("TEST_BUNDLED_MODULES_DIR");
+    if (!dir || !fs::is_directory(dir)) {
+        if (std::getenv("LOGOS_REQUIRE_TEST_FIXTURES"))
+            FAIL() << "TEST_BUNDLED_MODULES_DIR does not name the package's modules: "
+                   << (dir ? dir : "(unset)");
+        GTEST_SKIP() << "TEST_BUNDLED_MODULES_DIR not set";
+    }
+    clearModuleState();
+    logos_core_add_modules_dir(dir);
+    logos_core_refresh_modules();
+    for (const std::string name : {"capability_module", "modules_state"}) {
+        char* path = logos_core_get_module_path(name.c_str());
+        EXPECT_NE(path, nullptr) << name << " was not discovered";
+        if (path) EXPECT_EQ(fs::path(path).stem().string(), name + "_plugin") << path;
+        delete[] path;
+    }
+    clearModuleState();
 }
 
 // For a real plugin, get_modules_info must carry the embedded metadata parsed
@@ -2081,28 +2099,27 @@ TEST_F(SidecarDiscoveryTest, ASidecarFromAnEarlierInstallIsIgnored) {
         << "the previous install's sidecar described this module";
 }
 
-#ifndef _WIN32
 // Detector: a binary without a sidecar was re-inspected, a 40-100 ms spawn,
 // on every refresh.
 TEST_F(SidecarDiscoveryTest, AnUnchangedBinaryIsInspectedOnce) {
     const fs::path count = dir.path / "inspections";
-    const fs::path host = dir.path / "counting_host";
-    std::ofstream(host) << "#!/bin/sh\n"
-        "if [ \"$1\" = --help ]; then echo 'usage: --inspect <plugin>'; exit 0; fi\n"
-        "echo x >> '" << count.string() << "'\n"
-        "echo '{\"name\":\"inspected_fixture\",\"version\":\"1.0.0\"}'\n";
-    fs::permissions(host, fs::perms::owner_all);
+    // A copy of the stand-in, which inspects and counts with LOGOS_TEST_INSPECT_LOG
+    // set; a copy so no earlier test's answer about the original is cached.
+    const fs::path host = dir.path / logos_test::fakeHostPath().filename();
+    fs::copy_file(logos_test::fakeHostPath(), host);
     install("inspected_fixture");
 
     const char* saved = std::getenv("LOGOS_HOST_PATH");
     const std::optional<std::string> previous =
         saved ? std::optional<std::string>(saved) : std::nullopt;
-    setenv("LOGOS_HOST_PATH", host.c_str(), 1);
+    logos_test::setEnv("LOGOS_HOST_PATH", host.string());
+    logos_test::setEnv("LOGOS_TEST_INSPECT_LOG", count.string());
     logos_core_add_modules_dir(dir.str().c_str());
     logos_core_refresh_modules();
     logos_core_refresh_modules();
-    if (previous) setenv("LOGOS_HOST_PATH", previous->c_str(), 1);
-    else unsetenv("LOGOS_HOST_PATH");
+    logos_test::unsetEnv("LOGOS_TEST_INSPECT_LOG");
+    if (previous) logos_test::setEnv("LOGOS_HOST_PATH", *previous);
+    else logos_test::unsetEnv("LOGOS_HOST_PATH");
 
     ASSERT_TRUE(metadataOf("inspected_fixture").is_object());
     std::ifstream inspections(count);
@@ -2110,4 +2127,3 @@ TEST_F(SidecarDiscoveryTest, AnUnchangedBinaryIsInspectedOnce) {
     for (std::string line; std::getline(inspections, line);) ++spawned;
     EXPECT_EQ(spawned, 1) << "an unchanged binary was inspected again";
 }
-#endif

@@ -253,3 +253,18 @@ else()
         INSTALL_RPATH "$ORIGIN"
         BUILD_WITH_INSTALL_RPATH TRUE)
 endif()
+
+# The test suite drives the internal C++ classes as well as the C API, and on
+# Windows the DLL exports only the C API (see above). There the suite links the
+# same sources as a static library, compiled and linked as logos_core is.
+if(WIN32 AND LOGOS_BUILD_TESTS)
+    add_library(logos_core_static STATIC ${LOGOS_CORE_SOURCES})
+    get_target_property(_logos_core_includes logos_core INCLUDE_DIRECTORIES)
+    get_target_property(_logos_core_definitions logos_core COMPILE_DEFINITIONS)
+    get_target_property(_logos_core_links logos_core LINK_LIBRARIES)
+    target_include_directories(logos_core_static PRIVATE ${_logos_core_includes})
+    target_compile_definitions(logos_core_static PRIVATE ${_logos_core_definitions})
+    # PUBLIC, so the tests declare the C API as the library's own, not dllimport.
+    target_compile_definitions(logos_core_static PUBLIC LOGOS_CORE_LIBRARY)
+    target_link_libraries(logos_core_static PUBLIC ${_logos_core_links})
+endif()
