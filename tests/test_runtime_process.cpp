@@ -18,6 +18,7 @@
 #include <fstream>
 #include <memory>
 #include <mutex>
+#include <optional>
 #include <sstream>
 #include <string>
 #include <thread>
@@ -172,12 +173,45 @@ char* testExtension(const char* callerJson, const char* method, const char*, voi
 constexpr const char* kExtensionMethods =
     R"([{"type":"method","name":"whoAmI","returnType":"LogosMap","isInvokable":true,"parameters":[]}])";
 
+// The runtime a case spawned, stopped however the case ends.
+struct Spawned {
+    logos_runtime* runtime = nullptr;
+
+    Spawned() = default;
+    Spawned(const Spawned&) = delete;
+    Spawned& operator=(const Spawned&) = delete;
+    ~Spawned() { stop(); }
+
+    void stop()
+    {
+        logos_runtime_stop(runtime);
+        runtime = nullptr;
+    }
+};
+
+// An environment variable put back as it was when the case ends.
+struct SavedEnv {
+    std::string name;
+    std::optional<std::string> value;
+
+    explicit SavedEnv(const char* variable) : name(variable)
+    {
+        if (const char* current = std::getenv(variable)) value = current;
+    }
+    ~SavedEnv()
+    {
+        if (value) logos_test::setEnv(name.c_str(), *value);
+        else logos_test::unsetEnv(name.c_str());
+    }
+};
+
 } // namespace
 
 class RuntimeProcessTest : public ::testing::Test {
 protected:
     std::string bundled;
-    std::string previousInstance;
+    SavedEnv instance{"LOGOS_INSTANCE_ID"};
+    SavedEnv host{"LOGOS_HOST_PATH"};
 
     void SetUp() override
     {
@@ -189,9 +223,10 @@ protected:
             GTEST_SKIP() << "TEST_BUNDLED_MODULES_DIR not set";
         }
         bundled = dir;
+        // The real hosts, whatever an earlier case left in LOGOS_HOST_PATH.
+        if (const char* real = std::getenv("TEST_REAL_HOST"); real && *real)
+            logos_test::setEnv("LOGOS_HOST_PATH", real);
         // Sockets of their own: nothing an earlier case left here shares them.
-        const char* instance = std::getenv("LOGOS_INSTANCE_ID");
-        previousInstance = instance ? instance : "";
         static int cases = 0;
         char id[13];
         std::snprintf(id, sizeof id, "%06llx%06x",
@@ -201,8 +236,6 @@ protected:
 
     void TearDown() override
     {
-        if (previousInstance.empty()) logos_test::unsetEnv("LOGOS_INSTANCE_ID");
-        else logos_test::setEnv("LOGOS_INSTANCE_ID", previousInstance);
         logos_core_clear();
     }
 
@@ -225,7 +258,8 @@ TEST_F(RuntimeProcessTest, TheShellReachesItsRuntimeOnlyThroughModuleCalls)
 
     char* error = nullptr;
     const json placement = {{"modules", {{"modules_state", "subprocess"}}}};
-    logos_runtime* runtime =
+    Spawned spawned;
+    logos_runtime* runtime = spawned.runtime =
         logos_runtime_spawn(config({{"placement_policy", placement}}).dump().c_str(), &error);
     ASSERT_NE(runtime, nullptr) << (error ? error : "");
     logos_consumer* shell = logos_runtime_binding(runtime);
@@ -282,7 +316,7 @@ TEST_F(RuntimeProcessTest, TheShellReachesItsRuntimeOnlyThroughModuleCalls)
     ASSERT_FALSE(credential.empty());
 
     // A stop unloads its modules and ends it, and its hosts with it.
-    logos_runtime_stop(runtime);
+    spawned.stop();
     EXPECT_FALSE(alive(runtimePid));
     EXPECT_TRUE(eventually([&] { return !alive(hostPid); })) << "modules_state's host outlived it";
 
@@ -297,28 +331,31 @@ TEST_F(RuntimeProcessTest, WithoutItsAuthorityItNeverBecomesReady)
     // The same modules, not bundled: capability_module cannot run in-process.
     char* error = nullptr;
     const json unbundled = {{"shell", "basecamp"}, {"modules_dirs", json::array({bundled})}};
-    logos_runtime* runtime = logos_runtime_spawn(unbundled.dump().c_str(), &error);
-    EXPECT_EQ(runtime, nullptr);
+    Spawned failed;
+    failed.runtime = logos_runtime_spawn(unbundled.dump().c_str(), &error);
+    EXPECT_EQ(failed.runtime, nullptr);
     ASSERT_NE(error, nullptr);
     EXPECT_NE(std::string(error).find("no token authority"), std::string::npos) << error;
     logos_consumer_string_free(error);
-    logos_runtime_stop(runtime);
 
     // A failed spawn leaves room for the next one.
     error = nullptr;
-    runtime = logos_runtime_spawn(config().dump().c_str(), &error);
-    ASSERT_NE(runtime, nullptr) << (error ? error : "");
-    logos_runtime_stop(runtime);
+    Spawned next;
+    next.runtime = logos_runtime_spawn(config().dump().c_str(), &error);
+    EXPECT_NE(next.runtime, nullptr) << (error ? error : "");
 }
 
 TEST_F(RuntimeProcessTest, OneRuntimePerProcess)
 {
     char* error = nullptr;
-    logos_runtime* runtime = logos_runtime_spawn(config().dump().c_str(), &error);
-    ASSERT_NE(runtime, nullptr) << (error ? error : "");
+    Spawned spawned;
+    spawned.runtime = logos_runtime_spawn(config().dump().c_str(), &error);
+    ASSERT_NE(spawned.runtime, nullptr) << (error ? error : "");
 
     char* second = nullptr;
-    EXPECT_EQ(logos_runtime_spawn(config().dump().c_str(), &second), nullptr);
+    Spawned another;
+    another.runtime = logos_runtime_spawn(config().dump().c_str(), &second);
+    EXPECT_EQ(another.runtime, nullptr);
     EXPECT_NE(std::string(second ? second : "").find("already"), std::string::npos);
     logos_consumer_string_free(second);
     // Nor may it start one of its own beside it.
@@ -326,8 +363,9 @@ TEST_F(RuntimeProcessTest, OneRuntimePerProcess)
     EXPECT_FALSE(ModuleManager::started());
 
     char* noShell = nullptr;
-    logos_runtime_stop(runtime);
-    EXPECT_EQ(logos_runtime_spawn(R"({"bundled_modules_dirs":[]})", &noShell), nullptr);
+    spawned.stop();
+    another.runtime = logos_runtime_spawn(R"({"bundled_modules_dirs":[]})", &noShell);
+    EXPECT_EQ(another.runtime, nullptr);
     EXPECT_NE(std::string(noShell ? noShell : "").find("shell"), std::string::npos);
     logos_consumer_string_free(noShell);
 }
@@ -335,7 +373,8 @@ TEST_F(RuntimeProcessTest, OneRuntimePerProcess)
 TEST_F(RuntimeProcessTest, AnUnexpectedExitIsReported)
 {
     char* error = nullptr;
-    logos_runtime* runtime = logos_runtime_spawn(config().dump().c_str(), &error);
+    Spawned spawned;
+    logos_runtime* runtime = spawned.runtime = logos_runtime_spawn(config().dump().c_str(), &error);
     ASSERT_NE(runtime, nullptr) << (error ? error : "");
     const std::int64_t pid =
         callAs(logos_runtime_binding(runtime), "getStatus")["daemon"].value("pid", std::int64_t{0});
@@ -364,7 +403,7 @@ TEST_F(RuntimeProcessTest, AnUnexpectedExitIsReported)
         EXPECT_NE(seen.reasons.front().find("runtime"), std::string::npos) << seen.reasons.front();
     }
     EXPECT_EQ(logos_runtime_process_module(runtime, "/nowhere"), nullptr);
-    logos_runtime_stop(runtime);
+    spawned.stop();
     std::lock_guard<std::mutex> lock(seen.mutex);
     EXPECT_EQ(seen.reasons.size(), 1u) << "a stop is no second exit";
 }
