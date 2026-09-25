@@ -678,8 +678,7 @@ bool start()
         std::lock_guard<std::mutex> lock(s.mutex);
         s.provider = provider;
     }
-    ModuleManager::registry().registerModule(kName, "<embedded>");
-    ModuleManager::registry().markLoaded(kName);
+    ModuleManager::registry().registerEmbedded(kName);
     s.sink = ModuleStateObserver::instance().addSink(&publishTransitions);
     spdlog::info("core_service is published");
     return true;
@@ -710,7 +709,7 @@ void stop()
         if (client) lp_client_destroy(client);
     if (!provider) return;
     lp_provider_destroy(provider);
-    ModuleManager::registry().markUnloaded(kName);
+    ModuleManager::registry().forgetEmbedded(kName);
     authority::retire(kName);
 }
 
