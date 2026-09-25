@@ -359,6 +359,7 @@ json getModuleInfo(const std::string& name)
         return info;
     }
     info["status"] = "loaded";
+    info["placement"] = entry.value("placement", json(nullptr));
     if (const int64_t up = uptimeOf(entry); up >= 0) info["uptime_seconds"] = up;
     if (lp_client* client = clientFor("core", name)) {
         char* text = lp_get_methods(client);

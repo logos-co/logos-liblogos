@@ -218,6 +218,9 @@ TEST_F(InprocBundledTest, TheRuntimeRunsItsModulesInProcessBehindCoreService)
         ASSERT_TRUE(loader) << name;
         EXPECT_EQ(loader->id(), "inproc") << name;
     }
+    // Reported where a client can see it.
+    const json stateInfo = call("core_service", "getModuleInfo", json::array({"modules_state"}));
+    EXPECT_EQ(stateInfo.value("placement", std::string{}), "inproc") << stateInfo.dump();
 
     // Core's feed reaches modules_state in-process, and so does this call.
     EXPECT_TRUE(eventually([] {
