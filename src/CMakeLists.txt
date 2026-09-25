@@ -107,6 +107,8 @@ set(LOGOS_CORE_SOURCES
     logos_core/access_policy.h
     logos_core/bootstrap_policy.cpp
     logos_core/bootstrap_policy.h
+    logos_core/inproc_module_loader.cpp
+    logos_core/inproc_module_loader.h
     logos_core/module_state_observer.cpp
     logos_core/module_state_observer.h
     logos_core/module_manager.cpp
@@ -229,6 +231,14 @@ target_link_libraries(logos_core PUBLIC
     Boost::process
     spdlog::spdlog
 )
+
+# The native host's module bring-up, for modules placed in-process. It links no
+# lp_* runtime: these modules run on the shared one above.
+if(NOT TARGET LogosFormatLoaderImpl::native_module_host)
+    message(FATAL_ERROR "The format loader provides no native_module_host; "
+                        "logos-module-loader-qt with logos_native_module_host is required")
+endif()
+target_link_libraries(logos_core PRIVATE LogosFormatLoaderImpl::native_module_host)
 
 # Include directories for the library
 target_include_directories(logos_core PRIVATE
