@@ -171,7 +171,7 @@ on a specific container.
 | `processModuleCStr(path) → char*` | C-string variant of processModule |
 | `loadModule(name) → bool` | Load a module (selects a loader via ModuleLoaderRegistry, spawns subprocess, sends auth token) |
 | `loadModuleWithDependencies(name, optionalLoad = OrderOnly) → bool` | Resolve dependency tree, load in topological order. `optionalLoad` (`DependencyResolver::OptionalLoad`) decides whether installed optional dependencies are brought up alongside the target (`BestEffort`) or only used to order modules already in the set (`OrderOnly`); their failure never reaches the return value. Returns false if any REQUIRED dependency is unknown or a cycle is detected (hard failure on `!ResolveResult::ok()`) |
-| `initializeCapabilityModule() → bool` | Load the built-in capability module if available |
+| `initializeCapabilityModule() → bool` | Load capability_module, the token authority, in-process; without it nothing else loads |
 | `unloadModule(name) → bool` | Terminate module process and update registry |
 | `unloadModuleWithDependents(name) → bool` | Cascade unload: terminate the named module together with every currently loaded module that transitively depends on it, leaves-first |
 | `terminateAll()` | Terminate all running module processes |
@@ -179,8 +179,8 @@ on a specific container.
 | `resolveDependencies(modules) → std::vector<std::string>` | Topological sort with circular dependency detection |
 | `getDependencies(name, recursive) → std::vector<std::string>` | Declared dependencies of `name` among known modules; walks the forward graph transitively when `recursive=true`. Cycle- and diamond-safe BFS |
 | `getDependents(name, recursive) → std::vector<std::string>` | Declared dependents of `name` among known modules; walks the reverse graph transitively when `recursive=true`. Reads from the in-process registry, no disk query |
-| `getDependenciesCStr(name, recursive) → char**` | C-string variant backing `logos_core_get_module_dependencies` |
-| `getDependentsCStr(name, recursive) → char**` | C-string variant backing `logos_core_get_module_dependents` |
+| `getDependenciesCStr(name, recursive) → char**` | C-string variant, for the tests' adapter |
+| `getDependentsCStr(name, recursive) → char**` | C-string variant, for the tests' adapter |
 | `getLoadedModulesCStr() → char**` | Return loaded module names as null-terminated C string array |
 | `getKnownModulesCStr() → char**` | Return known module names as null-terminated C string array |
 | `isModuleLoaded(name) → bool` | Check if a module is currently loaded |
@@ -368,7 +368,7 @@ The public C API (`logos_core.h`) is the only exported interface. All functions 
 | Function | Description |
 |----------|-------------|
 | `logos_core_init(argc, argv)` | Initialize the library |
-| `logos_core_start()` | Discover modules and initialize capability module |
+| `logos_core_start()` | Discover modules, load capability_module (the token authority), publish core_service, prepare the shell binding. Without capability_module in-process it logs why and publishes nothing |
 | `logos_core_cleanup()` | Terminate all modules and clean up |
 
 **Module Management:**
@@ -378,30 +378,19 @@ The public C API (`logos_core.h`) is the only exported interface. All functions 
 | `logos_core_add_modules_dir(dir)` | Add a module directory to scan (duplicates ignored) |
 | `logos_core_set_persistence_base_path(path)` | Set base directory for module instance persistence |
 | `logos_core_set_module_transports(name, json)` | Register a per-module transport set (JSON, see logos-cpp-sdk shape). Forwarded to the child via `--transport-set` so its `LogosAPIProvider` binds every listener instead of only the global default LocalSocket. Must be called before the module is loaded; empty clears the entry |
-| `logos_core_set_access_policy(json)` | Install the inter-module access policy (version + mode + per-target `allowedCallers` allowlists). Core parses it and registers the per-target restrictions with capability_module, which denies token issuance (and thus calls) for disallowed callers when `mode` is `enforce`. Under enforce, restrictions are also auto-derived from the dependency graph (a module may only call its declared dependencies; allowed callers = loaded dependents + trusted `core`/`core_service`, re-pushed on load/unload); an explicit entry overrides the derived set for that target. Call before modules load; NULL/empty clears it |
-| `logos_core_load_module(name, deps) → int` | Load a module (1 = success, 0 = failure). `deps` is a `LogosLoadDeps`: `LOGOS_LOAD_MODULE_ONLY` (0) loads the module alone; `LOGOS_LOAD_REQUIRED_DEPS` (1) resolves the required tree and loads in topological order; `LOGOS_LOAD_REQUIRED_AND_OPTIONAL` (2) additionally brings up every installed optional dependency, best effort |
-| `logos_core_unload_module(name, with_dependents) → int` | Unload a module. When `with_dependents` is true, cascade unloads every loaded transitive dependent leaves-first. Returns 1 only if every step succeeded |
-| `logos_core_get_module_dependencies(name, recursive) → char**` | Modules that `name` depends on (forward edges). `recursive=true` walks the forward graph transitively. Unknown names yield an empty array. Caller frees |
-| `logos_core_get_module_dependents(name, recursive) → char**` | Modules that depend on `name` (reverse edges). `recursive=true` walks transitively. Unknown names yield an empty array. Caller frees |
-| `logos_core_process_module(path) → char*` | Process module file, return name (caller frees) |
-| `logos_core_refresh_modules()` | Re-scan module directories |
+| `logos_core_set_access_policy(json)` | Install the inter-module access policy (version + mode + per-target `allowedCallers` allowlists). When `mode` is `enforce`, core hands capability_module the whole policy through its engine interface — explicit entries plus restrictions derived from the dependency graph (a module may only call its declared dependencies; allowed callers = loaded dependents + trusted `core`/`core_service` + the shell), re-sent on every load and unload — and capability_module denies token issuance for disallowed callers. Call before modules load; NULL/empty clears it |
+| `logos_core_set_shell_identity(name)`, `logos_core_take_shell_binding()`, `logos_consumer_*` | The embedder's identity and its binding: every call about modules goes through core_service as the shell |
+| `logos_core_process_module(path) → char*` | Process module file, return name (free with `delete[]`) |
 
-**Queries:**
-
-| Function | Description |
-|----------|-------------|
-| `logos_core_get_loaded_modules() → char**` | Null-terminated array of loaded names (caller frees) |
-| `logos_core_get_known_modules() → char**` | Null-terminated array of known names (caller frees) |
-| `logos_core_get_module_stats() → char*` | JSON array of CPU/memory stats (caller frees) |
-| `logos_core_get_token(key) → char*` | Get auth token by key (caller frees) |
+Loading, unloading and every query about modules are core_service methods (`loadModule`, `unloadModule`, `refreshModules`, `listModules`, `getModulesInfo`, `getModuleStats`, `getModuleDependencies`, `getModuleDependents`, `getModuleOptionalDependencies`, `getOptionalLoadReport`, ...), called over the shell binding; see [spec.md](spec.md#coreservice).
 
 ### Thread Safety
 
 | Category | Guarantee |
 |----------|-----------|
-| `logos_core_load_module`, `logos_core_unload_module` | Serialised by a single internal mutex — safe to call concurrently from multiple threads. The cascade variant (`with_dependents=true`) holds the lock for the entire leaves-first teardown so a late-arriving load can't interleave between tearing down the dependents and the target |
-| `logos_core_get_known_modules`, `logos_core_get_loaded_modules` | Protected by a shared reader-writer lock — safe to call concurrently with each other and with the mutating functions above |
-| `logos_core_refresh_modules` | Protected by `ModuleRegistry`'s reader-writer lock (write side) — safe for concurrent registry access but not serialised against load/unload |
+| core_service loads and unloads | Loads of different modules run concurrently, each under its own module's lock; a cascade unload holds the fleet lock for its entire leaves-first teardown so a late-arriving load can't interleave between tearing down the dependents and the target |
+| core_service queries | Read the registry under its shared reader-writer lock |
+| `refreshModules` | Protected by `ModuleRegistry`'s reader-writer lock (write side) |
 | `logos_core_init`, `logos_core_start`, `logos_core_cleanup` | Not thread-safe — must be called from a single thread during startup/shutdown |
 
 ## Build Artifacts
@@ -508,38 +497,43 @@ Build portable with Nix: `nix build '.#portable'`
 
 ## Examples
 
-### Basic C API Usage
+### Embedding liblogos
 
 ```c
 #include "logos_core.h"
 
 int main(int argc, char *argv[]) {
     logos_core_init(argc, argv);
-    logos_core_add_modules_dir("/path/to/modules");
+    // capability_module, the token authority, ships here and runs in-process.
+    const char* bundled[] = {"/path/to/app/modules", NULL};
+    logos_core_set_bundled_modules_dirs(bundled);
+    logos_core_add_modules_dir("/path/to/user/modules");
+    logos_core_set_shell_identity("my_app");
 
     logos_core_start();
-    logos_core_load_module("chat", LOGOS_LOAD_MODULE_ONLY);
+    logos_consumer* shell = logos_core_take_shell_binding();   // NULL: no authority
 
-    char** loaded = logos_core_get_loaded_modules();
-    for (int i = 0; loaded[i] != NULL; i++) {
-        printf("Loaded: %s\n", loaded[i]);
-    }
-    free(loaded);
+    char* result = NULL;
+    char* error = NULL;
+    // deps: "module_only", "required" or "required_and_optional"
+    logos_consumer_call(shell, "core_service", "loadModule", "[\"chat\",\"required\"]",
+                        120000, &result, &error);
+    logos_consumer_string_free(result);
+    logos_consumer_string_free(error);
 
+    logos_consumer_call(shell, "core_service", "listModules", "[\"loaded\"]",
+                        15000, &result, &error);
+    printf("Loaded: %s\n", result ? result : "(none)");
+    logos_consumer_string_free(result);
+    logos_consumer_string_free(error);
+
+    logos_consumer_release(shell);
     logos_core_cleanup();
     return 0;
 }
 ```
 
-### Loading with Dependencies
-
-```c
-// Resolves the required tree and loads in correct order
-logos_core_load_module("my_module", LOGOS_LOAD_REQUIRED_DEPS);
-
-// As above, plus every optional dependency that is installed (best effort)
-logos_core_load_module("my_module", LOGOS_LOAD_REQUIRED_AND_OPTIONAL);
-```
+A C++ embedder uses logos-cpp-sdk's `logos::host::LogosCore`, which wraps the same calls.
 
 ## Continuous Integration
 
@@ -548,8 +542,7 @@ GitHub Actions workflow (`.github/workflows/ci.yml`) runs on every push/PR to `m
 1. Checkout code
 2. Install Nix with flakes enabled
 3. Use cachix cache (`logos-co`)
-4. Build: `nix build .#logos-liblogos-tests`
-5. Run: `./result/bin/logos_core_tests`
+4. Run the checks: `nix build .#checks.<system>.tests` and `.#checks.<system>.qt-embedder-admission`
 
 ## Supported Platforms
 
