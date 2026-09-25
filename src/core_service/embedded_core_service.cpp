@@ -386,10 +386,15 @@ json callModuleMethod(const Caller& caller, const std::string& module, const std
     if (module != kName && !contains(loadedNames(), module))
         return error("MODULE_NOT_LOADED", "Module '" + module + "' is not loaded. Load it with: "
                                           "logosctl module load " + module);
+    // Refused like any unauthorized call, so the answer is the usual envelope.
+    if (caller.kind == "operator" && (module == "capability_module" || module == kName))
+        return callEnvelope(module, method, nullptr,
+                            CallFailure{"unauthorized",
+                                        "an operator cannot call " + module + " through core_service",
+                                        kName},
+                            {});
     std::string origin = "core";
     if (caller.kind == "operator" && authority::attached()) {
-        if (module == "capability_module" || module == kName)
-            return error("FORBIDDEN", "Module '" + module + "' belongs to the runtime.");
         if (isPackageModule(module)) {
             origin = kName;
         } else {
