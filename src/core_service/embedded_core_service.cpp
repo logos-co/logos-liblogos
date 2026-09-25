@@ -21,6 +21,7 @@
 #include <map>
 #include <mutex>
 #include <optional>
+#include <set>
 #include <unordered_set>
 #include <vector>
 
@@ -64,6 +65,7 @@ struct Service {
     int sink = 0;
     std::map<std::pair<std::string, std::string>, lp_client*> clients; // (origin, target)
     std::vector<std::pair<lp_subscription*, std::string*>> watches; // with the module named
+    std::set<std::string> consumers; // admitted here, so retireConsumer may end them
 };
 
 Service& service()
@@ -454,19 +456,30 @@ json watchModuleEvents(const Caller& caller, const std::string& module, const st
     return true;
 }
 
+// A module's name is never a consumer's: admitting it would retire the module.
 json admitConsumer(const std::string& name, const std::string& kind)
 {
-    if (!logos::isValidModuleName(name) || bootstrap::isReservedName(name))
+    if (!logos::isValidModuleName(name) || bootstrap::isReservedName(name)
+        || contains(knownNames(), name))
         return error("INVALID_ARGS", "'" + name + "' cannot be admitted as a consumer.");
     if (kind != "presentation") return error("INVALID_ARGS", "only presentation consumers");
     if (!authority::attached()) return error("UNAVAILABLE", "no token authority is running");
     const std::string credential = authority::admit(name, kind);
     if (credential.empty()) return error("FORBIDDEN", "capability_module refused '" + name + "'.");
+    {
+        std::lock_guard<std::mutex> lock(service().mutex);
+        service().consumers.insert(name);
+    }
     return {{"status", "ok"}, {"name", name}, {"credential", credential}};
 }
 
 json retireConsumer(const std::string& name)
 {
+    {
+        std::lock_guard<std::mutex> lock(service().mutex);
+        if (!service().consumers.erase(name))
+            return error("NOT_FOUND", "'" + name + "' is not a consumer admitted here.");
+    }
     authority::retire(name);
     return {{"status", "ok"}, {"name", name}};
 }
@@ -731,6 +744,7 @@ void stop()
         s.provider = nullptr;
         watches.swap(s.watches);
         clients.swap(s.clients);
+        s.consumers.clear();
     }
     if (s.sink) {
         ModuleStateObserver::instance().removeSink(s.sink);

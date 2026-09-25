@@ -284,6 +284,10 @@ TEST_F(InprocBundledTest, TheRuntimeRunsItsModulesInProcessBehindCoreService)
     EXPECT_TRUE(callWith(plugin, "getStatus").is_object());
     EXPECT_TRUE(forbidden(callWith(plugin, "loadModule", json::array({"modules_state"}))));
     EXPECT_TRUE(forbidden(callWith(plugin, "admitConsumer", json::array({"x", "presentation"}))));
+    // The shell retires only what it admitted, never a module.
+    EXPECT_EQ(shellCall("retireConsumer", json::array({"modules_state"})).value("code", std::string{}),
+              "NOT_FOUND");
+    EXPECT_TRUE(logos::authority::resolveCaller(credential.c_str(), "inproc").has_value());
 
     // An operator the embedder names forwards calls, but never to the token store.
     lp_client* alice = clientAs("alice-cli", {}, "core_service", "alice-token");
@@ -306,6 +310,10 @@ TEST_F(InprocBundledTest, TheRuntimeRunsItsModulesInProcessBehindCoreService)
     lp_client_destroy(plugin);
     lp_client_destroy(alice);
     lp_client_destroy(stranger);
+    const std::string pluginCredential = admitted.value("credential", std::string{});
+    EXPECT_EQ(shellCall("retireConsumer", json::array({"test_ui_plugin"})).value("status", std::string{}),
+              "ok");
+    EXPECT_FALSE(logos::authority::resolveCaller(pluginCredential.c_str(), "inproc").has_value());
 
     EXPECT_EQ(logos_core_unload_module("modules_state", false), 1);
     EXPECT_FALSE(loaded("modules_state"));
