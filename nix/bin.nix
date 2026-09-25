@@ -1,7 +1,6 @@
-# Assembles the liblogos `bin` output. liblogos itself no longer builds a
-# binary (logos_host_qt moved to logos-module-loader-qt), so this re-exports the
-# already-wrapped host binary from that package and bundles the runtime libs +
-# built-in modules, keeping the output shape frontends expect.
+# Assembles the liblogos `bin` output: logos_runtime, the module hosts
+# re-exported from logos-module-loader-qt (already wrapped), the runtime libs
+# and the built-in modules, in the shape frontends expect.
 { pkgs, common, build, lib, modules, moduleHosts }:
 
 pkgs.stdenvNoCC.mkDerivation {
@@ -19,7 +18,19 @@ pkgs.stdenvNoCC.mkDerivation {
     mkdir -p $out/bin
     if [ -d ${moduleHosts}/bin ]; then
       cp -a ${moduleHosts}/bin/. $out/bin/
+      chmod u+w $out/bin
     fi
+
+    # The runtime in a process of its own, which apps spawn beside the hosts.
+    runtime=""
+    for cand in ${build}/bin/logos_runtime ${build}/bin/logos_runtime.exe; do
+      [ -f "$cand" ] && runtime="$cand"
+    done
+    if [ -z "$runtime" ]; then
+      echo "Error: no logos_runtime in ${build}/bin" >&2
+      exit 1
+    fi
+    cp "$runtime" $out/bin/
 
     # Runtime libraries for downstream linking (liblogos_core etc.)
     mkdir -p $out/lib

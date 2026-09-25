@@ -6,6 +6,8 @@
 #include "bootstrap_policy.h"
 #include "core_service/embedded_core_service.h"
 #include "core_service/shell_binding.h"
+#include "instance_id.h"
+#include "runtime_host/runtime_host.h"
 #include "token_authority.h"
 #include "logos_protocol.h"
 #include <atomic>
@@ -30,8 +32,7 @@ void logos_core_add_modules_dir(const char* modules_dir) {
     ModuleManager::addModulesDir(modules_dir);
 }
 
-namespace {
-void ensureInstanceId() {
+void logos::ensureInstanceId() {
     if (const char* current = std::getenv("LOGOS_INSTANCE_ID"); current && *current)
         return;
     // Twelve hex digits, as the Qt runtime's LogosInstance::id() made them:
@@ -48,7 +49,6 @@ void ensureInstanceId() {
 #else
     ::setenv("LOGOS_INSTANCE_ID", value.c_str(), 1);
 #endif
-}
 }
 
 int logos_core_set_bundled_modules_dirs(const char* const* dirs) {
@@ -135,11 +135,15 @@ int logos_core_set_shell_identity(const char* name) {
 }
 
 void logos_core_start() {
-    ModuleManager::markStarted();
     logos::initLogging();
+    if (logos::runtime_host::spawned()) {
+        logos::logger("core").critical("logos_core_start: this process spawned its runtime");
+        return;
+    }
+    ModuleManager::markStarted();
     // Hosts inherit this value and therefore publish at the endpoint the
     // parent-side plain clients derive independently.
-    ensureInstanceId();
+    logos::ensureInstanceId();
     ModuleManager::anchorCoreApi();
     ModuleManager::discoverInstalledModules();
     ModuleManager::initializeCapabilityModule();

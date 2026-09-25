@@ -119,6 +119,10 @@ set(LOGOS_CORE_SOURCES
     core_service/embedded_core_service.h
     core_service/shell_binding.cpp
     core_service/shell_binding.h
+    runtime_host/runtime_host.cpp
+    runtime_host/runtime_host.h
+    runtime_host/runtime_spawn.cpp
+    logos_core/instance_id.h
     logos_core/module_state_observer.cpp
     logos_core/module_state_observer.h
     logos_core/module_manager.cpp
@@ -288,6 +292,21 @@ else()
         INSTALL_RPATH "$ORIGIN"
         BUILD_WITH_INSTALL_RPATH TRUE)
 endif()
+
+# The runtime in a process of its own, which an app spawns (logos_runtime_spawn).
+add_executable(logos_runtime runtime_host/main.cpp)
+target_link_libraries(logos_runtime PRIVATE logos_core)
+target_include_directories(logos_runtime PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/logos_core)
+if(APPLE)
+    set_target_properties(logos_runtime PROPERTIES
+        INSTALL_RPATH "@loader_path/../lib"
+        BUILD_WITH_INSTALL_RPATH TRUE)
+elseif(NOT WIN32)
+    set_target_properties(logos_runtime PROPERTIES
+        INSTALL_RPATH "$ORIGIN/../lib"
+        BUILD_WITH_INSTALL_RPATH TRUE)
+endif()
+install(TARGETS logos_runtime RUNTIME DESTINATION bin)
 
 # The test suite drives the internal C++ classes as well as the C API, and on
 # Windows the DLL exports only the C API (see above). There the suite links the

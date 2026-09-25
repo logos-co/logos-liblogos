@@ -34,13 +34,14 @@ pkgs.stdenv.mkDerivation {
   inherit (common) nativeBuildInputs buildInputs meta env;
 
   cmakeFlags = common.cmakeFlags ++ [ "-DLOGOS_BUILD_TESTS=ON" ];
-  ninjaFlags = [ "logos_core_tests" "logos_fake_module_host" ];
+  ninjaFlags = [ "logos_core_tests" "logos_fake_module_host" "logos_runtime" "logos_runtime_test_app" ];
 
   installPhase = ''
     runHook preInstall
     mkdir -p $out/bin $out/lib $out/host $out/modules $out/qt-plugin $out/share/logos-tests
     # Their DLLs are linked in beside them by the mingw fixup hook.
-    cp bin/logos_core_tests.exe bin/logos_fake_module_host.exe $out/bin/
+    cp bin/logos_core_tests.exe bin/logos_fake_module_host.exe bin/logos_runtime.exe \
+       bin/logos_runtime_test_app.exe bin/liblogos_core.dll $out/bin/
     cp lib/*_fixture_plugin.fixture lib/*_fixture_plugin.metadata.json $out/lib/
     # The host and bundled modules as the package ships them, DLLs included.
     cp -rL ${bin}/bin/. $out/host/
