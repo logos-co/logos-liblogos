@@ -56,6 +56,9 @@ struct ModuleInfo {
     // and every one of them must ignore this one.
     std::vector<LogosCore::ModuleDependency> optionalDependencies;
     std::vector<std::string> optionalDependents;
+    // Found under a bundled directory: only then may it carry a reserved name,
+    // host-service grants or an in-process placement.
+    bool bundled = false;
     bool loaded = false;
     // Unix timestamp (seconds) of the most recent load, set by markLoaded and
     // cleared to 0 by markUnloaded. 0 ⟺ not currently loaded. Callers derive a
@@ -79,6 +82,12 @@ public:
     void setModulesDir(const std::string& dir);
     void addModulesDir(const std::string& dir);
     std::vector<std::string> modulesDirs() const;
+
+    // Directories the embedder ships (protected input, set before start). They
+    // are scanned too, and a reserved name resolves only from them.
+    void setBundledModulesDirs(const std::vector<std::string>& dirs);
+    std::vector<std::string> bundledModulesDirs() const;
+    bool isBundled(const std::string& name) const;
 
     void discoverInstalledModules();
     std::string processModule(const std::string& modulePath);
@@ -185,8 +194,14 @@ private:
     std::vector<std::string> moduleDependentsLocked(const std::string& name,
                                                     bool recursive) const;
 
+    bool isUnderBundledDirLocked(const std::string& path) const;
+    bool admitsRecordLocked(const std::string& name, const std::string& modulePath) const;
+    bool keepsLoadedRecordLocked(const ModuleInfo& info, const std::string& name,
+                                 const std::string& modulePath) const;
+
     mutable std::shared_mutex m_mutex;
     std::vector<std::string> m_modulesDirs;
+    std::vector<std::string> m_bundledDirs;
     std::unordered_map<std::string, ModuleInfo> m_modules;
 };
 

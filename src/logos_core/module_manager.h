@@ -28,6 +28,11 @@ namespace ModuleManager {
 
     void setModulesDir(const char* modules_dir);
     void addModulesDir(const char* modules_dir);
+    void setBundledModulesDirs(const std::vector<std::string>& dirs);
+
+    // Protected setters answer only before start; clear() reopens them.
+    void markStarted();
+    bool started();
     void setPersistenceBasePath(const char* path);
 
     // Register a per-module transport set (serialized JSON, see
