@@ -53,7 +53,7 @@ pkgs.stdenv.mkDerivation {
     runHook preBuild
     
     cd build
-    ninja logos_core_tests
+    ninja logos_core_tests logos_runtime logos_runtime_test_app
     
     runHook postBuild
   '';
@@ -63,7 +63,7 @@ pkgs.stdenv.mkDerivation {
     runHook preInstall
     
     mkdir -p $out/bin
-    cp bin/logos_core_tests bin/logos_fake_module_host $out/bin/
+    cp bin/logos_core_tests bin/logos_fake_module_host bin/logos_runtime bin/logos_runtime_test_app $out/bin/
     
     # Copy the libraries so tests can run
     mkdir -p $out/lib
@@ -91,9 +91,11 @@ pkgs.stdenv.mkDerivation {
 
     ${pkgs.lib.optionalString pkgs.stdenv.isDarwin ''
       # Fix RPATH to find libraries in $out/lib on macOS
-      install_name_tool \
-        -change @rpath/liblogos_core.dylib $out/lib/liblogos_core.dylib \
-        $out/bin/logos_core_tests || true
+      for exe in logos_core_tests logos_runtime logos_runtime_test_app; do
+        install_name_tool \
+          -change @rpath/liblogos_core.dylib $out/lib/liblogos_core.dylib \
+          $out/bin/$exe || true
+      done
     ''}
 
     ${pkgs.lib.optionalString pkgs.stdenv.isLinux ''
@@ -109,6 +111,8 @@ pkgs.stdenv.mkDerivation {
       # while the same commit passed on macOS, which does not go through here.
       _rpath="$out/lib:${common.env.LOGOS_PROTOCOL_ROOT}/lib:${pkgs.boost}/lib:${pkgs.openssl.out}/lib:${common.env.LOGOS_PACKAGE_MANAGER_ROOT}/lib:${pkgs.gtest}/lib:${pkgs.spdlog}/lib:${pkgs.fmt}/lib:${pkgs.stdenv.cc.cc.lib}/lib"
       patchelf --set-rpath "$_rpath" $out/bin/logos_core_tests || true
+      patchelf --set-rpath "$_rpath" $out/bin/logos_runtime || true
+      patchelf --set-rpath "$_rpath" $out/bin/logos_runtime_test_app || true
       # Fix RPATH on liblogos_core.so so it can find its transitive deps (e.g. libboost_process, spdlog, fmt, libssl)
       _rpath_lib="$out/lib:${common.env.LOGOS_PROTOCOL_ROOT}/lib:${pkgs.boost}/lib:${pkgs.openssl.out}/lib:${common.env.LOGOS_PACKAGE_MANAGER_ROOT}/lib:${pkgs.spdlog}/lib:${pkgs.fmt}/lib:${pkgs.stdenv.cc.cc.lib}/lib"
       patchelf --set-rpath "$_rpath_lib" $out/lib/liblogos_core.so || true

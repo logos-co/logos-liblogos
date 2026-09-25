@@ -138,6 +138,42 @@ LOGOS_CORE_EXPORT void logos_consumer_string_free(char* value);
 // Ends the handle's calls and subscriptions; the identity lasts until cleanup.
 LOGOS_CORE_EXPORT void logos_consumer_release(logos_consumer* consumer);
 
+// ── the runtime in a process of its own ───────────────────────────────────────
+// Instead of logos_core_start(), an app can spawn the runtime as bin/logos_runtime
+// (found beside the app, the module hosts or the modules, or at
+// LOGOS_RUNTIME_PATH). The token authority and every module's credential then
+// live there, and the app reaches the runtime only through module calls, as its
+// shell. `config_json` carries what the setters above take:
+//     {"shell": "<name>",                                   required
+//      "modules_dirs": [...], "bundled_modules_dirs": [...],
+//      "persistence_base_path": "...", "module_transports": {"<name>": [...]},
+//      "access_policy": {...}, "placement_policy": {...},
+//      "package_config": {...}, "core_service_transports": [...]}
+// The hooks set with logos_core_set_shutdown_handler, _operator_resolver and
+// _core_service_extension are served here: the runtime forwards each call over
+// its private pipe, and they run on this library's threads. A hook must not
+// stop the runtime itself; it signals the thread that does.
+// Blocks until the runtime is ready; NULL if it fails, with why in *out_error
+// (free with logos_consumer_string_free). One runtime per process.
+typedef struct logos_runtime logos_runtime;
+LOGOS_CORE_EXPORT logos_runtime* logos_runtime_spawn(const char* config_json, char** out_error);
+// The shell's binding into it; every call takes the local socket. Owned by the
+// handle, and valid until logos_runtime_stop().
+LOGOS_CORE_EXPORT logos_consumer* logos_runtime_binding(logos_runtime* runtime);
+// logos_core_process_module, run there: the module's name, or NULL if refused.
+// Free with logos_consumer_string_free.
+LOGOS_CORE_EXPORT char* logos_runtime_process_module(logos_runtime* runtime,
+                                                     const char* module_path);
+// Called once, on a library thread, if the runtime exits before
+// logos_runtime_stop(); `reason` says how. Right away if it already has.
+typedef void (*logos_runtime_exit_cb)(const char* reason, void* user_data);
+LOGOS_CORE_EXPORT void logos_runtime_on_exit(logos_runtime* runtime, logos_runtime_exit_cb cb,
+                                             void* user_data);
+// Stops its modules in order, ends the process and frees the handle.
+LOGOS_CORE_EXPORT void logos_runtime_stop(logos_runtime* runtime);
+// What bin/logos_runtime runs.
+LOGOS_CORE_EXPORT int logos_runtime_host_main(int argc, char* argv[]);
+
 // Start the runtime: scan the module directories, load capability_module (the
 // token authority), publish core_service, load modules_state, and prepare the
 // shell binding. capability_module must be bundled and run in-process: without
@@ -152,6 +188,7 @@ LOGOS_CORE_EXPORT void logos_consumer_release(logos_consumer* consumer);
 // core_service.lidl). loadModule means "ensure loaded": it answers ok for a
 // module already up, and it blocks for the bring-up. Loads of different
 // modules run at the same time.
+// Refused in a process that spawned its runtime.
 LOGOS_CORE_EXPORT void logos_core_start();
 
 // Clean up resources

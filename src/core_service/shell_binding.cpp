@@ -97,6 +97,26 @@ bool prepare()
     return true;
 }
 
+logos_consumer* adopt(const std::string& name, const std::string& credential)
+{
+    if (name.empty() || credential.empty()
+        || lp_token_isolate_identity(name.c_str()) != LP_OK
+        || lp_token_adopt_credential(name.c_str(), credential.c_str()) != LP_OK
+        || lp_token_save_for(name.c_str(), "capability_module", credential.c_str()) != LP_OK)
+        return nullptr;
+    auto* consumer = new logos_consumer;
+    consumer->name = name;
+    consumer->credential = credential;
+    return consumer;
+}
+
+void release(logos_consumer* consumer)
+{
+    if (!consumer) return;
+    closeAll(consumer);
+    delete consumer;
+}
+
 void shutdown()
 {
     logos_consumer* consumer = nullptr;
