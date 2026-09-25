@@ -426,12 +426,17 @@ TEST_F(RuntimeProcessTest, TheRuntimeAndItsHostsGoDownWithTheirApp)
     std::vector<std::int64_t> hosts;
     std::string output;
     char buffer[512];
-    while (output.find("READY\n") == std::string::npos && output.find("SPAWN_FAILED") == std::string::npos) {
+    // A whole line, "\r\n" on Windows' text-mode stdout.
+    const auto said = [&](const char* word) {
+        const auto at = output.find(word);
+        return at != std::string::npos && output.find('\n', at) != std::string::npos;
+    };
+    while (!said("READY") && !said("SPAWN_FAILED")) {
         const size_t n = child.read(buffer, sizeof buffer);
         if (n == 0) break;
         output.append(buffer, n);
     }
-    ASSERT_NE(output.find("READY\n"), std::string::npos) << output;
+    ASSERT_TRUE(said("READY")) << output;
     std::istringstream lines(output);
     for (std::string word; lines >> word;) {
         std::int64_t pid = 0;
