@@ -111,6 +111,8 @@ set(LOGOS_CORE_SOURCES
     logos_core/inproc_module_loader.h
     logos_core/token_authority.cpp
     logos_core/token_authority.h
+    logos_core/package_config.cpp
+    logos_core/package_config.h
     core_service/call_envelope.cpp
     core_service/call_envelope.h
     core_service/embedded_core_service.cpp

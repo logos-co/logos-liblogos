@@ -63,6 +63,15 @@ LOGOS_CORE_EXPORT int logos_core_set_bundled_modules_dirs(const char* const* dir
 // malformed policy.
 LOGOS_CORE_EXPORT int logos_core_set_placement_policy(const char* policy_json);
 
+// package_manager's settings, applied by the runtime as it loads (its setters
+// answer only the runtime): protected input, before logos_core_start() only.
+//     {"embedded_modules_dirs": [...], "user_modules_dir": "...",
+//      "embedded_ui_plugins_dirs": [...], "user_ui_plugins_dir": "...",
+//      "keyring_dir": "...", "signature_policy": "none" | "warn" | "require"}
+// Every key is optional. A signature policy package_manager does not take fails
+// its load. Returns 0, or -1 after start or for a malformed document.
+LOGOS_CORE_EXPORT int logos_core_set_package_config(const char* config_json);
+
 // ── core_service, the runtime's control surface ──────────────────────────────
 // It is published at logos_core_start() as a module of its own, on inproc and
 // the local socket. Each method answers only the callers its scope admits:

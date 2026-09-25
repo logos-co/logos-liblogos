@@ -21,6 +21,7 @@ add_executable(logos_core_tests
     test_instance_persistence.cpp
     test_core_outbound.cpp
     test_bootstrap_policy.cpp
+    test_package_config.cpp
     test_inproc_loader.cpp
     test_call_envelope.cpp
 )
