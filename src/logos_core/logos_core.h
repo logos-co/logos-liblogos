@@ -50,6 +50,19 @@ LOGOS_CORE_EXPORT void logos_core_add_modules_dir(const char* modules_dir);
 // Returns 0, or -1 after logos_core_start() or for a NULL `dirs`.
 LOGOS_CORE_EXPORT int logos_core_set_bundled_modules_dirs(const char* const* dirs);
 
+// Where modules run: protected input, before logos_core_start() only.
+//     {"default": "subprocess" | "inproc",
+//      "modules": {"<name>": "subprocess" | "inproc"},
+//      "single_process": false}
+// A module runs in-process only when it is bundled, its build stamped it
+// in-process eligible, and the policy (or, when silent, the runtime's own
+// table) places it here; otherwise it runs in its own host process.
+// capability_module is always in-process when it can be. With
+// single_process, a module that cannot run in-process is not loaded at all.
+// NULL or "" restores the default. Returns 0, or -1 after start or for a
+// malformed policy.
+LOGOS_CORE_EXPORT int logos_core_set_placement_policy(const char* policy_json);
+
 // Start the logos core functionality
 LOGOS_CORE_EXPORT void logos_core_start();
 

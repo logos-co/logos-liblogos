@@ -16,6 +16,7 @@
 #include "module_registry.h"
 #include "module_loader_registry.h"
 #include "module_loader.h"
+#include "inproc_module_loader.h"
 #include "subprocess_manager.h"
 #include <string>
 #include <vector>
@@ -104,8 +105,10 @@ protected:
         logos_core_terminate_all();
         logos_core_clear();
         SubprocessManager::clearAll();
-        // Restore default loader so other test suites aren't affected.
+        // Restore the default loaders so other test suites aren't affected.
         ModuleManager::loaders().clearForTests();
+        ModuleManager::loaders().registerLoader(
+            std::make_shared<LogosCore::InprocModuleLoader>());
         ModuleManager::loaders().registerLoader(
             std::make_shared<SubprocessManager>());
     }

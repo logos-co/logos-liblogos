@@ -143,6 +143,16 @@ void logos_core_cleanup();
 // Module directory management
 void logos_core_add_modules_dir(const char* dir);
 
+// The directories the embedder ships its own modules in (before start only;
+// NULL-terminated). Reserved names (capability_module, modules_state,
+// core_service, package_*, logos_*, ...) then resolve only from them.
+int  logos_core_set_bundled_modules_dirs(const char* const* dirs);
+
+// Where modules run (before start only): {"default":"subprocess"|"inproc",
+// "modules":{"<name>":...}, "single_process":bool}. Only bundled modules
+// the builder stamped in-process eligible ever run in this process.
+int  logos_core_set_placement_policy(const char* policy_json);
+
 // Instance persistence
 void logos_core_set_persistence_base_path(const char* path);
 
@@ -178,6 +188,16 @@ char* logos_core_get_token(const char* key);
 ```
 
 See `src/logos_core/logos_core.h` for the full API.
+
+### In-process modules
+
+A bundled native module whose build stamped it `inproc_eligible` can run inside
+this process instead of in `logos_host_plain`. capability_module does whenever it
+can; modules_state and the package modules do by default; anything else only
+when the placement policy says so. An in-process module calls out through the
+runtime as its own identity (a runtime delegate), is served over `inproc` and the
+local socket, and shares this process's fate: a crash takes the host down, and
+its image stays mapped after an unload, so loading it again needs a restart.
 
 ### Inter-module access enforcement (off by default)
 
