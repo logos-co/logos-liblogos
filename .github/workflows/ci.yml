@@ -38,3 +38,8 @@ jobs:
     # proves nothing about the discovery -> gate path.
     - name: Run logos_core_tests
       run: nix build -L ".#checks.$(nix eval --impure --raw --expr builtins.currentSystem).tests"
+
+    # A Basecamp-shaped process: an app's Qt store gets core's tokens only
+    # through the listener; the check's negative control runs without one.
+    - name: Run the Qt embedder token check
+      run: nix build -L ".#checks.$(nix eval --impure --raw --expr builtins.currentSystem).qt-embedder-tokens"

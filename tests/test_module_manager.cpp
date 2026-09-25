@@ -1,8 +1,10 @@
 #include <gtest/gtest.h>
+#include <optional>
 #include "logos_core.h"
 #include "logos_core/dependency_gate.h"
 #include "logos_core/module_state_observer.h"
 #include "qt_test_adapter.h"
+#include "test_platform.h"
 #include <nlohmann/json.hpp>
 #include <algorithm>
 #include <cstdlib>
@@ -20,21 +22,11 @@ static void clearModuleState() {
     logos_core_clear();
 }
 
-// RAII temporary directory (uses mkdtemp, cleaned up on destruction)
+// RAII temporary directory, removed on destruction
 struct TmpDir {
     fs::path path;
 
-    TmpDir() {
-        std::string tmpl = (fs::temp_directory_path() / "logos_test_XXXXXX").string();
-        char* buf = new char[tmpl.size() + 1];
-        memcpy(buf, tmpl.c_str(), tmpl.size() + 1);
-        if (!mkdtemp(buf)) {
-            delete[] buf;
-            throw std::runtime_error("mkdtemp failed");
-        }
-        path = buf;
-        delete[] buf;
-    }
+    TmpDir() : path(logos_test::makeTempDir("logos_test_")) {}
 
     ~TmpDir() {
         std::error_code ec;
@@ -864,6 +856,70 @@ TEST_F(RealModuleRegistryTest, ProcessModule_RegistersRealModule) {
     EXPECT_EQ(logos_core_is_module_known(name), 1);
     EXPECT_EQ(logos_core_is_module_loaded(name), 0);
     delete[] name;
+}
+
+// Detector: LOGOS_HOST_PATH naming a host from before --inspect hid every
+// module without a metadata sidecar, though a current host sat where discovery
+// also looks.
+TEST_F(RealModuleRegistryTest, AConfiguredHostWithoutInspectDoesNotHideModules) {
+    const char* realHost = std::getenv("TEST_REAL_HOST");
+    if (!realHost || !fs::exists(realHost)) GTEST_SKIP() << "TEST_REAL_HOST not set";
+    char* discovered = logos_core_process_module(modulePath.c_str());
+    ASSERT_NE(discovered, nullptr);
+    const std::string expected(discovered);
+    delete[] discovered;
+    clearModuleState();
+
+    TmpDir root;
+    // The stand-in host predates --inspect.
+    const fs::path oldHost = logos_test::fakeHostPath();
+    fs::create_directories(root.path / "modules");
+    fs::create_directories(root.path / "bin");
+#ifdef _WIN32
+    // A symlink takes a privilege Windows withholds by default; the copy finds
+    // its DLLs on PATH.
+    fs::copy_file(realHost, root.path / "bin" / "logos_host_qt.exe");
+#else
+    fs::create_symlink(realHost, root.path / "bin" / "logos_host_qt");
+#endif
+    // The binary without the sidecar its package ships: only --inspect names it.
+    const fs::path copy = root.path / "modules" / fs::path(modulePath).filename();
+    fs::copy_file(modulePath, copy);
+
+    const char* saved = std::getenv("LOGOS_HOST_PATH");
+    const std::optional<std::string> previous =
+        saved ? std::optional<std::string>(saved) : std::nullopt;
+    logos_test::setEnv("LOGOS_HOST_PATH", oldHost.string());
+    logos_core_add_modules_dir((root.path / "modules").string().c_str());
+    char* name = logos_core_process_module(copy.string().c_str());
+    if (previous) logos_test::setEnv("LOGOS_HOST_PATH", *previous);
+    else logos_test::unsetEnv("LOGOS_HOST_PATH");
+    ASSERT_NE(name, nullptr) << "a module without a sidecar was not discovered";
+    EXPECT_EQ(std::string(name), expected);
+    delete[] name;
+}
+
+// Detector: the package's manifests named the first DLL beside each bundled
+// plugin, Qt6Core.dll, as its binary, so on Windows neither bundled module was
+// ever discovered. Reads the modules directory the package actually ships.
+TEST(BundledModulesTest, EachBundledModuleIsDiscoveredFromItsOwnPlugin) {
+    const char* dir = std::getenv("TEST_BUNDLED_MODULES_DIR");
+    if (!dir || !fs::is_directory(dir)) {
+        if (std::getenv("LOGOS_REQUIRE_TEST_FIXTURES"))
+            FAIL() << "TEST_BUNDLED_MODULES_DIR does not name the package's modules: "
+                   << (dir ? dir : "(unset)");
+        GTEST_SKIP() << "TEST_BUNDLED_MODULES_DIR not set";
+    }
+    clearModuleState();
+    logos_core_add_modules_dir(dir);
+    logos_core_refresh_modules();
+    for (const std::string name : {"capability_module", "modules_state"}) {
+        char* path = logos_core_get_module_path(name.c_str());
+        EXPECT_NE(path, nullptr) << name << " was not discovered";
+        if (path) EXPECT_EQ(fs::path(path).stem().string(), name + "_plugin") << path;
+        delete[] path;
+    }
+    clearModuleState();
 }
 
 // For a real plugin, get_modules_info must carry the embedded metadata parsed
@@ -1947,4 +2003,127 @@ TEST_F(DenyByDefaultFlagTest, FlagIsReversible) {
 
     ModuleManager::setAccessPolicy("");
     EXPECT_TRUE(derived("target").empty());
+}
+
+// Detector: module metadata is untrusted. A field of the wrong type used to
+// escape nlohmann's typed value() as type_error.302 through
+// logos_core_process_module and abort the runtime.
+class MalformedMetadataTest : public ::testing::Test {
+protected:
+    TmpDir dir;
+
+    void SetUp() override { clearModuleState(); }
+    void TearDown() override { clearModuleState(); }
+
+    std::string install(const std::string& stem, const std::string& metadata) {
+        const fs::path binary = dir.path / (stem + ".so");
+        std::ofstream(binary) << "not a real module";
+        std::ofstream(dir.path / (stem + ".metadata.json")) << metadata;
+        return binary.string();
+    }
+
+    std::string process(const std::string& path) {
+        char* name = nullptr;
+        EXPECT_NO_THROW(name = logos_core_process_module(path.c_str()));
+        if (!name) return {};
+        std::string registered(name);
+        delete[] name;
+        return registered;
+    }
+};
+
+TEST_F(MalformedMetadataTest, WrongTypedFieldsAreRefusedNotFatal) {
+    EXPECT_EQ(process(install("numeric_name", R"({"name":5})")), "");
+    EXPECT_EQ(process(install("numeric_transport",
+                              R"({"name":"numeric_transport","transport":7})")), "");
+    EXPECT_EQ(process(install("unknown_transport",
+                              R"({"name":"unknown_transport","transport":"carrier_pigeon"})")), "");
+    // The Qt-era reader treated a non-string version as empty; keep that.
+    EXPECT_EQ(process(install("numeric_version",
+                              R"({"name":"numeric_version","version":1.0})")), "numeric_version");
+}
+
+TEST_F(MalformedMetadataTest, NonStringSignerIsAMalformedConstraint) {
+    const std::string name = process(install("signed_fixture",
+        R"({"name":"signed_fixture","dependencies":[{"name":"dep","signer":7},"",{"name":""}]})"));
+    ASSERT_EQ(name, "signed_fixture");
+    const auto entries = ModuleManager::registry().moduleDependencyEntries(name);
+    ASSERT_EQ(entries.size(), 1u) << "empty dependency names must not become edges";
+    EXPECT_EQ(entries[0].name, "dep");
+    EXPECT_TRUE(entries[0].malformedConstraint);
+}
+
+class SidecarDiscoveryTest : public ::testing::Test {
+protected:
+    TmpDir dir;
+
+    void SetUp() override { clearModuleState(); }
+    void TearDown() override { clearModuleState(); }
+
+    // An installed package (manifest version 1.0.0) whose binary is not a
+    // module, with `sidecar` beside it when given.
+    void install(const std::string& name, const std::string& sidecar = {}) {
+        createFakeModule(dir.path, name, name + "_plugin.so");
+        if (!sidecar.empty())
+            std::ofstream(dir.path / name / (name + "_plugin.metadata.json")) << sidecar;
+    }
+
+    // The metadata discovery registered `name` with, or null.
+    nlohmann::json metadataOf(const std::string& name) {
+        char* text = logos_core_get_modules_info();
+        const auto modules = nlohmann::json::parse(text ? text : "[]", nullptr, false);
+        free(text);
+        if (modules.is_array())
+            for (const auto& module : modules)
+                if (module.is_object() && module.value("name", std::string{}) == name)
+                    return module.value("metadata", nlohmann::json());
+        return nullptr;
+    }
+};
+
+// Detector: lgpm copies a package over its module directory, so a reinstall
+// that ships no sidecar kept the previous version's, and discovery trusted it.
+TEST_F(SidecarDiscoveryTest, ASidecarFromAnEarlierInstallIsIgnored) {
+    install("fresh_fixture",
+            R"({"name":"fresh_fixture","version":"1.0.0","transport":"qt_remote_plain"})");
+    install("stale_fixture", R"({"name":"stale_fixture","version":"0.9.0",)"
+                             R"("transport":"qt_remote_plain","dependencies":["ghost"]})");
+    logos_core_add_modules_dir(dir.str().c_str());
+    logos_core_refresh_modules();
+
+    const nlohmann::json fresh = metadataOf("fresh_fixture");
+    ASSERT_TRUE(fresh.is_object()) << "a sidecar for this install is still trusted";
+    EXPECT_EQ(fresh.value("version", std::string{}), "1.0.0");
+    const nlohmann::json stale = metadataOf("stale_fixture");
+    EXPECT_FALSE(stale.is_object() && stale.value("version", std::string{}) == "0.9.0")
+        << "the previous install's sidecar described this module";
+}
+
+// Detector: a binary without a sidecar was re-inspected, a 40-100 ms spawn,
+// on every refresh.
+TEST_F(SidecarDiscoveryTest, AnUnchangedBinaryIsInspectedOnce) {
+    const fs::path count = dir.path / "inspections";
+    // A copy of the stand-in, which inspects and counts with LOGOS_TEST_INSPECT_LOG
+    // set; a copy so no earlier test's answer about the original is cached.
+    const fs::path host = dir.path / logos_test::fakeHostPath().filename();
+    fs::copy_file(logos_test::fakeHostPath(), host);
+    install("inspected_fixture");
+
+    const char* saved = std::getenv("LOGOS_HOST_PATH");
+    const std::optional<std::string> previous =
+        saved ? std::optional<std::string>(saved) : std::nullopt;
+    logos_test::setEnv("LOGOS_HOST_PATH", host.string());
+    logos_test::setEnv("LOGOS_TEST_INSPECT_LOG", count.string());
+    logos_core_add_modules_dir(dir.str().c_str());
+    logos_core_refresh_modules();
+    logos_core_refresh_modules();
+    logos_test::unsetEnv("LOGOS_TEST_INSPECT_LOG");
+    if (previous) logos_test::setEnv("LOGOS_HOST_PATH", *previous);
+    else logos_test::unsetEnv("LOGOS_HOST_PATH");
+
+    ASSERT_TRUE(metadataOf("inspected_fixture").is_object());
+    std::ifstream inspections(count);
+    int spawned = 0;
+    for (std::string line; std::getline(inspections, line);) ++spawned;
+    EXPECT_EQ(spawned, 1) << "an unchanged binary was inspected again";
 }

@@ -149,8 +149,7 @@ TEST_F(LoadConcurrencyTest, ModuleLoadedFromAnExitedThreadStaysLoaded) {
     plantModule("orphan", "pdeathsig-ok");
 
     std::thread loader([] {
-        EXPECT_EQ(logos_core_load_module("orphan", LOGOS_LOAD_MODULE_ONLY), 1)
-            << "the stand-in host needs setpriv (util-linux) on PATH";
+        EXPECT_EQ(logos_core_load_module("orphan", LOGOS_LOAD_MODULE_ONLY), 1);
     });
     loader.join();
 

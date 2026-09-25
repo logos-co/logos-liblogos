@@ -9,41 +9,64 @@
 #include <logos_module_loader/format_loader_factory.h>
 #include <spdlog/spdlog.h>
 #include <nlohmann/json.hpp>
-#include <QCoreApplication>
-#include <QMetaObject>
-#include <QString>
-#include <QThread>
-#include <QVariant>
-#include <QVariantList>
 #include <algorithm>
 #include <atomic>
 #include <chrono>
+#include <condition_variable>
+#include <deque>
 #include <memory>
 #include <mutex>
 #include <shared_mutex>
 #include <cassert>
 #include <cstring>
 #include <optional>
+#include <thread>
 #include <unordered_map>
 #include <unordered_set>
+#include <filesystem>
+#include <map>
 #include <boost/uuid/uuid.hpp>
 #include <boost/uuid/uuid_generators.hpp>
 #include <boost/uuid/uuid_io.hpp>
-#include "logos_api.h"
-#include "logos_thread_marshal.h"
-#include "logos_api_client.h"
-#include "logos_module.h"
 #include "logos_protocol.h"
 #include "dependency_gate.h"
 #include "protocol_gate.h"
-#include "logos_transport_config_json.h"
-#include "token_manager.h"
-#include "instance_persistence.h"
 
 namespace {
     ModuleRegistry& registryInstance() {
         static ModuleRegistry instance;
         return instance;
+    }
+
+    struct TokenListener {
+        void (*callback)(const char*, const char*, void*) = nullptr;
+        void* userData = nullptr;
+    };
+
+    std::mutex& tokenListenerMutex() {
+        static std::mutex mutex;
+        return mutex;
+    }
+
+    TokenListener& tokenListener() {
+        static TokenListener listener;
+        return listener;
+    }
+
+    // What the listener replays when installed.
+    std::map<std::string, std::string>& savedTokens() {
+        static std::map<std::string, std::string> tokens;
+        return tokens;
+    }
+
+    // Under one lock with the listener's replay, so it never sees a stale token.
+    bool saveCoreToken(const std::string& key, const std::string& token) {
+        std::lock_guard<std::mutex> lock(tokenListenerMutex());
+        if (lp_token_save(key.c_str(), token.c_str()) != LP_OK) return false;
+        savedTokens()[key] = token;
+        const TokenListener& listener = tokenListener();
+        if (listener.callback) listener.callback(key.c_str(), token.c_str(), listener.userData);
+        return true;
     }
 
     // Load locks, in the order they must be taken: fleet -> module ->
@@ -70,12 +93,10 @@ namespace {
         return m;
     }
 
-    // RE-ENTRANCY, on one thread, and it is not hypothetical: requestObject and
-    // informModuleToken spin nested Qt event loops, so a load a frontend posted
-    // with a queued connection can be delivered INSIDE one already running.
-    // Proceeding would take fleetMutex shared recursively — undefined behaviour,
-    // and a deadlock against a queued writer. The old global lock deadlocked
-    // outright here, so refusing loses nothing that ever worked.
+    // RE-ENTRANCY on one thread. A host/container callback can enter the public
+    // load surface before an earlier load has returned. Proceeding would take
+    // fleetMutex shared recursively, which is undefined behaviour and can
+    // deadlock against a queued writer.
     bool& threadIsInsideLoad() {
         static thread_local bool inside = false;
         return inside;
@@ -202,6 +223,8 @@ namespace {
         return m;
     }
 
+    void invalidateClient(const std::string& name);
+
     void beginLoadAttempt(const std::string& name) {
         std::lock_guard<std::mutex> g(inFlightMutex());
         inFlightLoads()[name] = false;
@@ -217,6 +240,7 @@ namespace {
     bool recordTerminationDuringLoad(const std::string& name) {
         std::lock_guard<std::mutex> g(inFlightMutex());
         registryInstance().markUnloaded(name);
+        invalidateClient(name);
         auto it = inFlightLoads().find(name);
         if (it == inFlightLoads().end()) return false;
         it->second = true;
@@ -332,77 +356,223 @@ namespace {
         return result;
     }
 
-    // THE OWNER THREAD, chosen rather than raced for. LogosAPI is a QObject that
-    // binds its provider — and on a Qt-affine transport its node and socket — to
-    // the thread that CONSTRUCTS it, and every client it hands out inherits that
-    // owner. Left lazy that was whichever thread dialled first, which with loads
-    // running off the main thread can be one that never pumps. anchorCoreApi()
-    // settles it from logos_core_start(). No marshal in this initializer: a magic
-    // static that blocks on another thread deadlocks against that thread waiting
-    // on the static's own guard. Leaked on purpose — it outlives its clients.
-    LogosAPI& coreApi() {
-        static LogosAPI* api = new LogosAPI(std::string("core"));
-        return *api;
+    struct ClientDeleter {
+        void operator()(lp_client* client) const { lp_client_destroy(client); }
+    };
+    using ClientPtr = std::shared_ptr<lp_client>;
+
+    std::mutex& clientMutex() {
+        static std::mutex mutex;
+        return mutex;
     }
 
-    // Core's outbound dials, on the owner thread. getClient and
-    // invokeRemoteMethod marshal there with a BlockingQueuedConnection, so a
-    // dial from a thread holding a load lock WAITS for the owner — while the
-    // owner blocks on that same lock during its own load, un-pumped. That edge
-    // is the whole deadlock class; posting instead of waiting removes it, and
-    // the owner then reaches every dial on its own thread where the marshal is
-    // a no-op. Inline when we ARE the owner (every shipped host, and the tests)
-    // or when there is no event loop to post to, so the common path is
-    // unchanged — same thread, same order, same timing.
+    std::unordered_map<std::string, ClientPtr>& clients() {
+        static std::unordered_map<std::string, ClientPtr> value;
+        return value;
+    }
+
+    // Core dials the first transport a module was configured with, as it always
+    // has. A local one is QtRO, which from this process means qt_remote_plain;
+    // tcp and tcp_ssl are dialled as configured, so a module that listens on
+    // nothing else is still reachable.
+    std::string plainTransportFor(const std::string& name) {
+        nlohmann::json config = nlohmann::json::object();
+        std::string configured;
+        {
+            std::shared_lock<std::shared_mutex> lock(configMutex());
+            if (auto it = moduleTransportsMap().find(name);
+                it != moduleTransportsMap().end()) configured = it->second;
+        }
+        if (!configured.empty()) {
+            nlohmann::json set = nlohmann::json::parse(configured, nullptr, false);
+            if (set.is_array() && !set.empty() && set.front().is_object())
+                config = set.front();
+            else if (set.is_object())
+                config = std::move(set);
+        }
+        const auto field = config.find("protocol");
+        const std::string protocol = field != config.end() && field->is_string()
+            ? field->get<std::string>() : "qt_remote_plain";
+        if (protocol == "tcp" || protocol == "tcp_ssl") return config.dump();
+        if (protocol != "local" && protocol != "qt_remote" && protocol != "qt_remote_plain") {
+            spdlog::warn("Core cannot use configured transport '{}' for {}; using "
+                         "qt_remote_plain", protocol, name);
+        }
+        config["protocol"] = "qt_remote_plain";
+        return config.dump();
+    }
+
+    ClientPtr moduleClient(const std::string& name) {
+        std::lock_guard<std::mutex> lock(clientMutex());
+        auto& slot = clients()[name];
+        if (slot) return slot;
+        const std::string target = plainTransportFor(name);
+        const std::string capability = plainTransportFor("capability_module");
+        lp_client* raw = lp_client_create(name.c_str(), "core", target.c_str(),
+                                          capability.c_str());
+        if (raw) slot = ClientPtr(raw, ClientDeleter{});
+        return slot;
+    }
+
+    void invalidateClient(const std::string& name) {
+        std::lock_guard<std::mutex> lock(clientMutex());
+        clients().erase(name);
+    }
+
+    // Core's pushes to capability_module read the loaded set, then dial it.
+    // Loads run concurrently, so one push runs at a time: the last to run read
+    // the last state, and a stale caller list cannot land after a fresh one. A
+    // push dials only capability_module, which never calls back into core, so a
+    // caller holding a load lock can wait here.
+    std::recursive_mutex& ownerMutex() {
+        static std::recursive_mutex mutex;
+        return mutex;
+    }
+
     template <typename Fn>
     void runOnOwner(Fn&& fn) {
-        if (!QCoreApplication::instance() ||
-            QThread::currentThread() == coreApi().thread()) {
-            fn();
-            return;
-        }
-        QMetaObject::invokeMethod(&coreApi(), std::forward<Fn>(fn),
-                                  Qt::QueuedConnection);
+        std::lock_guard<std::recursive_mutex> lock(ownerMutex());
+        std::forward<Fn>(fn)();
     }
 
-    // Dial `name` from a long-lived "core" LogosAPI. Prefer the operator's first
-    // configured transport; fall back to the global default (LocalSocket).
-    // Needed because the single-arg getClient() always uses the global default,
-    // which hangs against a tcp-only module that never bound a LocalSocket.
-    LogosAPIClient* moduleClient(const std::string& name) {
-        // Copied out: setModuleTransports can rewrite the entry.
-        std::string transportSetJson;
-        {
-            std::shared_lock<std::shared_mutex> g(configMutex());
-            if (auto it = moduleTransportsMap().find(name);
-                it != moduleTransportsMap().end())
-                transportSetJson = it->second;
+    nlohmann::json invokeModule(const std::string& target, const std::string& method,
+                                const nlohmann::json& arguments) {
+        ClientPtr client = moduleClient(target);
+        if (!client) return nullptr;
+        char* result = nullptr;
+        char* error = nullptr;
+        const std::string args = arguments.dump();
+        const int status = lp_invoke(client.get(), method.c_str(), args.c_str(),
+                                     20000, &result, &error);
+        nlohmann::json value = nullptr;
+        if (status == LP_OK && result) {
+            value = nlohmann::json::parse(result, nullptr, false);
+            if (value.is_discarded()) value = nullptr;
+        } else {
+            spdlog::warn("RPC {}.{} failed: {}", target, method,
+                         error ? error : "unknown error");
         }
-
-        if (!transportSetJson.empty()) {
-            const auto ts = logos::transportSetFromJsonString(transportSetJson);
-            if (!ts.empty())
-                return coreApi().getClient(QString::fromStdString(name), ts.front());
-        }
-        return coreApi().getClient(name);
+        lp_string_free(result);
+        lp_string_free(error);
+        return value;
     }
 
-    LogosAPIClient* capabilityModuleClient() {
-        return moduleClient("capability_module");
+    // Fire-and-forget module calls, sent one at a time in the order they were
+    // made: modules_state discards a transition older than one it has seen.
+    class OrderedCalls {
+    public:
+        struct Call {
+            std::string target;
+            std::string method;
+            std::string args;
+        };
+
+        ~OrderedCalls() {
+            std::lock_guard<std::mutex> lock(m_state->mutex);
+            m_state->stopped = true;
+            m_state->calls.clear();
+            m_state->changed.notify_all();
+        }
+
+        void post(Call call) {
+            std::lock_guard<std::mutex> lock(m_state->mutex);
+            if (m_state->stopped) return;
+            m_state->calls.push_back(std::move(call));
+            if (!m_state->running) {
+                m_state->running = true;
+                std::thread([state = m_state] { run(state); }).detach();
+            }
+            m_state->changed.notify_one();
+        }
+
+        // Drops what is queued and waits for the call in flight.
+        void stop() {
+            std::unique_lock<std::mutex> lock(m_state->mutex);
+            m_state->stopped = true;
+            m_state->calls.clear();
+            m_state->changed.notify_all();
+            if (m_state->worker == std::this_thread::get_id()) return;
+            m_state->changed.wait(lock, [&] { return !m_state->running; });
+        }
+
+        void reopen() {
+            std::lock_guard<std::mutex> lock(m_state->mutex);
+            m_state->stopped = false;
+        }
+
+    private:
+        struct State {
+            std::mutex mutex;
+            std::condition_variable changed;
+            std::deque<Call> calls;
+            bool stopped = false;
+            bool running = false;
+            std::thread::id worker;
+        };
+
+        static void run(const std::shared_ptr<State>& state) {
+            std::unique_lock<std::mutex> lock(state->mutex);
+            state->worker = std::this_thread::get_id();
+            for (;;) {
+                state->changed.wait_for(lock, std::chrono::seconds(30), [&] {
+                    return state->stopped || !state->calls.empty();
+                });
+                if (state->stopped || state->calls.empty()) break;
+                Call call = std::move(state->calls.front());
+                state->calls.pop_front();
+                lock.unlock();
+                send(call);
+                lock.lock();
+            }
+            state->running = false;
+            state->worker = {};
+            state->changed.notify_all();
+        }
+
+        static void send(const Call& call) {
+            ClientPtr client = moduleClient(call.target);
+            if (!client) return;
+            char* result = nullptr;
+            char* error = nullptr;
+            const int status = lp_invoke(client.get(), call.method.c_str(), call.args.c_str(),
+                                         20000, &result, &error);
+            if (status != LP_OK)
+                spdlog::warn("Async RPC {}.{} failed: {}", call.target, call.method,
+                             error ? error : "unknown error");
+            lp_string_free(result);
+            lp_string_free(error);
+        }
+
+        std::shared_ptr<State> m_state = std::make_shared<State>();
+    };
+
+    OrderedCalls& orderedCalls() {
+        static OrderedCalls calls;
+        return calls;
+    }
+
+    void invokeModuleAsync(const std::string& target, const std::string& method,
+                           const nlohmann::json& arguments) {
+        orderedCalls().post({target, method, arguments.dump()});
+    }
+
+    std::string tokenFor(const std::string& module) {
+        char* value = lp_token_get(module.c_str());
+        std::string result = value ? value : "";
+        lp_string_free(value);
+        return result;
     }
 
     // Token authenticates the call. Best-effort; assumes capability_module loaded.
     void registerRestrictionRpc(const std::string& target,
                                 const std::vector<std::string>& callers) {
         nlohmann::json args = nlohmann::json::array();
-        args.push_back(TokenManager::instance().getToken(std::string("capability_module")));
+        args.push_back(tokenFor("capability_module"));
         args.push_back(target);
         args.push_back(callers);
 
-        nlohmann::json result = capabilityModuleClient()->invokeRemoteMethod(
-            std::string("capability_module"),
-            std::string("registerRestriction"),
-            args);
+        nlohmann::json result = invokeModule(
+            "capability_module", "registerRestriction", args);
 
         if (!result.is_boolean() || !result.get<bool>())
             spdlog::warn("Failed to register access restriction for target: {}", target);
@@ -490,9 +660,7 @@ namespace {
     //
     // Each push reads the loaded set, so the pushes have to be ordered against
     // each other or the last word can come from a reader that ran before the
-    // other module committed. The owner thread's queue is that order now — a
-    // mutex here would be held across the dial, which is the edge runOnOwner
-    // exists to remove.
+    // other module committed. runOnOwner runs them one at a time.
     void refreshDerivedRestrictionsForDependenciesOf(const std::string& name) {
         if (!registryInstance().isLoaded("capability_module"))
             return;
@@ -509,18 +677,19 @@ namespace {
         if (!registryInstance().isLoaded("capability_module"))
             return;
 
-        // On the owner thread, which the 3-arg informModuleToken needs for a
-        // second reason: it has no marshal of its own at the pinned protocol,
-        // and a QtRO replica is thread-AFFINE, not merely non-reentrant.
+        // Serialize with the other core-side policy updates. The plain client
+        // itself is thread-safe.
         runOnOwner([name, token]() {
             const std::string capabilityModuleToken =
-                TokenManager::instance().getToken(std::string("capability_module"));
+                tokenFor("capability_module");
 
             // INBOUND half of load-time identity: capability stores (name, token)
             // so authorize can name the caller from the presented token rather
             // than from a self-asserted fromModuleName.
-            if (!capabilityModuleClient()->informModuleToken(
-                    capabilityModuleToken, name, token)) {
+            ClientPtr capability = moduleClient("capability_module");
+            if (!capability || lp_inform_module_token(
+                    capability.get(), capabilityModuleToken.c_str(),
+                    name.c_str(), token.c_str()) != LP_OK) {
                 spdlog::warn("Failed to register token with capability module for: {}", name);
             }
         });
@@ -545,26 +714,13 @@ namespace {
 
     constexpr const char* kModulesState = "modules_state";
 
-    // An empty optional reaches the wire as JSON null: an invalid QVariant
-    // falls through every branch of qvariantToNlohmann and returns nullptr.
-    QVariant optToVariant(const std::optional<std::string>& v) {
-        return v.has_value() ? QVariant(QString::fromStdString(*v)) : QVariant();
+    template <typename T>
+    nlohmann::json optToJson(const std::optional<T>& value) {
+        return value ? nlohmann::json(*value) : nlohmann::json(nullptr);
     }
 
-    QVariant optToVariant(const std::optional<int64_t>& v) {
-        return v.has_value() ? QVariant(static_cast<qlonglong>(*v)) : QVariant();
-    }
-
-    LogosAPIClient* modulesStateClient() {
-        return moduleClient(kModulesState);
-    }
-
-    // Observe readiness: arm a one-shot watch and return. Never waits -- rule 1
-    // forbids blocking or dispatching under a load lock, and the callback lands
-    // on this thread's event loop with no lock held.
-    //
-    // Only armed when a sink is installed; without one nothing consumes the
-    // transition and each watch would hold a client and replica for nothing.
+    // Observe readiness after the host's successful load verdict. Only record
+    // it when a sink is installed; otherwise nothing consumes the transition.
     void armReadinessWatch(const std::string& name,
                            std::optional<std::string> instanceId,
                            std::optional<int64_t> pid) {
@@ -574,21 +730,12 @@ namespace {
         registryInstance().beginPublishWatch(name);
         const uint64_t epoch = registryInstance().loadEpoch(name);
 
-        // The client and its replica are built by this call, so it decides
-        // which thread owns them — the owner's, never the loading worker's.
-        runOnOwner([name, instanceId, pid, epoch]() {
-        moduleClient(name)->whenObjectAvailable(
-            QString::fromStdString(name),
-            [name, instanceId, pid, epoch](bool ready) {
-                if (!ready) return;                                  // abandoned
-                if (!registryInstance().markPublished(name, epoch))  // reloaded
-                    return;
-                auto& o = logos::ModuleStateObserver::instance();
-                o.record(name, logos::module_state::kLoaded,
-                         logos::module_state::kReady, instanceId, pid);
-                o.flush();   // no ScopedModuleStateFlush in scope out here
-            });
-        });
+        // Both compatibility hosts issue their successful load verdict only
+        // after the provider has published. That verdict is now the readiness
+        // proof; no QObject replica or event loop is needed in the parent.
+        if (!registryInstance().markPublished(name, epoch)) return;
+        observer.record(name, logos::module_state::kLoaded,
+                        logos::module_state::kReady, instanceId, pid);
     }
 
     // Everything the host knows, as a ModuleListing, for apply_snapshot.
@@ -672,12 +819,7 @@ namespace {
         // whenObjectAvailable's callback, not the load path, so no lock is held
         // and nothing waits on it. The nlohmann overload has no async twin, and
         // a struct argument is easier to build as JSON than as a QVariantMap.
-        const nlohmann::json ok = modulesStateClient()->invokeRemoteMethod(
-            std::string(kModulesState), std::string("apply_snapshot"), args);
-        if (!ok.is_boolean() || !ok.get<bool>())
-            spdlog::warn("modules_state refused the startup snapshot");
-        else
-            spdlog::info("Pushed module snapshot to modules_state");
+        invokeModuleAsync(kModulesState, "apply_snapshot", args);
     }
 
     void pushTransitions(const std::vector<logos::ModuleTransition>& batch) {
@@ -685,28 +827,17 @@ namespace {
         if (!registryInstance().isLoaded(kModulesState))
             return;
 
-        runOnOwner([batch]() {
-        LogosAPIClient* client = modulesStateClient();
         for (const logos::ModuleTransition& t : batch) {
-            QVariantList args;
-            args << QString::fromStdString(t.module)
-                 << optToVariant(t.instance)
-                 << optToVariant(t.pid)
-                 << QString::fromStdString(t.oldState)
-                 << QString::fromStdString(t.newState)
-                 << optToVariant(t.reason)
-                 << QVariant(static_cast<qulonglong>(t.seq));
+            nlohmann::json args = nlohmann::json::array({
+                t.module, optToJson(t.instance), optToJson(t.pid),
+                t.oldState, t.newState, optToJson(t.reason), t.seq
+            });
 
             // Fire and forget: the next snapshot re-establishes the whole
             // picture, and blocking the load path to find out would be the
             // failure this shape exists to avoid.
-            client->invokeRemoteMethodAsync(
-                QString::fromUtf8(kModulesState),
-                QStringLiteral("note_transition"),
-                args,
-                [](QVariant) {});
+            invokeModuleAsync(kModulesState, "note_transition", args);
         }
-        });
     }
 
     // Called once modules_state is loaded. The snapshot waits for it to
@@ -715,22 +846,55 @@ namespace {
     // timeout on this thread.
     void enableModulesStateFeed() {
         logos::ModuleStateObserver::instance().setSink(&pushTransitions);
-        runOnOwner([]() {
-        modulesStateClient()->whenObjectAvailable(
-            QString::fromUtf8(kModulesState),
-            [](bool ready) {
-                if (ready)
-                    pushSnapshot();
-                else
-                    spdlog::warn("modules_state never became available; no snapshot pushed");
-            });
-        });
+        pushSnapshot();
     }
 
     void disableModulesStateFeed() {
         // Clearing the sink is what makes the observer free again: record()
         // early-outs when nothing is installed.
         logos::ModuleStateObserver::instance().setSink({});
+    }
+
+    struct PersistenceInfo {
+        std::string instanceId;
+        std::string persistencePath;
+    };
+
+    PersistenceInfo resolvePersistence(const std::string& base,
+                                       const std::string& module) {
+        namespace fs = std::filesystem;
+        if (base.empty() || !logos::isValidModuleName(module)) return {};
+        std::error_code error;
+        const fs::path moduleDir = fs::absolute(fs::path(base) / module, error);
+        if (error) return {};
+        std::vector<std::string> existing;
+        if (fs::is_directory(moduleDir, error)) {
+            for (fs::directory_iterator it(moduleDir, error), end;
+                 !error && it != end; it.increment(error)) {
+                // A hidden entry (a backup tool's ".snapshots") is not an
+                // instance; QDir skipped them.
+                const std::string name = it->path().filename().string();
+                if (!name.empty() && name.front() != '.' && it->is_directory())
+                    existing.push_back(name);
+            }
+        }
+        std::sort(existing.begin(), existing.end());
+        std::string id;
+        if (!existing.empty()) {
+            id = existing.front();
+        } else {
+            id = boost::uuids::to_string(boost::uuids::random_generator()());
+            id.erase(std::remove(id.begin(), id.end(), '-'), id.end());
+            id.resize(12);
+        }
+        const fs::path path = moduleDir / id;
+        fs::create_directories(path, error);
+        if (error) {
+            spdlog::warn("Failed to create persistence path {}: {}", path.string(),
+                         error.message());
+            return {};
+        }
+        return {id, path.string()};
     }
 
     // Callers hold fleetMutex(). Takes `name`'s own lock, so two callers of one
@@ -765,7 +929,7 @@ namespace {
         LogosCore::ModuleDescriptor desc;
         desc.name        = name;
         desc.path        = modPath;
-        desc.format      = "qt-plugin";
+        desc.format      = registryInstance().moduleFormat(name);
         desc.dependencies = registryInstance().moduleDependencies(name);
         desc.modulesDirs  = registryInstance().modulesDirs();
 
@@ -777,8 +941,7 @@ namespace {
         std::optional<std::string> instanceId;
 
         if (!persistenceBasePath().empty()) {
-            auto info = ModuleLib::InstancePersistence::resolveInstance(
-                persistenceBasePath(), name);
+            auto info = resolvePersistence(persistenceBasePath(), name);
             desc.instancePersistencePath = info.persistencePath;
             if (!info.instanceId.empty())
                 instanceId = info.instanceId;
@@ -811,16 +974,10 @@ namespace {
         // different MAJOR is refused, a missing stamp (pre-protocol module)
         // loads permissively with a warning.
         std::string moduleProtocolVersion;
-        if (auto meta = ModuleLib::LogosModule::extractMetadata(modPath)) {
-            // While we have it, hand the full metadata to the loader.
-            desc.rawMetadata = nlohmann::json::parse(
-                meta->rawMetadataJson, nullptr, /*allow_exceptions=*/false);
-            if (desc.rawMetadata.is_discarded())
-                desc.rawMetadata = nlohmann::json::object();
-            if (auto it = desc.rawMetadata.find("logos_protocol_version");
-                it != desc.rawMetadata.end() && it->is_string())
-                moduleProtocolVersion = it->get<std::string>();
-        }
+        desc.rawMetadata = registryInstance().moduleMetadata(name);
+        if (auto it = desc.rawMetadata.find("logos_protocol_version");
+            it != desc.rawMetadata.end() && it->is_string())
+            moduleProtocolVersion = it->get<std::string>();
         const auto gate = LogosCore::evaluateProtocolGate(
             moduleProtocolVersion, LOGOS_PROTOCOL_VERSION_MAJOR);
         switch (gate.decision) {
@@ -983,7 +1140,10 @@ namespace {
             return false;
         }
 
-        TokenManager::instance().saveToken(name, authToken);
+        if (!saveCoreToken(name, authToken)) {
+            spdlog::error("Failed to save auth token for {}", name);
+            return false;
+        }
 
         notifyCapabilityModule(name, authToken);
 
@@ -1082,10 +1242,8 @@ namespace ModuleManager {
     }
 
     void anchorCoreApi() {
-        // Single-threaded at startup, so constructing here cannot race the
-        // static's guard; the marshal only matters for a host that starts off
-        // the Qt main thread.
-        logos::runOnQtMainThread([]() { coreApi(); });
+        // Retained as a source-compatible startup hook. qt_remote_plain clients
+        // own their reader threads and have no GUI/event-loop affinity.
     }
 
     LogosCore::ModuleLoaderRegistry& loaders() {
@@ -1114,11 +1272,14 @@ namespace ModuleManager {
         // in-flight load and the child gets garbled JSON (or sees an empty
         // transport set after the operator overwrote what it was about to
         // read).
-        std::unique_lock<std::shared_mutex> g(configMutex());
-        if (transportSetJson.empty())
-            moduleTransportsMap().erase(moduleName);
-        else
-            moduleTransportsMap()[moduleName] = transportSetJson;
+        {
+            std::unique_lock<std::shared_mutex> g(configMutex());
+            if (transportSetJson.empty())
+                moduleTransportsMap().erase(moduleName);
+            else
+                moduleTransportsMap()[moduleName] = transportSetJson;
+        }
+        invalidateClient(moduleName);
     }
 
     // THE deny-by-default switch. `mode: "enforce"` is the whole flag: it is
@@ -1419,6 +1580,9 @@ namespace ModuleManager {
                           "already inside a load or unload");
             return;
         }
+        // While their target still answers; the teardown's own transitions
+        // are not sent.
+        orderedCalls().stop();
         // EXCLUSIVE: markAllLoadedExitsExpected needs the loaded set to hold
         // still, and every load and unload holds this shared for its span.
         std::unique_lock<std::shared_mutex> fleet(fleetMutex());
@@ -1427,6 +1591,11 @@ namespace ModuleManager {
         loaderRegistry().terminateAll();
         clearExpectedExits();
         registryInstance().clearLoaded();
+        {
+            std::lock_guard<std::mutex> lock(clientMutex());
+            clients().clear();
+        }
+        orderedCalls().reopen();
     }
 
     void clear() {
@@ -1438,6 +1607,9 @@ namespace ModuleManager {
                           "already inside a load or unload");
             return;
         }
+        // While their target still answers; the teardown's own transitions
+        // are not sent.
+        orderedCalls().stop();
         // EXCLUSIVE: markAllLoadedExitsExpected needs the loaded set to hold
         // still, and every load and unload holds this shared for its span.
         std::unique_lock<std::shared_mutex> fleet(fleetMutex());
@@ -1446,6 +1618,10 @@ namespace ModuleManager {
         loaderRegistry().terminateAll();
         clearExpectedExits();
         registryInstance().clear();
+        {
+            std::lock_guard<std::mutex> lock(clientMutex());
+            clients().clear();
+        }
         // Per-module transport overrides are part of the manager's
         // mutable state — without clearing them here, a daemon
         // restart in the same process (or a unit test that calls
@@ -1460,6 +1636,18 @@ namespace ModuleManager {
         }
         // Same rationale again: the next run may have a host that does report.
         hostStaysSilent().store(false);
+        {
+            std::lock_guard<std::mutex> lock(tokenListenerMutex());
+            savedTokens().clear();
+        }
+        orderedCalls().reopen();
+    }
+
+    void setTokenListener(void (*listener)(const char*, const char*, void*), void* userData) {
+        std::lock_guard<std::mutex> lock(tokenListenerMutex());
+        tokenListener() = {listener, userData};
+        if (!listener) return;
+        for (const auto& [key, token] : savedTokens()) listener(key.c_str(), token.c_str(), userData);
     }
 
     char** getLoadedModulesCStr() {

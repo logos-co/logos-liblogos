@@ -18,11 +18,8 @@
 #include <chrono>
 #include <string>
 #include <thread>
+#include <utility>
 #include <vector>
-
-#include <csignal>
-#include <sys/wait.h>
-#include <unistd.h>
 
 namespace {
 
@@ -80,6 +77,32 @@ TEST_F(LoadVerdictTest, HostReportsLoaded_LoadSucceeds) {
     EXPECT_TRUE(sawTransitionTo("healthy", logos::module_state::kLoaded));
 }
 
+using TokenLog = std::vector<std::pair<std::string, std::string>>;
+
+void recordToken(const char* key, const char* token, void* userData) {
+    static_cast<TokenLog*>(userData)->emplace_back(key, token);
+}
+
+// A Qt embedder (basecamp, standalone-app) no longer shares core's token
+// store; the listener is how it learns the tokens core issues.
+TEST_F(LoadVerdictTest, TokenListenerSeesEachLoadAndReplaysOnInstall) {
+    plantModule("healthy", "report-ok");
+    TokenLog live;
+    logos_core_set_token_listener(&recordToken, &live);
+    ASSERT_EQ(logos_core_load_module("healthy", LOGOS_LOAD_MODULE_ONLY), 1);
+    ASSERT_EQ(live.size(), 1u);
+    EXPECT_EQ(live[0].first, "healthy");
+    char* stored = logos_core_get_token("healthy");
+    ASSERT_NE(stored, nullptr);
+    EXPECT_EQ(live[0].second, std::string(stored));
+    delete[] stored;
+
+    TokenLog replayed;
+    logos_core_set_token_listener(&recordToken, &replayed);
+    EXPECT_EQ(replayed, live);
+    logos_core_set_token_listener(nullptr, nullptr);
+}
+
 // Compatibility: a host built before the status line existed reports nothing.
 // It is alive at the deadline, and "I cannot tell" is not evidence of failure.
 TEST_F(LoadVerdictTest, HostReportsNothing_LoadStillSucceeds) {
@@ -124,7 +147,7 @@ protected:
                        << (host ? host : "(unset)");
             GTEST_SKIP() << "TEST_REAL_HOST not set";
         }
-        setenv("LOGOS_HOST_PATH", host, 1);
+        logos_test::setEnv("LOGOS_HOST_PATH", host);
     }
 };
 
@@ -154,26 +177,11 @@ TEST_F(RealHostLoadVerdictTest, RealHostReportsOkForAPluginThatLoads) {
     const char* plugin = std::getenv("TEST_PLUGIN");
     ASSERT_TRUE(host && plugin) << "TEST_REAL_HOST / TEST_PLUGIN must be set";
 
-    int out[2], in[2];
-    ASSERT_EQ(pipe(out), 0);
-    ASSERT_EQ(pipe(in), 0);
-
-    const pid_t pid = fork();
-    ASSERT_GE(pid, 0);
-    if (pid == 0) {
-        dup2(in[0], STDIN_FILENO);
-        dup2(out[1], STDOUT_FILENO);
-        close(in[0]); close(in[1]); close(out[0]); close(out[1]);
-        execl(host, host, "--name", "capability_module", "--path", plugin,
-              "--token-source", "stdin", static_cast<char*>(nullptr));
-        _exit(127);
-    }
-
-    close(in[0]);
-    close(out[1]);
-    const std::string token = "00000000-0000-0000-0000-000000000000\n";
-    ASSERT_GT(write(in[1], token.data(), token.size()), 0);
-    close(in[1]);
+    logos_test::Child child;
+    ASSERT_TRUE(child.start(host, {"--name", "capability_module", "--path", plugin,
+                                   "--token-source", "stdin"}, /*pipes=*/true));
+    ASSERT_TRUE(child.write("00000000-0000-0000-0000-000000000000\n"));
+    child.closeInput();
 
     // Read until the status line lands or the host exits; a host that comes up
     // stays up, so stopping at the line is what keeps this short.
@@ -181,14 +189,11 @@ TEST_F(RealHostLoadVerdictTest, RealHostReportsOkForAPluginThatLoads) {
     std::string seen;
     while (seen.find(ok) == std::string::npos) {
         char buf[1024];
-        const ssize_t n = read(out[0], buf, sizeof(buf));
-        if (n <= 0) break;
-        seen.append(buf, static_cast<size_t>(n));
+        const size_t n = child.read(buf, sizeof(buf));
+        if (n == 0) break;
+        seen.append(buf, n);
     }
-    close(out[0]);
-    kill(pid, SIGTERM);
-    int status = 0;
-    waitpid(pid, &status, 0);
+    child.kill();
 
     EXPECT_NE(seen.find(ok), std::string::npos) << "host stdout was:\n" << seen;
 }
