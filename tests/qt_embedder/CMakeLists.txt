@@ -15,7 +15,7 @@ find_package(logos-qt-host REQUIRED CONFIG
     PATHS ${LOGOS_QT_HOST_ROOT}/lib/cmake/logos-qt-host NO_DEFAULT_PATH)
 find_library(LOGOS_CORE_LIB logos_core PATHS ${LOGOS_LIBLOGOS_ROOT}/lib NO_DEFAULT_PATH REQUIRED)
 
-add_executable(qt_embedder_tests test_qt_embedder_tokens.cpp)
+add_executable(qt_embedder_tests test_qt_embedder_admission.cpp)
 target_include_directories(qt_embedder_tests PRIVATE ${LOGOS_LIBLOGOS_ROOT}/include)
 target_link_libraries(qt_embedder_tests PRIVATE
     logos-qt-host::logos_qt_host_shared

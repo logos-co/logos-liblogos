@@ -97,9 +97,6 @@ namespace ModuleManager {
     void terminateAll();
     void clear();
 
-    // See logos_core_set_token_listener.
-    void setTokenListener(void (*listener)(const char*, const char*, void*), void* userData);
-
     char** getLoadedModulesCStr();
     char** getKnownModulesCStr();
 
@@ -112,7 +109,7 @@ namespace ModuleManager {
 
     std::vector<std::string> resolveDependencies(const std::vector<std::string>& requestedModules);
 
-    // The optional branches LOGOS_LOAD_REQUIRED_AND_OPTIONAL would decline for
+    // The optional branches a required_and_optional load would decline for
     // `moduleName`, as a JSON array. Empty array when it would decline none.
     std::string optionalLoadReportJson(const std::string& moduleName);
     char* optionalLoadReportCStr(const char* moduleName);

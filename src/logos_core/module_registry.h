@@ -106,7 +106,7 @@ public:
     // its name, path, loaded flag, load timestamp (loaded_at, unix seconds; 0
     // when not loaded), direct dependencies, direct dependents, and full
     // embedded metadata (parsed from the cached metadata JSON; null when
-    // unreadable). This is the data backing logos_core_get_modules_info.
+    // unreadable). This is the data behind core_service.getModulesInfo.
     nlohmann::json allModulesInfo() const;
     // Forward-edge accessor. `recursive=false` returns the direct
     // dependencies stored on ModuleInfo. `recursive=true` walks the forward

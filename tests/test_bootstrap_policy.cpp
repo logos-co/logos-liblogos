@@ -84,7 +84,7 @@ TEST(BootstrapPolicy, TheTableKeepsTheOldTrustAndGrants)
         EXPECT_TRUE(isExemptTarget(name)) << name;
     EXPECT_FALSE(isExemptTarget("package_manager"));
     EXPECT_EQ(hostServicesFor("capability_module", true),
-              (std::vector<std::string>{"token_registry", "token_delivery"}));
+              (std::vector<std::string>{"token_delivery"}));
     EXPECT_TRUE(hostServicesFor("capability_module", false).empty());
     EXPECT_TRUE(hostServicesFor("my_module", true).empty());
     EXPECT_LT(teardownRank("my_module"), teardownRank("modules_state"));

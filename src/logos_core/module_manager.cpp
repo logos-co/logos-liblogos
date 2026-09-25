@@ -44,35 +44,10 @@ namespace {
         return instance;
     }
 
-    struct TokenListener {
-        void (*callback)(const char*, const char*, void*) = nullptr;
-        void* userData = nullptr;
-    };
-
-    std::mutex& tokenListenerMutex() {
-        static std::mutex mutex;
-        return mutex;
-    }
-
-    TokenListener& tokenListener() {
-        static TokenListener listener;
-        return listener;
-    }
-
-    // What the listener replays when installed.
-    std::map<std::string, std::string>& savedTokens() {
-        static std::map<std::string, std::string> tokens;
-        return tokens;
-    }
-
-    // Under one lock with the listener's replay, so it never sees a stale token.
+    // Core's own store: its clients present these as the runtime. Nothing
+    // outside the engine reads it.
     bool saveCoreToken(const std::string& key, const std::string& token) {
-        std::lock_guard<std::mutex> lock(tokenListenerMutex());
-        if (lp_token_save(key.c_str(), token.c_str()) != LP_OK) return false;
-        savedTokens()[key] = token;
-        const TokenListener& listener = tokenListener();
-        if (listener.callback) listener.callback(key.c_str(), token.c_str(), listener.userData);
-        return true;
+        return lp_token_save(key.c_str(), token.c_str()) == LP_OK;
     }
 
     // Load locks, in the order they must be taken: fleet -> module ->
@@ -584,48 +559,6 @@ namespace {
         return callers;
     }
 
-    // Token authenticates the call. Best-effort; assumes capability_module loaded.
-    void registerRestrictionRpc(const std::string& target,
-                                const std::vector<std::string>& callers) {
-        nlohmann::json args = nlohmann::json::array();
-        args.push_back(tokenFor("capability_module"));
-        args.push_back(target);
-        args.push_back(callers);
-
-        nlohmann::json result = invokeModule(
-            "capability_module", "registerRestriction", args);
-
-        if (!result.is_boolean() || !result.get<bool>())
-            spdlog::warn("Failed to register access restriction for target: {}", target);
-        else
-            spdlog::info("Registered access restriction for target: {} ({} allowed callers)",
-                         target, callers.size());
-    }
-
-    // Explicit-policy restrictions, including targets not yet loaded (the
-    // derived path covers only loaded ones).
-    void pushAccessRestrictionsToCapabilityModule() {
-        if (!registryInstance().isLoaded("capability_module"))
-            return;
-        // Copied out: the RPCs below must not run under configMutex.
-        std::vector<LogosCore::AccessRestriction> restrictions;
-        {
-            std::shared_lock<std::shared_mutex> g(configMutex());
-            const auto& policy = parsedEnforcePolicy();
-            if (!policy)
-                return;
-            restrictions = policy->restrictions;
-        }
-
-        runOnOwner([restrictions]() {
-            for (const auto& restriction : restrictions) {
-                if (logos::bootstrap::isExemptTarget(restriction.target))
-                    continue;
-                registerRestrictionRpc(restriction.target, withShell(restriction.allowedCallers));
-            }
-        });
-    }
-
     // A module may only call modules it declared as a dependency, so `target`'s
     // allowed callers are its loaded dependents plus the trusted set. Empty when
     // exempt or no enforce policy (fail-open); explicit policy overrides verbatim.
@@ -666,41 +599,62 @@ namespace {
         return withShell(std::move(callers));
     }
 
-    void pushDerivedRestrictionForTarget(const std::string& target) {
-        if (!registryInstance().isLoaded("capability_module"))
-            return;
-        auto callers = derivedAllowedCallersFor(target);
-        if (!callers.empty())
-            registerRestrictionRpc(target, callers);
+    // The whole access policy capability_module enforces, as one document: the
+    // explicit rules, and the derived ones of every loaded module. A target
+    // absent is unrestricted; without an enforce policy the document is empty.
+    nlohmann::json restrictionsDocument() {
+        std::vector<std::string> targets;
+        {
+            std::shared_lock<std::shared_mutex> g(configMutex());
+            const auto& policy = parsedEnforcePolicy();
+            if (!policy)
+                return nlohmann::json::object();
+            for (const auto& r : policy->restrictions)
+                targets.push_back(r.target);
+        }
+        for (const auto& loaded : registryInstance().loadedModuleNames())
+            targets.push_back(loaded);
+        nlohmann::json document = nlohmann::json::object();
+        for (const auto& target : targets) {
+            if (document.contains(target))
+                continue;
+            const auto callers = derivedAllowedCallersFor(target);
+            if (!callers.empty())
+                document[target] = callers;
+        }
+        return document;
     }
 
-    // On load/unload of `name`, re-push the targets whose caller set changed:
-    // its declared dependencies, plus `name` itself.
+    // Sends the policy to capability_module whenever the loaded set changes.
     //
     // Each push reads the loaded set, so the pushes have to be ordered against
     // each other or the last word can come from a reader that ran before the
     // other module committed. runOnOwner runs them one at a time.
-    void refreshDerivedRestrictionsForDependenciesOf(const std::string& name) {
-        if (!registryInstance().isLoaded("capability_module"))
+    void pushRestrictions() {
+        if (!logos::authority::attached())
             return;
-        runOnOwner([name]() {
-            for (const auto& dep : registryInstance().moduleDependencies(name, /*recursive=*/false))
-                pushDerivedRestrictionForTarget(dep);
-            for (const auto& dep : registryInstance().moduleOptionalDependencies(name))
-                pushDerivedRestrictionForTarget(dep);
-            pushDerivedRestrictionForTarget(name);
+        runOnOwner([]() {
+            if (!logos::authority::setRestrictions(restrictionsDocument().dump()))
+                spdlog::error("capability_module refused the access policy");
         });
     }
 
-    // Capability's own provider names callers through the engine interface once
-    // it is the authority; only core-minted credentials are pushed to it.
-    void attachTokenAuthority(const std::shared_ptr<LogosCore::ModuleLoader>& loader) {
+    // capability_module becomes the token authority through its engine
+    // interface, which only an in-process image can hand over.
+    bool attachTokenAuthority(const std::shared_ptr<LogosCore::ModuleLoader>& loader) {
         auto inproc = std::dynamic_pointer_cast<LogosCore::InprocModuleLoader>(loader);
-        if (!inproc) return;
+        if (!inproc) {
+            spdlog::critical("capability_module is not running in-process, so it cannot "
+                             "be the token authority");
+            return false;
+        }
         void* symbol = inproc->symbolOf("capability_module", LOGOS_CAPABILITY_ENGINE_SYMBOL);
-        if (!symbol) return;
+        if (!symbol) {
+            spdlog::critical("capability_module exports no {}", LOGOS_CAPABILITY_ENGINE_SYMBOL);
+            return false;
+        }
         auto engine = reinterpret_cast<logos_module_capability_engine_v1_fn>(symbol);
-        logos::authority::attach(engine(), inproc->providerOf("capability_module"));
+        return logos::authority::attach(engine(), inproc->providerOf("capability_module"));
     }
 
     // The embedder's package config, before package_manager counts as loaded:
@@ -738,36 +692,14 @@ namespace {
         ~AdmissionGuard() { if (active) logos::authority::retire(name); }
     };
 
-    void notifyCapabilityModule(const std::string& name, const std::string& token) {
-        if (!registryInstance().isLoaded("capability_module") || logos::authority::attached())
-            return;
-
-        // Serialize with the other core-side policy updates. The plain client
-        // itself is thread-safe.
-        runOnOwner([name, token]() {
-            const std::string capabilityModuleToken =
-                tokenFor("capability_module");
-
-            // INBOUND half of load-time identity: capability stores (name, token)
-            // so authorize can name the caller from the presented token rather
-            // than from a self-asserted fromModuleName.
-            ClientPtr capability = moduleClient("capability_module");
-            if (!capability || lp_inform_module_token(
-                    capability.get(), capabilityModuleToken.c_str(),
-                    name.c_str(), token.c_str()) != LP_OK) {
-                spdlog::warn("Failed to register token with capability module for: {}", name);
-            }
-        });
-    }
-
     // ── THE modules_state FEED ───────────────────────────────────────────────
     //
     // The consumer end of ModuleStateObserver. Follows the capability_module
     // precedent above — one long-lived "core" LogosAPI, per-module transport
     // honoured — with three differences forced by where it runs:
     //
-    //   1. ASYNC. registerRestrictionRpc is synchronous and gets away with it
-    //      because it is rare and short. This runs on EVERY load, unload and
+    //   1. ASYNC. The restriction push is synchronous and gets away with it
+    //      because it is in-process and short. This runs on EVERY load, unload and
     //      crash, from the observer's flush. A synchronous RPC there would put
     //      a 20 s worst case on the load path.
     //   2. CHEAP NO-OP WHEN ABSENT, checked before the client is even fetched.
@@ -1098,6 +1030,28 @@ namespace {
             return false;
         }
 
+        // The token authority runs in-process or not at all: hosted, it could not
+        // hand the runtime its engine. Anything else needs it to be admitted.
+        const bool isAuthority = name == "capability_module";
+        if (isAuthority
+            && !std::dynamic_pointer_cast<LogosCore::InprocModuleLoader>(loader)) {
+            const char* reason = "capability_module must run in-process: bundled, and "
+                                 "built eligible for it";
+            spdlog::critical("Refusing to load capability_module: {}", reason);
+            logos::ModuleStateObserver::instance().record(
+                name, logos::module_state::kLoading, logos::module_state::kError,
+                instanceId, std::nullopt, reason);
+            return false;
+        }
+        if (!isAuthority && !logos::authority::attached()) {
+            const char* reason = "no token authority: capability_module is not running";
+            spdlog::error("Refusing to load {}: {}", name, reason);
+            logos::ModuleStateObserver::instance().record(
+                name, logos::module_state::kLoading, logos::module_state::kError,
+                instanceId, std::nullopt, reason);
+            return false;
+        }
+
         // Fires on the container's BACKGROUND asio thread, for both an orderly
         // unload and a module that died. consumeExpectedExit() is what tells
         // them apart; see its definition.
@@ -1147,13 +1101,14 @@ namespace {
         const std::optional<int64_t> pid =
             handle.pid >= 0 ? std::optional<int64_t>(handle.pid) : std::nullopt;
 
-        // OUTBOUND half of load-time identity: a root token, sent into the child
-        // and registered locally under the module's name. capability_module mints
-        // it once it is the token authority; core does until then.
-        AdmissionGuard admission{name, logos::authority::attached()};
-        std::string authToken = admission.active
-            ? logos::authority::admit(name, "module")
-            : boost::uuids::to_string(boost::uuids::random_generator()());
+        // OUTBOUND half of load-time identity: the module's credential, sent into
+        // the child and kept in core's store. capability_module mints every one
+        // but its own, which is the trust root: its engine exists only once its
+        // image has loaded.
+        AdmissionGuard admission{name, !isAuthority};
+        std::string authToken = isAuthority
+            ? boost::uuids::to_string(boost::uuids::random_generator()())
+            : logos::authority::admit(name, "module");
         if (authToken.empty()) {
             admission.active = false;
             markExitExpected(name);
@@ -1210,6 +1165,19 @@ namespace {
                          "detectable if the process dies.", name);
         }
 
+        // The authority takes over before anything can be admitted through it.
+        if (isAuthority && !attachTokenAuthority(loader)) {
+            const char* reason = "capability_module offers no usable engine interface";
+            markExitExpected(name);
+            loader->terminate(name);
+            consumeExpectedExit(name);
+            abandonLoadAttempt(name);
+            logos::ModuleStateObserver::instance().record(
+                name, logos::module_state::kLoading, logos::module_state::kError,
+                instanceId, pid, reason);
+            return false;
+        }
+
         std::string configError;
         if (name == "package_manager" && !applyPackageConfig(authToken, configError)) {
             spdlog::error("Failed to load module {}: {}", name, configError);
@@ -1227,6 +1195,7 @@ namespace {
         // Settles a death that arrived while we waited together with the
         // registry write — see commitLoad.
         if (!commitLoad(name, loader, std::move(handle))) {
+            if (isAuthority) logos::authority::detach();
             const char* reason = "the module process exited while it was loading";
             spdlog::error("Failed to load module {}: {}", name, reason);
             logos::ModuleStateObserver::instance().record(
@@ -1241,11 +1210,7 @@ namespace {
         }
         admission.active = false;
 
-        if (name == "capability_module")
-            attachTokenAuthority(loader);
-        notifyCapabilityModule(name, authToken);
-
-        refreshDerivedRestrictionsForDependenciesOf(name);
+        pushRestrictions();
 
         spdlog::info("Module loaded: {}", name);
         logos::ModuleStateObserver::instance().record(
@@ -1266,7 +1231,19 @@ namespace {
     // Callers hold fleetMutex(): shared for a single unload, exclusive for the
     // cascade, which needs one span so a load cannot interleave between the
     // dependents and the target. Takes `name`'s lock like the load path does.
+    // The token authority stops only with the runtime: nothing could be
+    // admitted without it, and its image cannot be loaded twice in a process.
+    bool refuseAuthorityUnload(const std::string& name) {
+        if (name != "capability_module")
+            return false;
+        spdlog::error("Refusing to unload capability_module: it is the token authority, "
+                      "and it stops only with the runtime");
+        return true;
+    }
+
     bool unloadModuleInternal(const std::string& name) {
+        if (refuseAuthorityUnload(name))
+            return false;
         std::lock_guard<std::mutex> moduleGuard(moduleMutex(name));
 
         if (!registryInstance().isLoaded(name)) {
@@ -1310,11 +1287,9 @@ namespace {
         }
 
         registryInstance().markUnloaded(name);
-        if (name == "capability_module") logos::authority::detach();
-        else logos::authority::retire(name);
+        logos::authority::retire(name);
 
-        // markUnloaded keeps the dependency edges, so this still resolves them.
-        refreshDerivedRestrictionsForDependenciesOf(name);
+        pushRestrictions();
 
         spdlog::info("Module unloaded: {}", name);
 
@@ -1583,29 +1558,25 @@ namespace ModuleManager {
     }
 
     bool initializeCapabilityModule() {
+        // A stand-in authority (tests) is already the authority.
+        if (logos::authority::attached())
+            return true;
         // BEFORE the lock guard, so it is destroyed after it. See rule 1.
         logos::ScopedModuleStateFlush stateFlusher;
         ScopedLoadEntry entry;
         if (entry.reentrant) return refuseReentrantLoad("capability_module");
         std::shared_lock<std::shared_mutex> fleet(fleetMutex());
 
-        if (!registryInstance().isKnown("capability_module"))
-            return false;
-
-        if (!loadModuleInternal("capability_module")) {
-            spdlog::warn("Failed to load capability module");
+        if (!registryInstance().isKnown("capability_module")) {
+            spdlog::critical("capability_module is not in the bundled modules: there is no "
+                             "token authority, so nothing will load");
             return false;
         }
-
-        // Register restrictions before any other module can call out: explicit
-        // entries, then derived for anything already loaded (usually nothing —
-        // only the exempt capability_module is up here).
-        pushAccessRestrictionsToCapabilityModule();
-        runOnOwner([]() {
-            for (const auto& loaded : registryInstance().loadedModuleNames())
-                pushDerivedRestrictionForTarget(loaded);
-        });
-
+        if (!loadModuleInternal("capability_module")) {
+            spdlog::critical("capability_module did not load: there is no token authority, "
+                             "so nothing will load");
+            return false;
+        }
         return true;
     }
 
@@ -1636,6 +1607,8 @@ namespace ModuleManager {
         std::unique_lock<std::shared_mutex> fleet(fleetMutex());
 
         std::string name(moduleName);
+        if (refuseAuthorityUnload(name))
+            return false;
 
         if (!registryInstance().isLoaded(name)) {
             spdlog::warn("Cannot unload module (not loaded): {}", name);
@@ -1712,6 +1685,8 @@ namespace ModuleManager {
         // EXCLUSIVE: markAllLoadedExitsExpected needs the loaded set to hold
         // still, and every load and unload holds this shared for its span.
         std::unique_lock<std::shared_mutex> fleet(fleetMutex());
+        // The authority goes with the fleet; nothing admits through it after.
+        logos::authority::detach();
         // Announce before tearing down, or every module reports as a crash.
         markAllLoadedExitsExpected();
         loaderRegistry().terminateAll();
@@ -1776,18 +1751,7 @@ namespace ModuleManager {
         }
         // Same rationale again: the next run may have a host that does report.
         hostStaysSilent().store(false);
-        {
-            std::lock_guard<std::mutex> lock(tokenListenerMutex());
-            savedTokens().clear();
-        }
         orderedCalls().reopen();
-    }
-
-    void setTokenListener(void (*listener)(const char*, const char*, void*), void* userData) {
-        std::lock_guard<std::mutex> lock(tokenListenerMutex());
-        tokenListener() = {listener, userData};
-        if (!listener) return;
-        for (const auto& [key, token] : savedTokens()) listener(key.c_str(), token.c_str(), userData);
     }
 
     char** getLoadedModulesCStr() {
