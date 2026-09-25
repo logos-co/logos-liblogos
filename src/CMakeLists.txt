@@ -109,8 +109,14 @@ set(LOGOS_CORE_SOURCES
     logos_core/bootstrap_policy.h
     logos_core/inproc_module_loader.cpp
     logos_core/inproc_module_loader.h
-    logos_core/capability_authority.cpp
-    logos_core/capability_authority.h
+    logos_core/token_authority.cpp
+    logos_core/token_authority.h
+    core_service/call_envelope.cpp
+    core_service/call_envelope.h
+    core_service/embedded_core_service.cpp
+    core_service/embedded_core_service.h
+    core_service/shell_binding.cpp
+    core_service/shell_binding.h
     logos_core/module_state_observer.cpp
     logos_core/module_state_observer.h
     logos_core/module_manager.cpp

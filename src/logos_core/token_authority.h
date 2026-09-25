@@ -1,5 +1,5 @@
-#ifndef CAPABILITY_AUTHORITY_CLIENT_H
-#define CAPABILITY_AUTHORITY_CLIENT_H
+#ifndef TOKEN_AUTHORITY_H
+#define TOKEN_AUTHORITY_H
 
 // The engine's side of logos_capability_engine_v1. Once capability_module runs
 // in-process and exports it, capability mints every credential and names every
@@ -34,4 +34,4 @@ char* resolveCallerCallback(const char* token, const char* transport, void* user
 
 } // namespace logos::authority
 
-#endif // CAPABILITY_AUTHORITY_CLIENT_H
+#endif // TOKEN_AUTHORITY_H

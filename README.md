@@ -199,6 +199,25 @@ runtime as its own identity (a runtime delegate), is served over `inproc` and th
 local socket, and shares this process's fate: a crash takes the host down, and
 its image stays mapped after an unload, so loading it again needs a restart.
 
+### core_service and the shell binding
+
+`logos_core_start()` publishes `core_service`, the runtime's control surface, as
+a module of its own (inproc and the local socket, plus what
+`logos_core_set_core_service_transports` adds). Each method answers the callers
+its scope admits: any admitted module reads (`listModules`, `getStatus`,
+`getModuleInfo`, `getModuleStats`); the shell and operators load, unload and
+refresh; only the shell admits presentation consumers (`admitConsumer`); only
+operators forward calls (`callModuleMethod`, `watchModuleEvents`), and never to
+the runtime's own modules. `moduleStateChanged` carries every lifecycle
+transition. The embedder names its operators (`logos_core_set_operator_resolver`),
+handles `shutdown` and adds methods of its own (`logos_core_set_core_service_extension`).
+
+An embedder that sets `logos_core_set_shell_identity("basecamp")` before start
+gets its own identity: `logos_core_take_shell_binding()` returns a
+`logos_consumer` whose calls reach modules as `{"kind":"module","name":"basecamp"}`,
+with tokens capability_module issues. When capability_module runs in-process it
+is the token authority: it mints every credential and names every caller.
+
 ### Inter-module access enforcement (off by default)
 
 By default a loaded module may call any other loaded module. Enforcement is

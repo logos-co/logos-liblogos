@@ -63,6 +63,71 @@ LOGOS_CORE_EXPORT int logos_core_set_bundled_modules_dirs(const char* const* dir
 // malformed policy.
 LOGOS_CORE_EXPORT int logos_core_set_placement_policy(const char* policy_json);
 
+// ── core_service, the runtime's control surface ──────────────────────────────
+// It is published at logos_core_start() as a module of its own, on inproc and
+// the local socket. Each method answers only the callers its scope admits:
+// any admitted module reads; the shell and operators load and unload; only the
+// shell admits presentation consumers; only operators forward calls (never to
+// the runtime's own modules). These setters are protected input, taken before
+// logos_core_start() only, and return 0 or -1.
+
+// Further transports for it (tcp, tcp_ssl), as a JSON array.
+LOGOS_CORE_EXPORT int logos_core_set_core_service_transports(const char* transports_json);
+
+// Where core_service.shutdown goes; without one it is refused.
+typedef void (*LogosCoreShutdownHandler)(void* user_data);
+LOGOS_CORE_EXPORT int logos_core_set_shutdown_handler(LogosCoreShutdownHandler handler,
+                                                      void* user_data);
+
+// Names the operator a presented token belongs to: a malloc'd name, or NULL.
+typedef char* (*LogosCoreOperatorResolver)(const char* token, const char* transport,
+                                           void* user_data);
+LOGOS_CORE_EXPORT int logos_core_set_operator_resolver(LogosCoreOperatorResolver resolver,
+                                                       void* user_data);
+
+// Methods of the embedder's own on core_service: `methods_json` lists them as
+// core_service.getMethods does, and `extension` answers each (malloc'd JSON, or
+// NULL for a method that is not its), authorizing by the caller document itself.
+typedef char* (*LogosCoreServiceExtension)(const char* caller_json, const char* method,
+                                           const char* args_json, void* user_data);
+LOGOS_CORE_EXPORT int logos_core_set_core_service_extension(LogosCoreServiceExtension extension,
+                                                            const char* methods_json,
+                                                            void* user_data);
+
+// ── the shell binding ─────────────────────────────────────────────────────────
+// The embedder's own identity ("basecamp", "logoscore", ...), set before start.
+// capability_module admits it like any consumer, so the modules it calls see
+// {"kind":"module","name":<shell>}. Needs capability_module running in-process.
+LOGOS_CORE_EXPORT int logos_core_set_shell_identity(const char* name);
+
+typedef struct logos_consumer logos_consumer;
+typedef struct logos_consumer_subscription logos_consumer_subscription;
+typedef void (*logos_consumer_result_cb)(int ok, const char* json, void* user_data);
+typedef void (*logos_consumer_event_cb)(const char* event_name, const char* data_json,
+                                        void* user_data);
+
+// The binding, once, after start; NULL without a shell identity.
+LOGOS_CORE_EXPORT logos_consumer* logos_core_take_shell_binding(void);
+LOGOS_CORE_EXPORT const char* logos_consumer_name(const logos_consumer* consumer);
+// Its credential, for a co-process that acts as the shell. Free with logos_consumer_string_free.
+LOGOS_CORE_EXPORT char* logos_consumer_credential(const logos_consumer* consumer);
+// As lp_invoke; strings are freed with logos_consumer_string_free.
+LOGOS_CORE_EXPORT int logos_consumer_call(logos_consumer* consumer, const char* target,
+                                          const char* method, const char* args_json,
+                                          int timeout_ms, char** out_result_json,
+                                          char** out_error_json);
+LOGOS_CORE_EXPORT int logos_consumer_call_async(logos_consumer* consumer, const char* target,
+                                                const char* method, const char* args_json,
+                                                int timeout_ms, logos_consumer_result_cb cb,
+                                                void* user_data);
+LOGOS_CORE_EXPORT logos_consumer_subscription* logos_consumer_subscribe(
+    logos_consumer* consumer, const char* target, const char* event_name,
+    logos_consumer_event_cb cb, void* user_data);
+LOGOS_CORE_EXPORT void logos_consumer_unsubscribe(logos_consumer_subscription* subscription);
+LOGOS_CORE_EXPORT void logos_consumer_string_free(char* value);
+// Ends the handle's calls and subscriptions; the identity lasts until cleanup.
+LOGOS_CORE_EXPORT void logos_consumer_release(logos_consumer* consumer);
+
 // Start the logos core functionality
 LOGOS_CORE_EXPORT void logos_core_start();
 

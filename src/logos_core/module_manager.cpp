@@ -1,6 +1,8 @@
 #include "module_manager.h"
 #include "bootstrap_policy.h"
-#include "capability_authority.h"
+#include "token_authority.h"
+#include "core_service/embedded_core_service.h"
+#include "core_service/shell_binding.h"
 #include <logos_capability_engine.h>
 #include "module_registry.h"
 #include "access_policy.h"
@@ -1672,6 +1674,10 @@ namespace ModuleManager {
     }
 
     void clear() {
+        // The control surface and the shell's identity go before the fleet does.
+        logos::shell_binding::shutdown();
+        logos::core_service::stop();
+        logos::core_service::resetConfiguration();
         // BEFORE the lock guard, so it is destroyed after it. See rule 1.
         logos::ScopedModuleStateFlush stateFlusher;
         ScopedLoadEntry entry;
