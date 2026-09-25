@@ -153,6 +153,10 @@ int  logos_core_set_bundled_modules_dirs(const char* const* dirs);
 // the builder stamped in-process eligible ever run in this process.
 int  logos_core_set_placement_policy(const char* policy_json);
 
+// package_manager's directories, keyring and signature policy (before start
+// only), applied as it loads: its setters answer only the runtime.
+int  logos_core_set_package_config(const char* config_json);
+
 // Instance persistence
 void logos_core_set_persistence_base_path(const char* path);
 
@@ -209,8 +213,10 @@ its scope admits: any admitted module reads (`listModules`, `getStatus`,
 refresh; only the shell admits presentation consumers (`admitConsumer`); only
 operators forward calls (`callModuleMethod`, `watchModuleEvents`), and never to
 the runtime's own modules. `moduleStateChanged` carries every lifecycle
-transition. The embedder names its operators (`logos_core_set_operator_resolver`),
-handles `shutdown` and adds methods of its own (`logos_core_set_core_service_extension`).
+transition. `getModuleInfo`, like `logos_core_get_modules_info()`, names where
+a loaded module runs: `placement` is `inproc` or `subprocess`. The embedder names
+its operators (`logos_core_set_operator_resolver`), handles `shutdown` and adds
+methods of its own (`logos_core_set_core_service_extension`).
 
 An embedder that sets `logos_core_set_shell_identity("basecamp")` before start
 gets its own identity: `logos_core_take_shell_binding()` returns a
@@ -230,8 +236,8 @@ opt-in, and `mode` in the access policy is the switch:
 Installing that document (via `logos_core_set_access_policy`, before
 `logos_core_start()`) turns on **deny-by-default**: for every loaded target,
 core derives the allowed callers from the declared dependency graph — the
-target's loaded dependents, plus the trusted `core` / `core_service` — and
-registers them with capability_module. A module that never declared the target
+target's loaded dependents, plus the trusted `core` / `core_service` and the
+embedder's shell — and registers them with capability_module. A module that never declared the target
 as a dependency is refused a token, so its call can never proceed, and
 capability_module logs the refusal with both names:
 
@@ -259,7 +265,8 @@ need an explicit entry):
  "restrictions": {"accounts_module": {"allowedCallers": ["accounts_ui"]}}}
 ```
 
-`capability_module`, `core` and `core_service` are never restricted as targets.
+`capability_module`, `core` and `core_service` are never restricted as targets,
+and the shell stays among the allowed callers of an explicit entry too.
 
 Hosts expose this as `--access-policy` — see the logoscore CLI and Basecamp
 READMEs.
