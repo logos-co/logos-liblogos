@@ -380,6 +380,12 @@ bool isPackageModule(const std::string& module)
 
 // An operator's call reaches the target as that operator, never as the runtime,
 // and never reaches the token store or this service.
+// The token store and core_service itself are never an operator's target.
+bool closedToOperator(const Caller& caller, const std::string& module)
+{
+    return caller.kind == "operator" && (module == "capability_module" || module == kName);
+}
+
 json callModuleMethod(const Caller& caller, const std::string& module, const std::string& method,
                       const json& args)
 {
@@ -387,7 +393,7 @@ json callModuleMethod(const Caller& caller, const std::string& module, const std
         return error("MODULE_NOT_LOADED", "Module '" + module + "' is not loaded. Load it with: "
                                           "logosctl module load " + module);
     // Refused like any unauthorized call, so the answer is the usual envelope.
-    if (caller.kind == "operator" && (module == "capability_module" || module == kName))
+    if (closedToOperator(caller, module))
         return callEnvelope(module, method, nullptr,
                             CallFailure{"unauthorized",
                                         "an operator cannot call " + module + " through core_service",
@@ -426,9 +432,9 @@ void forwardEvent(const char* event, const char* data, void* userData)
     emit("module_event", forwarded);
 }
 
-json watchModuleEvents(const std::string& module, const std::string& event)
+json watchModuleEvents(const Caller& caller, const std::string& module, const std::string& event)
 {
-    if (!contains(loadedNames(), module)) return false;
+    if (closedToOperator(caller, module) || !contains(loadedNames(), module)) return false;
     lp_client* client = clientFor("core", module);
     if (!client) return false;
     auto* context = new std::string(module);
@@ -492,7 +498,7 @@ json run(const std::string& method, const json& args, const Caller& caller)
     if (method == "callModuleMethod")
         return callModuleMethod(caller, text(0), text(1),
                                 args.size() >= 3 && args[2].is_array() ? args[2] : json::array());
-    if (method == "watchModuleEvents") return watchModuleEvents(text(0), text(1, ""));
+    if (method == "watchModuleEvents") return watchModuleEvents(caller, text(0), text(1, ""));
     if (method == "admitConsumer") return admitConsumer(text(0), text(1, "presentation"));
     if (method == "retireConsumer") return retireConsumer(text(0));
     if (method == "shutdown") return shutdownRuntime();
