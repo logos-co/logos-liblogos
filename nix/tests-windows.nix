@@ -1,7 +1,9 @@
 # Cross-builds logos_core_tests for Windows, with everything the flake check
 # hands the suite on Unix: the real host, the bundled modules and the fixtures.
 # Windows CI runs it from the manifest installed beside it.
-{ pkgs, common, src, bin }:
+# capability_module runs on qt_remote_plain now, so the tests that need a real Qt
+# plugin get its qt-lib build, as the Unix check does.
+{ pkgs, common, src, bin, qtPlugin }:
 
 let
   host = "{target}/host/logos_host_qt.exe";
@@ -11,7 +13,7 @@ let
       exe = "bin/logos_core_tests.exe";
       timeout = 120;
       env = {
-        TEST_PLUGIN = "{target}/modules/capability_module/capability_module_plugin.dll";
+        TEST_PLUGIN = "{target}/qt-plugin/capability_module_plugin.dll";
         TEST_PLUGIN_DEP_RANGE = "{target}/lib/dep_range_fixture_plugin.fixture";
         TEST_PLUGIN_DEP_MALFORMED = "{target}/lib/dep_malformed_fixture_plugin.fixture";
         TEST_BUNDLED_MODULES_DIR = "{target}/modules";
@@ -36,14 +38,15 @@ pkgs.stdenv.mkDerivation {
 
   installPhase = ''
     runHook preInstall
-    mkdir -p $out/bin $out/lib $out/host $out/modules $out/share/logos-tests
+    mkdir -p $out/bin $out/lib $out/host $out/modules $out/qt-plugin $out/share/logos-tests
     # Their DLLs are linked in beside them by the mingw fixup hook.
     cp bin/logos_core_tests.exe bin/logos_fake_module_host.exe $out/bin/
     cp lib/*_fixture_plugin.fixture lib/*_fixture_plugin.metadata.json $out/lib/
     # The host and bundled modules as the package ships them, DLLs included.
     cp -rL ${bin}/bin/. $out/host/
     cp -rL ${bin}/modules/. $out/modules/
-    chmod -R u+w $out/host $out/modules
+    cp -rL ${qtPlugin}/lib/. $out/qt-plugin/
+    chmod -R u+w $out/host $out/modules $out/qt-plugin
     cp ${manifest} $out/share/logos-tests/liblogos.json
     runHook postInstall
   '';

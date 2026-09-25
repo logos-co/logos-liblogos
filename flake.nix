@@ -142,7 +142,10 @@
           bin = import ./nix/bin.nix { inherit pkgs common build lib modules; moduleHosts = defaultModuleHosts; };
           include = import ./nix/include.nix { inherit pkgs common src logosProtocolPkg; };
           tests = if pkgs.stdenv.hostPlatform.isWindows
-            then import ./nix/tests-windows.nix { inherit pkgs common src bin; }
+            then import ./nix/tests-windows.nix {
+              inherit pkgs common src bin;
+              qtPlugin = logos-capability-module.packages.${system}.qt-lib;
+            }
             else import ./nix/tests.nix { inherit pkgs common build; };
 
           # Portable package components
