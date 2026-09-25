@@ -105,6 +105,8 @@ set(LOGOS_CORE_SOURCES
     logos_core/dependency_gate.h
     logos_core/access_policy.cpp
     logos_core/access_policy.h
+    logos_core/bootstrap_policy.cpp
+    logos_core/bootstrap_policy.h
     logos_core/module_state_observer.cpp
     logos_core/module_state_observer.h
     logos_core/module_manager.cpp

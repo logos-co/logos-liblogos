@@ -12,6 +12,7 @@
 #include <cstring>
 #include <string>
 #include <unordered_map>
+#include <vector>
 
 // === C API Implementation (Thin Wrappers) ===
 
@@ -45,7 +46,20 @@ void ensureInstanceId() {
 }
 }
 
+int logos_core_set_bundled_modules_dirs(const char* const* dirs) {
+    if (!dirs || ModuleManager::started()) {
+        logos::logger("core").error("logos_core_set_bundled_modules_dirs: {}",
+                                    dirs ? "refused after logos_core_start()" : "dirs must not be null");
+        return -1;
+    }
+    std::vector<std::string> list;
+    for (const char* const* dir = dirs; *dir; ++dir) list.emplace_back(*dir);
+    ModuleManager::setBundledModulesDirs(list);
+    return 0;
+}
+
 void logos_core_start() {
+    ModuleManager::markStarted();
     logos::initLogging();
     // Hosts inherit this value and therefore publish at the endpoint the
     // parent-side plain clients derive independently.

@@ -1,4 +1,5 @@
 #include "module_manager.h"
+#include "bootstrap_policy.h"
 #include "module_registry.h"
 #include "access_policy.h"
 #include "dependency_resolver.h"
@@ -171,6 +172,11 @@ namespace {
         return path;
     }
 
+    std::atomic<bool>& startedFlag() {
+        static std::atomic<bool> value{false};
+        return value;
+    }
+
     // ── Orderly teardown vs. death ───────────────────────────────────────────
     //
     // onTerminated fires for BOTH an unload we asked for and a module that
@@ -314,13 +320,7 @@ namespace {
         return p;
     }
 
-    // Always allowed past the dependency check, so they're never locked out.
-    const std::vector<std::string> kTrustedCallers = {"core", "core_service"};
-
-    // Never restricted as targets, even if an explicit policy names them.
-    // TODO: re-eval this; probably is required to restrict core/core_service
-    const std::vector<std::string> kExemptTargets =
-        {"capability_module", "core", "core_service"};
+    // Trusted callers and exempt targets come from the bootstrap policy table.
 
     // Built-in default loader, composed from the container + format-loader the
     // build linked in. The concrete implementations are chosen at link time via
@@ -598,8 +598,7 @@ namespace {
 
         runOnOwner([restrictions]() {
             for (const auto& restriction : restrictions) {
-                if (std::find(kExemptTargets.begin(), kExemptTargets.end(),
-                              restriction.target) != kExemptTargets.end())
+                if (logos::bootstrap::isExemptTarget(restriction.target))
                     continue;
                 registerRestrictionRpc(restriction.target, restriction.allowedCallers);
             }
@@ -610,8 +609,7 @@ namespace {
     // allowed callers are its loaded dependents plus the trusted set. Empty when
     // exempt or no enforce policy (fail-open); explicit policy overrides verbatim.
     std::vector<std::string> derivedAllowedCallersFor(const std::string& target) {
-        if (std::find(kExemptTargets.begin(), kExemptTargets.end(), target)
-                != kExemptTargets.end())
+        if (logos::bootstrap::isExemptTarget(target))
             return {};
 
         {
@@ -642,7 +640,7 @@ namespace {
         for (const auto& d : registryInstance().moduleOptionalDependents(target))
             if (registryInstance().isLoaded(d))
                 add(d);
-        for (const auto& t : kTrustedCallers)
+        for (const auto& t : logos::bootstrap::trustedCallers())
             add(t);
         return callers;
     }
@@ -1255,6 +1253,18 @@ namespace ModuleManager {
         registryInstance().setModulesDir(std::string(modules_dir));
     }
 
+    void setBundledModulesDirs(const std::vector<std::string>& dirs) {
+        registryInstance().setBundledModulesDirs(dirs);
+    }
+
+    void markStarted() {
+        startedFlag().store(true);
+    }
+
+    bool started() {
+        return startedFlag().load();
+    }
+
     void addModulesDir(const char* modules_dir) {
         assert(modules_dir != nullptr);
         registryInstance().addModulesDir(std::string(modules_dir));
@@ -1618,6 +1628,7 @@ namespace ModuleManager {
         loaderRegistry().terminateAll();
         clearExpectedExits();
         registryInstance().clear();
+        startedFlag().store(false);
         {
             std::lock_guard<std::mutex> lock(clientMutex());
             clients().clear();
