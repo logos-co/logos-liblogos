@@ -106,10 +106,12 @@
 
           # Common configuration (dev, default)
           common = import ./nix/default.nix {
+            capabilityEngineInclude = "${logos-capability-module}/src";
             inherit pkgs logosProtocolPkg processStats logosContainer logosModuleLoader logosPackageManager containerImpl formatLoaderImpl;
           };
           # Common configuration (portable)
           commonPortable = import ./nix/default.nix {
+            capabilityEngineInclude = "${logos-capability-module}/src";
             inherit pkgs logosProtocolPkg processStats logosContainer logosModuleLoader containerImpl formatLoaderImpl;
             logosPackageManager = logosPackageManagerPortable;
             portableBuild = true;

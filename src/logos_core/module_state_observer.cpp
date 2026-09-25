@@ -20,10 +20,28 @@ void ModuleStateObserver::setSink(Sink sink)
     m_sink = std::move(sink);
 }
 
+int ModuleStateObserver::addSink(Sink sink)
+{
+    std::lock_guard<std::mutex> lock(m_mutex);
+    const int id = m_nextSinkId++;
+    m_extraSinks.emplace_back(id, std::move(sink));
+    return id;
+}
+
+void ModuleStateObserver::removeSink(int id)
+{
+    std::lock_guard<std::mutex> lock(m_mutex);
+    for (auto it = m_extraSinks.begin(); it != m_extraSinks.end(); ++it)
+        if (it->first == id) {
+            m_extraSinks.erase(it);
+            return;
+        }
+}
+
 bool ModuleStateObserver::hasSink() const
 {
     std::lock_guard<std::mutex> lock(m_mutex);
-    return static_cast<bool>(m_sink);
+    return static_cast<bool>(m_sink) || !m_extraSinks.empty();
 }
 
 uint64_t ModuleStateObserver::nextSeq()
@@ -52,7 +70,7 @@ void ModuleStateObserver::record(const std::string& module,
         // No sink means nobody is listening; buffering would be an unbounded
         // leak in the normal case. Checked under the lock so it cannot race
         // setSink().
-        if (!m_sink)
+        if (!m_sink && m_extraSinks.empty())
             return;
 
         t.seq = ++m_seq;
@@ -72,15 +90,16 @@ void ModuleStateObserver::flush()
     // copied out too: calling it under m_mutex would deadlock the moment a sink
     // re-entered record(), which is an ordinary thing to write.
     std::vector<ModuleTransition> batch;
-    Sink sink;
+    std::vector<Sink> sinks;
     {
         std::lock_guard<std::mutex> lock(m_mutex);
-        if (m_pending.empty() || !m_sink)
+        if (m_pending.empty() || (!m_sink && m_extraSinks.empty()))
             return;
         batch.swap(m_pending);
-        sink = m_sink;
+        if (m_sink) sinks.push_back(m_sink);
+        for (const auto& [id, extra] : m_extraSinks) sinks.push_back(extra);
     }
-    sink(batch);
+    for (const Sink& sink : sinks) sink(batch);
 }
 
 void ModuleStateObserver::clearPending()
