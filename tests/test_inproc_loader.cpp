@@ -284,6 +284,20 @@ TEST_F(InprocBundledTest, TheRuntimeRunsItsModulesInProcessBehindCoreService)
     EXPECT_TRUE(callWith(plugin, "getStatus").is_object());
     EXPECT_TRUE(forbidden(callWith(plugin, "loadModule", json::array({"modules_state"}))));
     EXPECT_TRUE(forbidden(callWith(plugin, "admitConsumer", json::array({"x", "presentation"}))));
+    // A pair the plugin asks capability for works until its admission ends.
+    lp_client* pluginToState = lp_client_create("modules_state", "test_ui_plugin", nullptr, nullptr);
+    ASSERT_NE(pluginToState, nullptr);
+    auto listModules = [&](std::string* why) {
+        char* out = nullptr;
+        char* err = nullptr;
+        const int status = lp_invoke(pluginToState, "list_modules", "[]", 5000, &out, &err);
+        if (why) *why = err ? err : "";
+        lp_string_free(out);
+        lp_string_free(err);
+        return status == LP_OK;
+    };
+    std::string why;
+    EXPECT_TRUE(listModules(&why)) << why;
     // The shell retires only what it admitted, never a module.
     EXPECT_EQ(shellCall("retireConsumer", json::array({"modules_state"})).value("code", std::string{}),
               "NOT_FOUND");
@@ -314,6 +328,11 @@ TEST_F(InprocBundledTest, TheRuntimeRunsItsModulesInProcessBehindCoreService)
     EXPECT_EQ(shellCall("retireConsumer", json::array({"test_ui_plugin"})).value("status", std::string{}),
               "ok");
     EXPECT_FALSE(logos::authority::resolveCaller(pluginCredential.c_str(), "inproc").has_value());
+    // Its cached pair is refused at modules_state too: capability revoked it
+    // there, and the plugin can no longer mint another.
+    EXPECT_TRUE(eventually([&] { return !listModules(nullptr); }))
+        << "modules_state still takes the retired plugin's pair token";
+    lp_client_destroy(pluginToState);
 
     EXPECT_EQ(logos_core_unload_module("modules_state", false), 1);
     EXPECT_FALSE(loaded("modules_state"));
