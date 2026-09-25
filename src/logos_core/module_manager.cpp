@@ -1717,6 +1717,9 @@ namespace ModuleManager {
     }
 
     void clear() {
+        // Nothing the runtime admitted outlives it, so nothing is revoked on the
+        // way out: capability's pushes would only race the teardown and fail.
+        logos::authority::detach();
         // The control surface and the shell's identity go before the fleet does.
         logos::shell_binding::shutdown();
         logos::core_service::stop();
