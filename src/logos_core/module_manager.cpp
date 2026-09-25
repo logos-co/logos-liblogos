@@ -594,6 +594,14 @@ namespace {
         return capabilityRpcSinkForTests() || registryInstance().isLoaded("capability_module");
     }
 
+    // The shell reaches every module, as the host it replaces did.
+    std::vector<std::string> withShell(std::vector<std::string> callers) {
+        const std::string shell = logos::core_service::shellIdentity();
+        if (!shell.empty() && std::find(callers.begin(), callers.end(), shell) == callers.end())
+            callers.push_back(shell);
+        return callers;
+    }
+
     // Token authenticates the call. Best-effort; assumes capability_module loaded.
     void registerRestrictionRpc(const std::string& target,
                                 const std::vector<std::string>& callers) {
@@ -637,7 +645,7 @@ namespace {
             for (const auto& restriction : restrictions) {
                 if (logos::bootstrap::isExemptTarget(restriction.target))
                     continue;
-                registerRestrictionRpc(restriction.target, restriction.allowedCallers);
+                registerRestrictionRpc(restriction.target, withShell(restriction.allowedCallers));
             }
         });
     }
@@ -657,7 +665,7 @@ namespace {
 
             for (const auto& r : policy->restrictions)
                 if (r.target == target)
-                    return r.allowedCallers;
+                    return withShell(r.allowedCallers);
         }
 
         // Deduped; no dependents => trusted only (deny-by-default for peers).
@@ -681,7 +689,7 @@ namespace {
                 add(d);
         for (const auto& t : logos::bootstrap::trustedCallers())
             add(t);
-        return callers;
+        return withShell(std::move(callers));
     }
 
     void pushDerivedRestrictionForTarget(const std::string& target) {
