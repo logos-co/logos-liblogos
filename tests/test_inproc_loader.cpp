@@ -270,12 +270,16 @@ TEST_F(InprocBundledTest, TheRuntimeRunsItsModulesInProcessBehindCoreService)
     EXPECT_TRUE(forbidden(callWith(plugin, "loadModule", json::array({"modules_state"}))));
     EXPECT_TRUE(forbidden(callWith(plugin, "admitConsumer", json::array({"x", "presentation"}))));
 
-    // An operator the embedder names forwards calls, but not to the runtime's modules.
+    // An operator the embedder names forwards calls, but never to the token store.
     lp_client* alice = clientAs("alice-cli", {}, "core_service", "alice-token");
     ASSERT_NE(alice, nullptr);
     EXPECT_TRUE(callWith(alice, "listModules", json::array({"loaded"})).is_array());
     EXPECT_TRUE(forbidden(callWith(alice, "callModuleMethod",
-                                   json::array({"modules_state", "list_modules", json::array()}))));
+                                   json::array({"capability_module", "requestModule",
+                                                json::array({"", "modules_state"})}))));
+    const json forwarded = callWith(alice, "callModuleMethod",
+                                    json::array({"modules_state", "list_modules", json::array()}));
+    EXPECT_EQ(forwarded.value("status", std::string{}), "ok") << forwarded.dump();
     EXPECT_TRUE(forbidden(callWith(alice, "admitConsumer", json::array({"y", "presentation"}))));
     // An unknown token gets nothing.
     lp_client* stranger = clientAs("stranger-cli", {}, "core_service", "no-such-token");
