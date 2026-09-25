@@ -22,6 +22,7 @@ add_executable(logos_core_tests
     test_core_outbound.cpp
     test_bootstrap_policy.cpp
     test_inproc_loader.cpp
+    test_call_envelope.cpp
 )
 
 # The stand-in module host the load-path tests start, beside the test binary
