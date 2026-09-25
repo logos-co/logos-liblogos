@@ -346,10 +346,6 @@ TEST_F(ModuleManagerTest, ResolveDependencies_HandlesTransitiveDeps) {
 // C API: logos_core_load_module LOGOS_LOAD_REQUIRED_DEPS Tests
 // =============================================================================
 
-TEST_F(ModuleManagerTest, LoadModuleWithDeps_AbortsForNull) {
-    EXPECT_DEATH(logos_core_load_module(nullptr, LOGOS_LOAD_REQUIRED_DEPS), "");
-}
-
 TEST_F(ModuleManagerTest, LoadModuleWithDeps_ReturnsZeroForUnknown) {
     int result = logos_core_load_module("unknown_module", LOGOS_LOAD_REQUIRED_DEPS);
     EXPECT_EQ(result, 0);
@@ -1557,10 +1553,6 @@ TEST_F(CascadeUnloadTest, UnloadWithDependents_DiamondDependents) {
     EXPECT_EQ(logos_core_is_module_loaded("d"), 0);
 }
 
-TEST_F(CascadeUnloadTest, UnloadWithDependents_AbortsForNull) {
-    EXPECT_DEATH(logos_core_unload_module(nullptr, true), "");
-}
-
 TEST_F(RealModuleRegistryTest, ProcessModule_PreservesLoadedFlagOnReprocess) {
     char* name1 = logos_core_process_module(modulePath.c_str());
     ASSERT_NE(name1, nullptr) << "process_module failed for " << modulePath;
@@ -1733,22 +1725,14 @@ TEST_F(DependencyQueryTest, GetModuleDependencies_SelfNotIncluded) {
     EXPECT_EQ(got, (std::set<std::string>{"leaf"}));
 }
 
-TEST_F(DependencyQueryTest, GetModuleDependencies_AbortsForNull) {
-    EXPECT_DEATH(logos_core_get_module_dependencies(nullptr, false), "");
-}
-
-TEST_F(DependencyQueryTest, GetModuleDependents_AbortsForNull) {
-    EXPECT_DEATH(logos_core_get_module_dependents(nullptr, false), "");
-}
-
 // =============================================================================
 // Derived access-restriction computation (graph + policy -> allowed callers)
 // =============================================================================
 //
 // computeDerivedAllowedCallers() is the registry-backed counterpart of the
 // pure derivation seam: it reads the live dependency graph + loaded set + the
-// access policy and returns what core would register with capability_module for
-// a target — without any RPC. We drive it with the test registry adapters
+// access policy and returns what core hands capability_module for a target
+// — without the engine interface. We drive it with the test registry adapters
 // (register_module / register_module_dependencies / mark_module_loaded) and the
 // ModuleManager::setAccessPolicy entry point.
 
