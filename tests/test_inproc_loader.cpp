@@ -3,6 +3,7 @@
 #include <gtest/gtest.h>
 #include "logos_core.h"
 #include "inproc_module_loader.h"
+#include "capability_authority.h"
 #include "module_manager.h"
 #include "module_registry.h"
 #include "qt_test_adapter.h"
@@ -168,8 +169,21 @@ TEST_F(InprocBundledTest, TheRuntimesModulesRunInProcessUntilUnloaded)
         return record.is_object() && record.value("module", std::string{}) == "capability_module";
     })) << call("modules_state", "list_modules").dump();
 
+    // capability_module is the token authority: it minted modules_state's
+    // credential, and names its holder.
+    ASSERT_TRUE(logos::authority::attached());
+    char* raw = logos_core_get_token("modules_state");
+    const std::string credential = raw ? raw : "";
+    delete[] raw;
+    ASSERT_FALSE(credential.empty());
+    const auto holder = logos::authority::resolveCaller(credential.c_str(), "inproc");
+    ASSERT_TRUE(holder.has_value());
+    EXPECT_EQ(json::parse(*holder), (json{{"kind", "module"}, {"name", "modules_state"}}));
+
     EXPECT_EQ(logos_core_unload_module("modules_state", false), 1);
     EXPECT_FALSE(loaded("modules_state"));
+    EXPECT_FALSE(logos::authority::resolveCaller(credential.c_str(), "inproc").has_value())
+        << "unloading retires the admission";
     EXPECT_TRUE(call("modules_state", "list_modules").is_null()) << "its provider is withdrawn";
     EXPECT_NE(logos_core_load_module("modules_state", LOGOS_LOAD_MODULE_ONLY), 1)
         << "its image is still mapped";

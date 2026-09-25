@@ -1,5 +1,7 @@
 #include "module_manager.h"
 #include "bootstrap_policy.h"
+#include "capability_authority.h"
+#include <logos_capability_engine.h>
 #include "module_registry.h"
 #include "access_policy.h"
 #include "dependency_resolver.h"
@@ -679,8 +681,26 @@ namespace {
         });
     }
 
+    // Capability's own provider names callers through the engine interface once
+    // it is the authority; only core-minted credentials are pushed to it.
+    void attachTokenAuthority(const std::shared_ptr<LogosCore::ModuleLoader>& loader) {
+        auto inproc = std::dynamic_pointer_cast<LogosCore::InprocModuleLoader>(loader);
+        if (!inproc) return;
+        void* symbol = inproc->symbolOf("capability_module", LOGOS_CAPABILITY_ENGINE_SYMBOL);
+        if (!symbol) return;
+        auto engine = reinterpret_cast<logos_module_capability_engine_v1_fn>(symbol);
+        logos::authority::attach(engine(), inproc->providerOf("capability_module"));
+    }
+
+    // Ends an admission unless the load that made it commits.
+    struct AdmissionGuard {
+        std::string name;
+        bool active = false;
+        ~AdmissionGuard() { if (active) logos::authority::retire(name); }
+    };
+
     void notifyCapabilityModule(const std::string& name, const std::string& token) {
-        if (!registryInstance().isLoaded("capability_module"))
+        if (!registryInstance().isLoaded("capability_module") || logos::authority::attached())
             return;
 
         // Serialize with the other core-side policy updates. The plain client
@@ -1053,6 +1073,7 @@ namespace {
             if (recordTerminationDuringLoad(n))
                 return;
 
+            logos::authority::retire(n);
             auto& observer = logos::ModuleStateObserver::instance();
             if (consumeExpectedExit(n)) {
                 observer.record(n, logos::module_state::kStopping,
@@ -1087,9 +1108,24 @@ namespace {
         const std::optional<int64_t> pid =
             handle.pid >= 0 ? std::optional<int64_t>(handle.pid) : std::nullopt;
 
-        // OUTBOUND half of load-time identity: mint a root token, send it into
-        // the child, and register it locally under the module's name.
-        std::string authToken = boost::uuids::to_string(boost::uuids::random_generator()());
+        // OUTBOUND half of load-time identity: a root token, sent into the child
+        // and registered locally under the module's name. capability_module mints
+        // it once it is the token authority; core does until then.
+        AdmissionGuard admission{name, logos::authority::attached()};
+        std::string authToken = admission.active
+            ? logos::authority::admit(name, "module")
+            : boost::uuids::to_string(boost::uuids::random_generator()());
+        if (authToken.empty()) {
+            admission.active = false;
+            markExitExpected(name);
+            loader->terminate(name);
+            consumeExpectedExit(name);
+            abandonLoadAttempt(name);
+            logos::ModuleStateObserver::instance().record(
+                name, logos::module_state::kLoading, logos::module_state::kError,
+                instanceId, pid, "capability_module refused to admit it");
+            return false;
+        }
 
         if (!loader->sendToken(name, authToken)) {
             // We are about to terminate it deliberately, so announce the intent
@@ -1150,7 +1186,10 @@ namespace {
             spdlog::error("Failed to save auth token for {}", name);
             return false;
         }
+        admission.active = false;
 
+        if (name == "capability_module")
+            attachTokenAuthority(loader);
         notifyCapabilityModule(name, authToken);
 
         refreshDerivedRestrictionsForDependenciesOf(name);
@@ -1218,6 +1257,8 @@ namespace {
         }
 
         registryInstance().markUnloaded(name);
+        if (name == "capability_module") logos::authority::detach();
+        else logos::authority::retire(name);
 
         // markUnloaded keeps the dependency edges, so this still resolves them.
         refreshDerivedRestrictionsForDependenciesOf(name);
@@ -1650,6 +1691,7 @@ namespace ModuleManager {
         loaderRegistry().terminateAll();
         clearExpectedExits();
         registryInstance().clear();
+        logos::authority::detach();
         startedFlag().store(false);
         {
             std::unique_lock<std::shared_mutex> g(configMutex());

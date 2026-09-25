@@ -109,6 +109,8 @@ set(LOGOS_CORE_SOURCES
     logos_core/bootstrap_policy.h
     logos_core/inproc_module_loader.cpp
     logos_core/inproc_module_loader.h
+    logos_core/capability_authority.cpp
+    logos_core/capability_authority.h
     logos_core/module_state_observer.cpp
     logos_core/module_state_observer.h
     logos_core/module_manager.cpp
@@ -243,6 +245,15 @@ target_link_libraries(logos_core PRIVATE LogosFormatLoaderImpl::native_module_ho
 # like an archive, in order, so the runtime has to follow the host on the line.
 set_property(TARGET LogosFormatLoaderImpl::native_module_host APPEND PROPERTY
              INTERFACE_LINK_LIBRARIES logos-protocol::logos_protocol_plain_shared)
+
+# capability_module's engine interface (logos_capability_engine.h), from its source.
+if(NOT DEFINED LOGOS_CAPABILITY_ENGINE_INCLUDE AND DEFINED ENV{LOGOS_CAPABILITY_ENGINE_INCLUDE})
+  set(LOGOS_CAPABILITY_ENGINE_INCLUDE "$ENV{LOGOS_CAPABILITY_ENGINE_INCLUDE}")
+endif()
+if(NOT EXISTS "${LOGOS_CAPABILITY_ENGINE_INCLUDE}/logos_capability_engine.h")
+  message(FATAL_ERROR "logos_capability_engine.h not found; set LOGOS_CAPABILITY_ENGINE_INCLUDE")
+endif()
+target_include_directories(logos_core PRIVATE "${LOGOS_CAPABILITY_ENGINE_INCLUDE}")
 
 # Include directories for the library
 target_include_directories(logos_core PRIVATE

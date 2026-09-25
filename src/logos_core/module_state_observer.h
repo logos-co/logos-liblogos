@@ -43,6 +43,7 @@
 #include <mutex>
 #include <optional>
 #include <string>
+#include <utility>
 #include <vector>
 
 namespace logos {
@@ -88,6 +89,10 @@ public:
 
     // True when a sink is installed. Callers may use this to skip building
     // arguments they would otherwise throw away.
+    // Further sinks (core_service's moduleStateChanged); the id removes one.
+    int addSink(Sink sink);
+    void removeSink(int id);
+
     bool hasSink() const;
 
     // The single monotonic counter — see rule 2.
@@ -116,6 +121,8 @@ private:
     mutable std::mutex m_mutex;
     std::vector<ModuleTransition> m_pending;
     Sink m_sink;
+    std::vector<std::pair<int, Sink>> m_extraSinks;
+    int m_nextSinkId = 1;
     uint64_t m_seq = 0;
 };
 
