@@ -111,6 +111,27 @@ TEST_F(BundledDirsTest, AReservedNameResolvesOnlyFromABundledDirectory)
     EXPECT_FALSE(registry().isBundled("chat_module"));
 }
 
+// A bundle may be a symlink farm (a nix buildEnv) whose links point elsewhere.
+TEST_F(BundledDirsTest, ASymlinkFarmIsStillBundled)
+{
+    TmpDir store;
+    install(store.path, "capability_module");
+    install(store.path, "modules_state");
+    std::error_code ec;
+    fs::create_directories(bundled.path / "capability_module");
+    for (const auto& entry : fs::directory_iterator(store.path / "capability_module"))
+        fs::create_symlink(entry.path(), bundled.path / "capability_module" / entry.path().filename(),
+                           ec);
+    fs::create_directory_symlink(store.path / "modules_state", bundled.path / "modules_state", ec);
+    if (ec) GTEST_SKIP() << "no symlinks here: " << ec.message();
+    ASSERT_EQ(setBundled({bundled.str()}), 0);
+    logos_core_refresh_modules();
+    for (const char* name : {"capability_module", "modules_state"}) {
+        ASSERT_TRUE(registry().isKnown(name)) << name;
+        EXPECT_TRUE(registry().isBundled(name)) << name;
+    }
+}
+
 // An ordinary module keeps the old rule: the last directory scanned wins.
 TEST_F(BundledDirsTest, AnOrdinaryUserCopyStillWins)
 {
