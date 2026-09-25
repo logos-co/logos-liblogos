@@ -249,6 +249,21 @@ TEST_F(InprocBundledTest, TheRuntimeRunsItsModulesInProcessBehindCoreService)
     ASSERT_NE(shell, nullptr);
     EXPECT_EQ(logos_core_take_shell_binding(), nullptr);
     EXPECT_STREQ(logos_consumer_name(shell), "basecamp");
+    auto shellCall = [&](const char* method, const json& args) {
+        char* out = nullptr;
+        char* err = nullptr;
+        const int status = logos_consumer_call(shell, "core_service", method, args.dump().c_str(),
+                                               5000, &out, &err);
+        const json value = status == 0 && out ? json::parse(out, nullptr, false) : json(nullptr);
+        logos_consumer_string_free(out);
+        logos_consumer_string_free(err);
+        return value.is_object() ? value : json::object();
+    };
+    // A load names how much of the graph comes too; one already loaded is ok.
+    EXPECT_EQ(shellCall("loadModule", json::array({"modules_state", "module_only"}))
+                  .value("status", std::string{}), "ok");
+    EXPECT_EQ(shellCall("loadModule", json::array({"modules_state", "everything"}))
+                  .value("code", std::string{}), "INVALID_ARGS");
     Events events;
     logos_consumer_subscription* watch =
         logos_consumer_subscribe(shell, "core_service", "moduleStateChanged", &onEvent, &events);
