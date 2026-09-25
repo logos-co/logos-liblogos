@@ -165,12 +165,18 @@ int main(int argc, char** argv)
         if (!first.empty() && first.back() == '\r') first.pop_back();
     }
     if (first == "die") return 3;
+    // A host that exits after reporting takes its token first, as the real one
+    // does: exiting before the loader writes it fails the load another way.
     if (first == "report-fail") {
+        std::string token;
+        std::getline(std::cin, token);
         mark(path, "report");
         report("@logos-load-status failed undefined symbol: logos_module_install");
         return 1;
     }
     if (first == "report-ok-then-die") {
+        std::string token;
+        std::getline(std::cin, token);
         mark(path, "report");
         report("@logos-load-status ok");
         return 0;
