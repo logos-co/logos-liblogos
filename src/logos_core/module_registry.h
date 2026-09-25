@@ -59,6 +59,9 @@ struct ModuleInfo {
     // Found under a bundled directory: only then may it carry a reserved name,
     // host-service grants or an in-process placement.
     bool bundled = false;
+    // Part of the runtime itself (core_service): known and loaded for dependency
+    // checks, never listed as a module.
+    bool embedded = false;
     bool loaded = false;
     // Unix timestamp (seconds) of the most recent load, set by markLoaded and
     // cleared to 0 by markUnloaded. 0 ⟺ not currently loaded. Callers derive a
@@ -88,6 +91,9 @@ public:
     void setBundledModulesDirs(const std::vector<std::string>& dirs);
     std::vector<std::string> bundledModulesDirs() const;
     bool isBundled(const std::string& name) const;
+
+    void registerEmbedded(const std::string& name);
+    void forgetEmbedded(const std::string& name);
 
     void discoverInstalledModules();
     std::string processModule(const std::string& modulePath);

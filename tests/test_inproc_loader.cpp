@@ -236,10 +236,13 @@ TEST_F(InprocBundledTest, TheRuntimeRunsItsModulesInProcessBehindCoreService)
     ASSERT_TRUE(holder.has_value());
     EXPECT_EQ(json::parse(*holder), (json{{"kind", "module"}, {"name", "modules_state"}}));
 
-    // core_service is a module of its own; the runtime may call anything on it.
+    // core_service answers the runtime about modules, and is part of the runtime:
+    // known and loaded for dependency checks, never listed.
     const json listed = call("core_service", "listModules", json::array({"all"}));
     ASSERT_TRUE(listed.is_array()) << listed.dump();
-    EXPECT_NE(listed.dump().find("\"core_service\""), std::string::npos) << listed.dump();
+    EXPECT_NE(listed.dump().find("\"modules_state\""), std::string::npos) << listed.dump();
+    EXPECT_EQ(listed.dump().find("\"core_service\""), std::string::npos) << listed.dump();
+    EXPECT_TRUE(ModuleManager::registry().isLoaded("core_service"));
 
     // The shell: its binding, once, calling as "basecamp".
     logos_consumer* shell = logos_core_take_shell_binding();
