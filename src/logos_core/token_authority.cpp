@@ -1,4 +1,4 @@
-#include "capability_authority.h"
+#include "token_authority.h"
 
 #include <logos_capability_engine.h>
 #include <logos_protocol.h>
