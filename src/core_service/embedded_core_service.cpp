@@ -371,8 +371,15 @@ json getModuleStats()
     return stats.is_discarded() ? json::array() : stats;
 }
 
+// Package modules take settings from the runtime only, so an operator's package
+// commands reach them as this service, which admitted the operator.
+bool isPackageModule(const std::string& module)
+{
+    return module == "package_manager" || module == "package_downloader";
+}
+
 // An operator's call reaches the target as that operator, never as the runtime,
-// and never reaches the runtime's own modules.
+// and never reaches the token store or this service.
 json callModuleMethod(const Caller& caller, const std::string& module, const std::string& method,
                       const json& args)
 {
@@ -380,15 +387,20 @@ json callModuleMethod(const Caller& caller, const std::string& module, const std
         return error("MODULE_NOT_LOADED", "Module '" + module + "' is not loaded. Load it with: "
                                           "logosctl module load " + module);
     std::string origin = "core";
-    if (caller.kind == "operator") {
-        if (bootstrap::isReservedName(module))
+    if (caller.kind == "operator" && authority::attached()) {
+        if (module == "capability_module" || module == kName)
             return error("FORBIDDEN", "Module '" + module + "' belongs to the runtime.");
-        const std::string pair = authority::grantOperatorPair(caller.name, module);
-        if (pair.empty())
-            return error("FORBIDDEN", "No token for operator '" + caller.name + "' at '" + module + "'.");
-        origin = "@op:" + caller.name;
-        lp_token_isolate_identity(origin.c_str());
-        lp_token_save_for(origin.c_str(), module.c_str(), pair.c_str());
+        if (isPackageModule(module)) {
+            origin = kName;
+        } else {
+            const std::string pair = authority::grantOperatorPair(caller.name, module);
+            if (pair.empty())
+                return error("FORBIDDEN",
+                             "No token for operator '" + caller.name + "' at '" + module + "'.");
+            origin = "@op:" + caller.name;
+            lp_token_isolate_identity(origin.c_str());
+            lp_token_save_for(origin.c_str(), module.c_str(), pair.c_str());
+        }
     }
     lp_client* client = clientFor(origin, module);
     if (!client)
@@ -665,6 +677,12 @@ bool start()
         if (admitted) authority::retire(kName);
         return false;
     }
+    // Its own calls (an operator's package commands) go as itself.
+    if (admitted
+        && (lp_token_isolate_identity(kName) != LP_OK
+            || lp_token_adopt_credential(kName, credential.c_str()) != LP_OK
+            || lp_token_save_for(kName, "capability_module", credential.c_str()) != LP_OK))
+        spdlog::warn("core_service: no identity of its own for its calls");
     lp_provider_set_max_concurrent_calls(provider, kConcurrentCalls);
     lp_provider_save_token(provider, "core", credential.c_str());
     lp_provider_set_caller_resolver(provider, &resolveCaller, nullptr);
