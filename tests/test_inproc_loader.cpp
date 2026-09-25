@@ -274,9 +274,11 @@ TEST_F(InprocBundledTest, TheRuntimeRunsItsModulesInProcessBehindCoreService)
     lp_client* alice = clientAs("alice-cli", {}, "core_service", "alice-token");
     ASSERT_NE(alice, nullptr);
     EXPECT_TRUE(callWith(alice, "listModules", json::array({"loaded"})).is_array());
-    EXPECT_TRUE(forbidden(callWith(alice, "callModuleMethod",
-                                   json::array({"capability_module", "requestModule",
-                                                json::array({"", "modules_state"})}))));
+    const json refused = callWith(alice, "callModuleMethod",
+                                  json::array({"capability_module", "requestModule",
+                                               json::array({"", "modules_state"})}));
+    EXPECT_EQ(refused.value("code", std::string{}), "METHOD_FAILED") << refused.dump();
+    EXPECT_EQ(refused.value("error", json::object()).value("code", std::string{}), "unauthorized");
     const json forwarded = callWith(alice, "callModuleMethod",
                                     json::array({"modules_state", "list_modules", json::array()}));
     EXPECT_EQ(forwarded.value("status", std::string{}), "ok") << forwarded.dump();
