@@ -325,16 +325,28 @@ bool ModuleRegistry::keepsLoadedRecordLocked(const ModuleInfo& info, const std::
     return true;
 }
 
+// Inside a bundled directory as scanned, or once resolved: a bundle may be a
+// symlink farm (a nix buildEnv) whose links point outside it.
 bool ModuleRegistry::isUnderBundledDirLocked(const std::string& path) const {
     namespace fs = std::filesystem;
+    auto contains = [](fs::path root, const fs::path& file) {
+        if (!root.has_filename()) root = root.parent_path();
+        const fs::path rel = file.lexically_relative(root);
+        return !rel.empty() && *rel.begin() != ".." && *rel.begin() != ".";
+    };
     std::error_code error;
-    const fs::path file = fs::weakly_canonical(fs::path(path), error);
-    if (error) return false;
+    const fs::path given = fs::absolute(fs::path(path), error);
+    // `..` would let the text say one directory and the filesystem another.
+    const bool lexical = !error && std::none_of(given.begin(), given.end(),
+                                                [](const fs::path& part) { return part == ".."; });
+    const fs::path resolved = fs::weakly_canonical(fs::path(path), error);
+    const bool canonical = !error;
     for (const std::string& dir : m_bundledDirs) {
-        const fs::path root = fs::weakly_canonical(fs::path(dir), error);
-        if (error) continue;
-        const auto rel = file.lexically_relative(root);
-        if (!rel.empty() && *rel.begin() != "..") return true;
+        std::error_code dirError;
+        const fs::path root = fs::absolute(fs::path(dir), dirError).lexically_normal();
+        if (lexical && !dirError && contains(root, given.lexically_normal())) return true;
+        const fs::path canonicalRoot = fs::weakly_canonical(fs::path(dir), dirError);
+        if (canonical && !dirError && contains(canonicalRoot, resolved)) return true;
     }
     return false;
 }
