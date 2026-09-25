@@ -239,10 +239,16 @@ void emit(const std::string& event, const json& data)
 
 // ── the methods (the shapes logosctl reads) ───────────────────────────────────
 
-json loadModule(const std::string& name)
+// `deps` is how much of the graph comes too; logosctl leaves it at everything installed.
+json loadModule(const std::string& name, const std::string& deps)
 {
+    LogosLoadDeps policy = LOGOS_LOAD_REQUIRED_AND_OPTIONAL;
+    if (deps == "module_only") policy = LOGOS_LOAD_MODULE_ONLY;
+    else if (deps == "required") policy = LOGOS_LOAD_REQUIRED_DEPS;
+    else if (deps != "required_and_optional")
+        return error("INVALID_ARGS", "deps is module_only, required or required_and_optional");
     const std::vector<std::string> before = loadedNames();
-    if (!logos_core_load_module(name.c_str(), LOGOS_LOAD_REQUIRED_AND_OPTIONAL)) {
+    if (!logos_core_load_module(name.c_str(), policy)) {
         json result = error("MODULE_LOAD_FAILED", "Failed to load module '" + name + "'.");
         result["known_modules"] = knownNames();
         return result;
@@ -486,7 +492,7 @@ json run(const std::string& method, const json& args, const Caller& caller)
         if (fallback) return fallback;
         throw std::invalid_argument("missing argument " + std::to_string(i + 1));
     };
-    if (method == "loadModule") return loadModule(text(0));
+    if (method == "loadModule") return loadModule(text(0), text(1, "required_and_optional"));
     if (method == "unloadModule")
         return unloadModule(text(0), args.size() >= 2 ? args[1].get<bool>() : true);
     if (method == "reloadModule") return reloadModule(text(0));
@@ -552,7 +558,7 @@ char* methods(void*)
         list.push_back({{"type", "method"}, {"name", name}, {"returnType", returns},
                         {"isInvokable", true}, {"parameters", parameters}});
     };
-    add("loadModule", {{"name", "string"}}, "StdLogosResult");
+    add("loadModule", {{"name", "string"}, {"deps", "string"}}, "StdLogosResult");
     add("unloadModule", {{"name", "string"}, {"withDependents", "bool"}}, "StdLogosResult");
     add("reloadModule", {{"name", "string"}}, "StdLogosResult");
     add("refreshModules", {}, "LogosMap");
