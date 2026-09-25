@@ -1,4 +1,5 @@
 #include "logos_core.h"
+#include "package_config.h"
 #include "logging/logos_log.h"
 #include "module_manager.h"
 #include "module_registry.h"
@@ -72,6 +73,21 @@ int logos_core_set_placement_policy(const char* policy_json) {
         logos::logger("core").error("logos_core_set_placement_policy: {}", error);
         return -1;
     }
+    return 0;
+}
+
+int logos_core_set_package_config(const char* config_json) {
+    if (ModuleManager::started()) {
+        logos::logger("core").error("logos_core_set_package_config: refused after logos_core_start()");
+        return -1;
+    }
+    std::vector<logos::package_config::Call> calls;
+    std::string error;
+    if (!logos::package_config::parse(config_json ? config_json : "", calls, error)) {
+        logos::logger("core").error("logos_core_set_package_config: {}", error);
+        return -1;
+    }
+    logos::package_config::set(std::move(calls));
     return 0;
 }
 

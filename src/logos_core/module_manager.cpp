@@ -1,6 +1,7 @@
 #include "module_manager.h"
 #include "bootstrap_policy.h"
 #include "token_authority.h"
+#include "package_config.h"
 #include "core_service/embedded_core_service.h"
 #include "core_service/shell_binding.h"
 #include <logos_capability_engine.h>
@@ -694,6 +695,34 @@ namespace {
         logos::authority::attach(engine(), inproc->providerOf("capability_module"));
     }
 
+    // The embedder's package config, before package_manager counts as loaded:
+    // its setters answer the runtime only. A void setter's success is the call's
+    // status, not its value.
+    bool applyPackageConfig(const std::string& token, std::string& error) {
+        const auto calls = logos::package_config::current();
+        if (calls.empty()) return true;
+        if (lp_token_save("package_manager", token.c_str()) != LP_OK) {
+            error = "could not keep package_manager's token";
+            return false;
+        }
+        ClientPtr client = moduleClient("package_manager");
+        if (!client) {
+            error = "could not reach package_manager";
+            return false;
+        }
+        return logos::package_config::apply(calls, [&](const std::string& method,
+                                                       const std::string& arg) {
+            char* result = nullptr;
+            char* failure = nullptr;
+            const int status = lp_invoke(client.get(), method.c_str(),
+                                         nlohmann::json::array({arg}).dump().c_str(),
+                                         20000, &result, &failure);
+            lp_string_free(result);
+            lp_string_free(failure);
+            return status == LP_OK;
+        }, error);
+    }
+
     // Ends an admission unless the load that made it commits.
     struct AdmissionGuard {
         std::string name;
@@ -1171,6 +1200,20 @@ namespace {
                          "treating it as loaded. Its module host predates the "
                          "load-status line, so a failed load here is only "
                          "detectable if the process dies.", name);
+        }
+
+        std::string configError;
+        if (name == "package_manager" && !applyPackageConfig(authToken, configError)) {
+            spdlog::error("Failed to load module {}: {}", name, configError);
+            invalidateClient(name);
+            markExitExpected(name);
+            loader->terminate(name);
+            consumeExpectedExit(name);
+            abandonLoadAttempt(name);
+            logos::ModuleStateObserver::instance().record(
+                name, logos::module_state::kLoading, logos::module_state::kError,
+                instanceId, pid, configError);
+            return false;
         }
 
         // Settles a death that arrived while we waited together with the
@@ -1678,6 +1721,7 @@ namespace ModuleManager {
         logos::shell_binding::shutdown();
         logos::core_service::stop();
         logos::core_service::resetConfiguration();
+        logos::package_config::reset();
         // BEFORE the lock guard, so it is destroyed after it. See rule 1.
         logos::ScopedModuleStateFlush stateFlusher;
         ScopedLoadEntry entry;
