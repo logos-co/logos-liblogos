@@ -69,11 +69,11 @@
         "logos-module-builder": "logos-module-builder"
       },
       "locked": {
-        "lastModified": 1790330847,
-        "narHash": "sha256-eDzRYTtsQcqinpfyCR1EO+SXtrxP7tiatwF/hP2ABOw=",
+        "lastModified": 1790332907,
+        "narHash": "sha256-x2RbS6PSWxqRHfTy5aQKuJ85Qvugja1+gylMp6Hbbo8=",
         "owner": "logos-co",
         "repo": "logos-capability-module",
-        "rev": "34ff521f60c52bd54c09763e34ef4efab55cf0fe",
+        "rev": "f2c16763c10be6b02d903dae422ab6b6e9baaded",
         "type": "github"
       },
       "original": {
