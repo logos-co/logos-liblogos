@@ -4,6 +4,7 @@
 #include "dependency_resolver.h"
 #include "dependency_gate.h"
 #include "module_loader_registry.h"
+#include "inproc_module_loader.h"
 #include <string>
 #include <vector>
 #include <unordered_map>
@@ -33,6 +34,11 @@ namespace ModuleManager {
     // Protected setters answer only before start; clear() reopens them.
     void markStarted();
     bool started();
+
+    // Where modules run (protected input, before start). An empty policy is the
+    // default: the table's placements, subprocess for everything else.
+    bool setPlacementPolicy(const std::string& json, std::string& error);
+    LogosCore::PlacementPolicy placementPolicy();
     void setPersistenceBasePath(const char* path);
 
     // Register a per-module transport set (serialized JSON, see

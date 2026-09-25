@@ -177,6 +177,12 @@ namespace {
         return value;
     }
 
+    // Guarded by configMutex().
+    LogosCore::PlacementPolicy& placementPolicyValue() {
+        static LogosCore::PlacementPolicy policy;
+        return policy;
+    }
+
     // ── Orderly teardown vs. death ───────────────────────────────────────────
     //
     // onTerminated fires for BOTH an unload we asked for and a module that
@@ -331,6 +337,8 @@ namespace {
         static LogosCore::ModuleLoaderRegistry reg;
         static std::once_flag initFlag;
         std::call_once(initFlag, []() {
+            // First, so a module placed in-process never reaches a subprocess.
+            reg.registerLoader(std::make_shared<LogosCore::InprocModuleLoader>());
             auto container = LogosCore::makeContainer();
             auto loader    = LogosCore::makeFormatLoader();
             if (container && loader)
@@ -1261,6 +1269,20 @@ namespace ModuleManager {
         startedFlag().store(true);
     }
 
+    bool setPlacementPolicy(const std::string& json, std::string& error) {
+        LogosCore::PlacementPolicy policy;
+        if (!json.empty() && !LogosCore::parsePlacementPolicy(json, policy, error))
+            return false;
+        std::unique_lock<std::shared_mutex> g(configMutex());
+        placementPolicyValue() = std::move(policy);
+        return true;
+    }
+
+    LogosCore::PlacementPolicy placementPolicy() {
+        std::shared_lock<std::shared_mutex> g(configMutex());
+        return placementPolicyValue();
+    }
+
     bool started() {
         return startedFlag().load();
     }
@@ -1629,6 +1651,10 @@ namespace ModuleManager {
         clearExpectedExits();
         registryInstance().clear();
         startedFlag().store(false);
+        {
+            std::unique_lock<std::shared_mutex> g(configMutex());
+            placementPolicyValue() = {};
+        }
         {
             std::lock_guard<std::mutex> lock(clientMutex());
             clients().clear();

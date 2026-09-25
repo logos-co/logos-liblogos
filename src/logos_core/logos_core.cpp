@@ -58,6 +58,19 @@ int logos_core_set_bundled_modules_dirs(const char* const* dirs) {
     return 0;
 }
 
+int logos_core_set_placement_policy(const char* policy_json) {
+    if (ModuleManager::started()) {
+        logos::logger("core").error("logos_core_set_placement_policy: refused after logos_core_start()");
+        return -1;
+    }
+    std::string error;
+    if (!ModuleManager::setPlacementPolicy(policy_json ? policy_json : "", error)) {
+        logos::logger("core").error("logos_core_set_placement_policy: {}", error);
+        return -1;
+    }
+    return 0;
+}
+
 void logos_core_start() {
     ModuleManager::markStarted();
     logos::initLogging();
