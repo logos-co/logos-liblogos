@@ -41,6 +41,15 @@ LOGOS_CORE_EXPORT void logos_core_init(int argc, char *argv[]);
 // Duplicate paths are silently ignored.
 LOGOS_CORE_EXPORT void logos_core_add_modules_dir(const char* modules_dir);
 
+// The directories the embedder ships its own modules in: protected input, taken
+// before logos_core_start() only. They are scanned too. Once set, a reserved
+// module name (core_service, capability_module, modules_state, package_manager,
+// package_downloader, logos_*, the first-party shell names; compared without
+// case) resolves only from them, and only their modules receive host services
+// or run in-process. `dirs` is NULL-terminated.
+// Returns 0, or -1 after logos_core_start() or for a NULL `dirs`.
+LOGOS_CORE_EXPORT int logos_core_set_bundled_modules_dirs(const char* const* dirs);
+
 // Start the logos core functionality
 LOGOS_CORE_EXPORT void logos_core_start();
 
