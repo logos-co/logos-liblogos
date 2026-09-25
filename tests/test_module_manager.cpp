@@ -1833,6 +1833,20 @@ TEST_F(DerivedRestrictionsManagerTest, RequiredAndOptionalDependentDedupes) {
     EXPECT_EQ(occurrences, 1);
 }
 
+// The shell's routes are pinned under enforce, derived or explicit: it replaces
+// the host, which reached every module.
+TEST_F(DerivedRestrictionsManagerTest, TheShellReachesEveryModule) {
+    ASSERT_EQ(logos_core_set_shell_identity("basecamp"), 0);
+    reg("b", {});
+    logos_core_mark_module_loaded("b");
+    ModuleManager::setAccessPolicy(enforceEnvelope());
+    EXPECT_EQ(derived("b"), (std::set<std::string>{"basecamp", "core", "core_service"}));
+
+    ModuleManager::setAccessPolicy("{\"version\":1,\"mode\":\"enforce\",\"restrictions\":{"
+                                   "\"b\":{\"allowedCallers\":[\"a\"]}}}");
+    EXPECT_EQ(derived("b"), (std::set<std::string>{"a", "basecamp"}));
+}
+
 TEST_F(DerivedRestrictionsManagerTest, LoadedDependentPlusTrusted) {
     // a depends on b; both loaded. b's allowed callers = {a} ∪ trusted.
     reg("b", {});
