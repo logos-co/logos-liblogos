@@ -14,6 +14,10 @@ logos-liblogos/
 │   └── project.md                       # This document
 ├── src/
 │   ├── CMakeLists.txt                   # Source build configuration
+│   ├── runtime_host/                    # logos_runtime, and the app side that spawns it
+│   │   ├── runtime_host.h/cpp           # The runtime in a process of its own (the child)
+│   │   ├── runtime_spawn.cpp            # logos_runtime_spawn and friends (the app)
+│   │   └── main.cpp                     # bin/logos_runtime
 │   └── logos_core/                      # Core library implementation
 │       ├── logos_core.h                 # C API header (public)
 │       ├── logos_core.cpp               # C API implementation
@@ -41,7 +45,7 @@ logos-liblogos/
 ├── nix/                                 # Nix build modules
 │   ├── default.nix                      # Common configuration (deps, flags, metadata)
 │   ├── build.nix                        # Shared build derivation
-│   ├── bin.nix                          # Re-exports logos_host_qt (from logos-module-loader-qt) + runtime libs
+│   ├── bin.nix                          # logos_runtime, the hosts from logos-module-loader-qt, runtime libs
 │   ├── lib.nix                          # Library extraction (liblogos_core)
 │   ├── include.nix                      # Header installation
 │   ├── modules.nix                      # Bundled built-in modules
@@ -382,6 +386,16 @@ The public C API (`logos_core.h`) is the only exported interface. All functions 
 | `logos_core_set_shell_identity(name)`, `logos_core_take_shell_binding()`, `logos_consumer_*` | The embedder's identity and its binding: every call about modules goes through core_service as the shell |
 | `logos_core_process_module(path) → char*` | Process module file, return name (free with `delete[]`) |
 
+**The runtime in a process of its own** (instead of `logos_core_start()`):
+
+| Function | Description |
+|----------|-------------|
+| `logos_runtime_spawn(json, &error) → logos_runtime*` | Start `logos_runtime` with the configuration the setters take and wait until it is ready; the hooks set before are served over its private pipe |
+| `logos_runtime_binding(rt)` | The shell's binding into it, over the local socket |
+| `logos_runtime_process_module(rt, path) → char*` | `logos_core_process_module`, run there (free with `logos_consumer_string_free`) |
+| `logos_runtime_on_exit(rt, cb, data)` | Hear of an exit nobody asked for |
+| `logos_runtime_stop(rt)` | Unload its modules in order, end it, free the handle |
+
 Loading, unloading and every query about modules are core_service methods (`loadModule`, `unloadModule`, `refreshModules`, `listModules`, `getModulesInfo`, `getModuleStats`, `getModuleDependencies`, `getModuleDependents`, `getModuleOptionalDependencies`, `getOptionalLoadReport`, ...), called over the shell binding; see [spec.md](spec.md#coreservice).
 
 ### Thread Safety
@@ -398,6 +412,7 @@ Loading, unloading and every query about modules are core_service methods (`load
 | Artifact | Description |
 |----------|-------------|
 | `liblogos_core.{so,dylib,dll}` | Core shared library (C API) |
+| `logos_runtime` | The runtime in a process of its own, which an app spawns (`logos_runtime_spawn`) |
 | `logos_host_qt` | Qt module subprocess host binary (re-exported from `logos-module-loader-qt`) |
 | `logos_host` | Compatibility symlink → `logos_host_qt` |
 | `logos_core_tests` | Google Test suite |
