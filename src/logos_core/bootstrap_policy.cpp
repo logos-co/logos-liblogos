@@ -22,8 +22,9 @@ const std::vector<Row>& rows()
         {"capability_module", {"token_delivery"}, true, false,
          Placement::InProcess, true, 4},
         {"modules_state", {}, false, false, Placement::InProcess, false, 2},
-        {"package_manager", {}, false, false, Placement::InProcess, false, 1},
-        {"package_downloader", {}, false, false, Placement::InProcess, false, 1},
+        // They download and unpack packages: never in the runtime's process.
+        {"package_manager", {}, false, false, Placement::Subprocess, true, 1},
+        {"package_downloader", {}, false, false, Placement::Subprocess, true, 1},
     };
     return table;
 }

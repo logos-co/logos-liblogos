@@ -91,7 +91,6 @@ TEST(Placement, TheTablePlacesTheRuntimesModulesAndPinsCapability)
 {
     const PlacementPolicy none;
     EXPECT_TRUE(decidePlacement("modules_state", kEligible, "native-cdylib", true, none).inProcess);
-    EXPECT_TRUE(decidePlacement("package_manager", kEligible, "native-cdylib", true, none).inProcess);
     const PlacementPolicy out =
         policy(R"({"modules":{"modules_state":"subprocess","capability_module":"subprocess"}})");
     EXPECT_FALSE(decidePlacement("modules_state", kEligible, "native-cdylib", true, out).inProcess);
@@ -99,6 +98,22 @@ TEST(Placement, TheTablePlacesTheRuntimesModulesAndPinsCapability)
         << "no policy moves capability_module out";
     EXPECT_FALSE(decidePlacement("capability_module", kEligible, "native-cdylib", false, out).inProcess)
         << "but only a bundled one runs here";
+}
+
+TEST(Placement, ThePackageModulesNeverRunInTheRuntimesProcess)
+{
+    const PlacementPolicy in = policy(
+        R"({"default":"inproc","modules":{"package_manager":"inproc","package_downloader":"inproc"}})");
+    for (const char* name : {"package_manager", "package_downloader"}) {
+        EXPECT_FALSE(decidePlacement(name, kEligible, "native-cdylib", true, {}).inProcess) << name;
+        const auto moved = decidePlacement(name, kEligible, "native-cdylib", true, in);
+        EXPECT_FALSE(moved.inProcess) << name << ": no policy moves it in";
+        EXPECT_FALSE(moved.refused) << name;
+        const auto single = decidePlacement(name, kEligible, "native-cdylib", true,
+                                            policy(R"({"single_process":true})"));
+        EXPECT_FALSE(single.inProcess) << name;
+        EXPECT_TRUE(single.refused) << name << ": single_process cannot run it";
+    }
 }
 
 TEST(Placement, SingleProcessRefusesWhatCannotRunInProcess)

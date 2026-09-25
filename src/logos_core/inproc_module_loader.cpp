@@ -166,11 +166,13 @@ PlacementDecision decidePlacement(const std::string& name, const json& sidecar,
     using logos::bootstrap::Placement;
     const logos::bootstrap::Row* row = logos::bootstrap::rowFor(name);
     bool wanted = policy.defaultInProcess;
-    if (row && row->pinnedInProcess) wanted = true;
+    if (row && row->pinned) wanted = row->placement == Placement::InProcess;
     else if (auto it = policy.modules.find(name); it != policy.modules.end()) wanted = it->second;
     else if (policy.singleProcess) wanted = true;
     else if (row && row->placement != Placement::Default)
         wanted = row->placement == Placement::InProcess;
+    if (!wanted && row && row->pinned && policy.singleProcess)
+        return {false, true, "single_process, and " + name + " never runs in the runtime's process"};
     if (!wanted) return {};
 
     std::string why;
