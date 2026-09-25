@@ -62,18 +62,17 @@ sections:
       > `master`; the two overrides select this liblogos commit and its protocol.
     steps:
       - title: "Build the CLI with the liblogos override"
-        run: "nix build 'github:logos-co/logos-logoscore-cli/codex/qt-free-logoscore' --override-input logos-liblogos 'github:logos-co/logos-liblogos{release}' --override-input logos-protocol 'github:logos-co/logos-protocol/codex/qt-remote-plain' --out-link ./logos"
+        run: "nix build 'github:logos-co/logos-logoscore-cli/feat/drop-legacy-mode' --override-input logos-liblogos 'github:logos-co/logos-liblogos{release}' --override-input logos-protocol 'github:logos-co/logos-protocol/feat/drop-legacy-mode' --out-link ./logos"
         code_block: |
-          nix build 'github:logos-co/logos-logoscore-cli/codex/qt-free-logoscore' \
+          nix build 'github:logos-co/logos-logoscore-cli/feat/drop-legacy-mode' \
             --override-input logos-liblogos 'github:logos-co/logos-liblogos' \
-            --override-input logos-protocol 'github:logos-co/logos-protocol/codex/qt-remote-plain' \
+            --override-input logos-protocol 'github:logos-co/logos-protocol/feat/drop-legacy-mode' \
             --out-link ./logos
         check_file: "logos/bin/logoscore"
         post_text: |
           The build produces `logos/bin/logoscore` plus bundled runtime libraries
-          and a `logos/modules/` directory containing the built-in
-          `capability_module` (required for the auth handshake when loading
-          modules). Because `follows` propagates the override, the whole
+          and a `logos/modules/` directory: the daemon's bundled modules, with
+          `capability_module`, the token authority it runs in-process. Because `follows` propagates the override, the whole
           dependency closure — `logos_host`, `liblogos_core`, every module — is
           rebuilt against this liblogos.
 
@@ -114,16 +113,6 @@ sections:
         post_text: "The `.lgx` package is now under `./module-lgx/`:"
         extra_run:
           run: "ls module-lgx/*.lgx"
-
-      - title: "Seed the modules directory with the bundled capability module"
-        text: |
-          Modules are loaded through the host's capability layer, so the modules
-          directory also needs the `capability_module` that ships with
-          `logoscore`. Copy it across first.
-        run: |
-          mkdir -p modules
-          cp -RL ./logos/modules/. ./modules/
-        check_file: "modules/capability_module/manifest.json"
 
       - title: "Install the .lgx with lgpm"
         text: |
