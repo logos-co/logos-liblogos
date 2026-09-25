@@ -279,6 +279,8 @@ TEST_F(InprocBundledTest, TheRuntimeRunsItsModulesInProcessBehindCoreService)
                                                json::array({"", "modules_state"})}));
     EXPECT_EQ(refused.value("code", std::string{}), "METHOD_FAILED") << refused.dump();
     EXPECT_EQ(refused.value("error", json::object()).value("code", std::string{}), "unauthorized");
+    EXPECT_EQ(callWith(alice, "watchModuleEvents", json::array({"capability_module", ""})),
+              json(false));
     const json forwarded = callWith(alice, "callModuleMethod",
                                     json::array({"modules_state", "list_modules", json::array()}));
     EXPECT_EQ(forwarded.value("status", std::string{}), "ok") << forwarded.dump();
