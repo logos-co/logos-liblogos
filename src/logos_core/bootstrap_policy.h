@@ -18,7 +18,7 @@ struct Row {
     bool exemptTarget = false;             // no access policy restricts it
     bool trustedCaller = false;            // every target admits it
     Placement placement = Placement::Default;
-    bool pinnedInProcess = false;          // no placement policy moves it out
+    bool pinned = false;                   // no placement policy moves it
     int teardownRank = 0;                  // higher goes down later
 };
 
