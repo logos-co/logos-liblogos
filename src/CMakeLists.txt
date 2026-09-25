@@ -239,6 +239,10 @@ if(NOT TARGET LogosFormatLoaderImpl::native_module_host)
                         "logos-module-loader-qt with logos_native_module_host is required")
 endif()
 target_link_libraries(logos_core PRIVATE LogosFormatLoaderImpl::native_module_host)
+# Its lp_* calls resolve against that shared runtime. A PE import library links
+# like an archive, in order, so the runtime has to follow the host on the line.
+set_property(TARGET LogosFormatLoaderImpl::native_module_host APPEND PROPERTY
+             INTERFACE_LINK_LIBRARIES logos-protocol::logos_protocol_plain_shared)
 
 # Include directories for the library
 target_include_directories(logos_core PRIVATE
