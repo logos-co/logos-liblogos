@@ -10,11 +10,8 @@
 
 #include <logos_protocol.h>
 #include <nlohmann/json.hpp>
+#include <process_stats/process_stats.h>
 #include <spdlog/spdlog.h>
-
-#include <boost/uuid/uuid.hpp>
-#include <boost/uuid/uuid_generators.hpp>
-#include <boost/uuid/uuid_io.hpp>
 
 #include <algorithm>
 #include <chrono>
@@ -112,6 +109,9 @@ std::optional<Scope> scopeOf(const std::string& method)
     static const std::map<std::string, Scope> scopes = {
         {"listModules", Scope::Read},      {"getStatus", Scope::Read},
         {"getModuleInfo", Scope::Read},    {"getModuleStats", Scope::Read},
+        {"getModulesInfo", Scope::Read},   {"getModuleDependencies", Scope::Read},
+        {"getModuleDependents", Scope::Read}, {"getModuleOptionalDependencies", Scope::Read},
+        {"getOptionalLoadReport", Scope::Read},
         {"loadModule", Scope::Control},    {"unloadModule", Scope::Control},
         {"reloadModule", Scope::Control},  {"refreshModules", Scope::Control},
         {"admitConsumer", Scope::Shell},   {"retireConsumer", Scope::Shell},
@@ -149,22 +149,10 @@ json error(const std::string& code, const std::string& message)
     return {{"status", "error"}, {"code", code}, {"message", message}};
 }
 
-// ── the runtime, through its own C API ───────────────────────────────────────
+// ── the runtime, straight from its module manager ────────────────────────────
 
-std::vector<std::string> names(char** list)
-{
-    std::vector<std::string> result;
-    if (!list) return result;
-    for (int i = 0; list[i]; ++i) {
-        result.emplace_back(list[i]);
-        delete[] list[i];
-    }
-    delete[] list;
-    return result;
-}
-
-std::vector<std::string> loadedNames() { return names(logos_core_get_loaded_modules()); }
-std::vector<std::string> knownNames() { return names(logos_core_get_known_modules()); }
+std::vector<std::string> loadedNames() { return ModuleManager::registry().loadedModuleNames(); }
+std::vector<std::string> knownNames() { return ModuleManager::registry().knownModuleNames(); }
 
 bool contains(const std::vector<std::string>& list, const std::string& name)
 {
@@ -173,9 +161,7 @@ bool contains(const std::vector<std::string>& list, const std::string& name)
 
 json modulesInfo()
 {
-    char* text = logos_core_get_modules_info();
-    json info = text ? json::parse(text, nullptr, false) : json::array();
-    delete[] text;
+    const json info = json::parse(ModuleManager::getModulesInfoJson(), nullptr, false);
     return info.is_array() ? info : json::array();
 }
 
@@ -257,16 +243,28 @@ void emit(const std::string& event, const json& data)
 
 // ── the methods (the shapes logosctl reads) ───────────────────────────────────
 
-// `deps` is how much of the graph comes too; logosctl leaves it at everything installed.
+// Ensure-loaded: a module already up answers ok. `deps` is how much of the graph
+// comes too; logosctl leaves it at everything installed.
+bool load(const std::string& name, const std::string& deps)
+{
+    if (deps == "module_only") return ModuleManager::loadModule(name.c_str());
+    return ModuleManager::loadModuleWithDependencies(
+        name.c_str(), deps == "required" ? DependencyResolver::OptionalLoad::OrderOnly
+                                         : DependencyResolver::OptionalLoad::BestEffort);
+}
+
+// The token authority stops only with the runtime.
+json refuseAuthority(const std::string& name)
+{
+    return error("FORBIDDEN", "'" + name + "' is the token authority; it stops only with the runtime.");
+}
+
 json loadModule(const std::string& name, const std::string& deps)
 {
-    LogosLoadDeps policy = LOGOS_LOAD_REQUIRED_AND_OPTIONAL;
-    if (deps == "module_only") policy = LOGOS_LOAD_MODULE_ONLY;
-    else if (deps == "required") policy = LOGOS_LOAD_REQUIRED_DEPS;
-    else if (deps != "required_and_optional")
+    if (deps != "module_only" && deps != "required" && deps != "required_and_optional")
         return error("INVALID_ARGS", "deps is module_only, required or required_and_optional");
     const std::vector<std::string> before = loadedNames();
-    if (!logos_core_load_module(name.c_str(), policy)) {
+    if (!load(name, deps)) {
         json result = error("MODULE_LOAD_FAILED", "Failed to load module '" + name + "'.");
         result["known_modules"] = knownNames();
         return result;
@@ -280,18 +278,17 @@ json loadModule(const std::string& name, const std::string& deps)
         if (entry.value("name", std::string{}) == name) version = versionOf(entry);
     json result = {{"status", "ok"}, {"module", name}, {"version", version},
                    {"dependencies_loaded", dependencies}};
-    if (char* report = logos_core_optional_load_report(name.c_str())) {
-        const json skipped = json::parse(report, nullptr, false);
-        delete[] report;
-        if (skipped.is_array() && !skipped.empty()) result["optional_skipped"] = skipped;
-    }
+    const json skipped = json::parse(ModuleManager::optionalLoadReportJson(name), nullptr, false);
+    if (skipped.is_array() && !skipped.empty()) result["optional_skipped"] = skipped;
     return result;
 }
 
 json unloadModule(const std::string& name, bool withDependents)
 {
+    if (name == "capability_module") return refuseAuthority(name);
     const std::vector<std::string> before = loadedNames();
-    logos_core_unload_module(name.c_str(), withDependents);
+    if (withDependents) ModuleManager::unloadModuleWithDependents(name.c_str());
+    else ModuleManager::unloadModule(name.c_str());
     const std::vector<std::string> after = loadedNames();
     if (contains(after, name))
         return error("MODULE_NOT_LOADED", "Module '" + name + "' is not loaded.");
@@ -303,14 +300,15 @@ json unloadModule(const std::string& name, bool withDependents)
 
 json reloadModule(const std::string& name)
 {
+    if (name == "capability_module") return refuseAuthority(name);
     const bool wasLoaded = contains(loadedNames(), name);
     json result = {{"action", "reload"}, {"module", name},
                    {"previous_status", wasLoaded ? "loaded" : "not_loaded"}};
-    if (wasLoaded) logos_core_unload_module(name.c_str(), false);
-    if (!logos_core_load_module(name.c_str(), LOGOS_LOAD_REQUIRED_AND_OPTIONAL)) {
+    if (wasLoaded) ModuleManager::unloadModule(name.c_str());
+    if (!load(name, "required_and_optional")) {
         result["status"] = "error";
         if (wasLoaded) {
-            const bool restored = logos_core_load_module(name.c_str(), LOGOS_LOAD_REQUIRED_AND_OPTIONAL);
+            const bool restored = load(name, "required_and_optional");
             result["error"] = restored ? "reload failed; previous instance restored"
                                        : "reload failed; module is now unloaded";
             result["restored"] = restored;
@@ -327,7 +325,7 @@ json reloadModule(const std::string& name)
 
 json refreshModules()
 {
-    logos_core_refresh_modules();
+    ModuleManager::discoverInstalledModules();
     return {{"status", "ok"}, {"known_modules", knownNames()}};
 }
 
@@ -390,10 +388,32 @@ json getModuleInfo(const std::string& name)
 
 json getModuleStats()
 {
-    char* text = logos_core_get_module_stats();
+    char* text = ProcessStats::getModuleStats(ModuleManager::getModuleProcessIds());
     json stats = text ? json::parse(text, nullptr, false) : json::array();
     delete[] text;
     return stats.is_discarded() ? json::array() : stats;
+}
+
+// The graph and the metadata, as the C API answered them before it moved here.
+json getModuleDependencies(const std::string& name, bool recursive)
+{
+    return ModuleManager::getDependencies(name, recursive);
+}
+
+json getModuleDependents(const std::string& name, bool recursive)
+{
+    return ModuleManager::getDependents(name, recursive);
+}
+
+json getModuleOptionalDependencies(const std::string& name)
+{
+    return ModuleManager::getOptionalDependencies(name);
+}
+
+json getOptionalLoadReport(const std::string& name)
+{
+    const json report = json::parse(ModuleManager::optionalLoadReportJson(name), nullptr, false);
+    return report.is_array() ? report : json::array();
 }
 
 // Package modules take settings from the runtime only, so an operator's package
@@ -424,8 +444,11 @@ json callModuleMethod(const Caller& caller, const std::string& module, const std
                                         "an operator cannot call " + module + " through core_service",
                                         kName},
                             {});
+    // Only the runtime itself calls as the runtime; an operator goes as itself.
     std::string origin = "core";
-    if (caller.kind == "operator" && authority::attached()) {
+    if (caller.kind == "operator") {
+        if (!authority::attached())
+            return error("UNAVAILABLE", "no token authority is running");
         if (isPackageModule(module)) {
             origin = kName;
         } else {
@@ -568,6 +591,12 @@ json run(const std::string& method, const json& args, const Caller& caller)
     if (method == "getStatus") return getStatus();
     if (method == "getModuleInfo") return getModuleInfo(text(0));
     if (method == "getModuleStats") return getModuleStats();
+    auto flag = [&](std::size_t i) { return i < args.size() && args[i].get<bool>(); };
+    if (method == "getModulesInfo") return modulesInfo();
+    if (method == "getModuleDependencies") return getModuleDependencies(text(0), flag(1));
+    if (method == "getModuleDependents") return getModuleDependents(text(0), flag(1));
+    if (method == "getModuleOptionalDependencies") return getModuleOptionalDependencies(text(0));
+    if (method == "getOptionalLoadReport") return getOptionalLoadReport(text(0));
     if (method == "callModuleMethod")
         return callModuleMethod(caller, text(0), text(1),
                                 args.size() >= 3 && args[2].is_array() ? args[2] : json::array());
@@ -633,6 +662,11 @@ char* methods(void*)
     add("getStatus", {}, "LogosMap");
     add("getModuleInfo", {{"name", "string"}}, "LogosMap");
     add("getModuleStats", {}, "LogosList");
+    add("getModulesInfo", {}, "LogosList");
+    add("getModuleDependencies", {{"name", "string"}, {"recursive", "bool"}}, "LogosList");
+    add("getModuleDependents", {{"name", "string"}, {"recursive", "bool"}}, "LogosList");
+    add("getModuleOptionalDependencies", {{"name", "string"}}, "LogosList");
+    add("getOptionalLoadReport", {{"name", "string"}}, "LogosList");
     add("callModuleMethod", {{"module", "string"}, {"method", "string"}, {"args", "LogosList"}},
         "StdLogosResult");
     add("watchModuleEvents", {{"module", "string"}, {"eventName", "string"}}, "bool");
@@ -754,10 +788,11 @@ bool start()
         std::lock_guard<std::mutex> lock(s.mutex);
         if (s.provider) return true;
     }
-    const bool admitted = authority::attached();
-    const std::string credential = admitted
-        ? authority::admit(kName, "module")
-        : boost::uuids::to_string(boost::uuids::random_generator()());
+    if (!authority::attached()) {
+        spdlog::error("core_service: no token authority is running, so it cannot be admitted");
+        return false;
+    }
+    const std::string credential = authority::admit(kName, "module");
     if (credential.empty()) {
         spdlog::error("core_service: capability_module refused to admit it");
         return false;
@@ -773,14 +808,13 @@ bool start()
     lp_provider* provider = lp_provider_create(kName, transports.dump().c_str());
     if (!provider) {
         spdlog::error("core_service: its provider could not be created");
-        if (admitted) authority::retire(kName);
+        authority::retire(kName);
         return false;
     }
     // Its own calls (an operator's package commands) go as itself.
-    if (admitted
-        && (lp_token_isolate_identity(kName) != LP_OK
-            || lp_token_adopt_credential(kName, credential.c_str()) != LP_OK
-            || lp_token_save_for(kName, "capability_module", credential.c_str()) != LP_OK))
+    if (lp_token_isolate_identity(kName) != LP_OK
+        || lp_token_adopt_credential(kName, credential.c_str()) != LP_OK
+        || lp_token_save_for(kName, "capability_module", credential.c_str()) != LP_OK)
         spdlog::warn("core_service: no identity of its own for its calls");
     lp_provider_set_max_concurrent_calls(provider, kConcurrentCalls);
     lp_provider_save_token(provider, "core", credential.c_str());
@@ -788,7 +822,7 @@ bool start()
     if (lp_provider_register(provider, &dispatch, &methods, nullptr, nullptr) != LP_OK) {
         spdlog::error("core_service: its provider could not be published");
         lp_provider_destroy(provider);
-        if (admitted) authority::retire(kName);
+        authority::retire(kName);
         return false;
     }
     {

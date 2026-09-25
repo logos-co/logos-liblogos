@@ -5,7 +5,6 @@
 #include "dependency_gate.h"
 #include "module_loader_registry.h"
 #include "inproc_module_loader.h"
-#include <functional>
 #include <string>
 #include <vector>
 #include <unordered_map>
@@ -68,10 +67,6 @@ namespace ModuleManager {
     // Allowed callers core would register for `target` (see the .cpp).
     // A pure read with no RPC — exposed so tests can observe the derivation.
     std::vector<std::string> computeDerivedAllowedCallers(const std::string& target);
-    // Tests only: receives capability_module's informModuleToken(name, token) and
-    // registerRestriction(target, callers...) in place of the RPCs. Empty = off.
-    void setCapabilityRpcSinkForTests(
-        std::function<void(const std::string& method, const std::vector<std::string>& args)> sink);
 
     void discoverInstalledModules();
 
@@ -102,9 +97,6 @@ namespace ModuleManager {
     void terminateAll();
     void clear();
 
-    // See logos_core_set_token_listener.
-    void setTokenListener(void (*listener)(const char*, const char*, void*), void* userData);
-
     char** getLoadedModulesCStr();
     char** getKnownModulesCStr();
 
@@ -117,7 +109,7 @@ namespace ModuleManager {
 
     std::vector<std::string> resolveDependencies(const std::vector<std::string>& requestedModules);
 
-    // The optional branches LOGOS_LOAD_REQUIRED_AND_OPTIONAL would decline for
+    // The optional branches a required_and_optional load would decline for
     // `moduleName`, as a JSON array. Empty array when it would decline none.
     std::string optionalLoadReportJson(const std::string& moduleName);
     char* optionalLoadReportCStr(const char* moduleName);

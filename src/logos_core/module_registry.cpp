@@ -436,7 +436,7 @@ void ModuleRegistry::discoverInstalledModules() {
     // entries for modules whose files disappeared (typical path: the user
     // uninstalls a module — its directory is removed, but without pruning
     // the stale ModuleInfo would stay in m_modules forever and
-    // knownModuleNames()/`logos_core_get_known_modules` would keep returning
+    // knownModuleNames() (core_service.listModules) would keep returning
     // it, so the UI would never see the uninstall land.
     std::unordered_set<std::string> scannedNames;
 

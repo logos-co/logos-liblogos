@@ -12,7 +12,10 @@
 
 #include "module_manager.h"
 #include "module_registry.h"
+#include "stand_in_authority.h"
 #include "subprocess_manager.h"
+
+#include "logos_protocol.h"
 
 #include <cstdint>
 #include <cstring>
@@ -166,11 +169,81 @@ inline char** logos_core_resolve_dependencies(const char** names, int count)
 inline void logos_core_terminate_all()
 {
     ModuleManager::terminateAll();
+    // The authority goes with the fleet; the stand-in admits what loads next.
+    stand_in::attach();
 }
 
 inline void logos_core_clear()
 {
     ModuleManager::clear();
+    // clear() detaches the authority: the next case is admitted by the stand-in.
+    stand_in::attach();
+}
+
+// ---------------------------------------------------------------------------
+// The lifecycle calls that left the C API for core_service, over the module
+// manager, so the load-path cases keep their call sites. Test-only.
+// ---------------------------------------------------------------------------
+
+typedef enum {
+    LOGOS_LOAD_MODULE_ONLY = 0,
+    LOGOS_LOAD_REQUIRED_DEPS = 1,
+    LOGOS_LOAD_REQUIRED_AND_OPTIONAL = 2,
+} LogosLoadDeps;
+
+inline int logos_core_load_module(const char* name, LogosLoadDeps deps)
+{
+    switch (deps) {
+    case LOGOS_LOAD_REQUIRED_AND_OPTIONAL:
+        return ModuleManager::loadModuleWithDependencies(
+                   name, DependencyResolver::OptionalLoad::BestEffort) ? 1 : 0;
+    case LOGOS_LOAD_REQUIRED_DEPS:
+        return ModuleManager::loadModuleWithDependencies(
+                   name, DependencyResolver::OptionalLoad::OrderOnly) ? 1 : 0;
+    case LOGOS_LOAD_MODULE_ONLY:
+        return ModuleManager::loadModule(name) ? 1 : 0;
+    }
+    return 0;
+}
+
+inline int logos_core_unload_module(const char* name, bool withDependents)
+{
+    return (withDependents ? ModuleManager::unloadModuleWithDependents(name)
+                           : ModuleManager::unloadModule(name)) ? 1 : 0;
+}
+
+inline char** logos_core_get_loaded_modules() { return ModuleManager::getLoadedModulesCStr(); }
+inline char** logos_core_get_known_modules() { return ModuleManager::getKnownModulesCStr(); }
+
+inline char** logos_core_get_module_dependencies(const char* name, bool recursive)
+{
+    return ModuleManager::getDependenciesCStr(name, recursive);
+}
+
+inline char** logos_core_get_module_dependents(const char* name, bool recursive)
+{
+    return ModuleManager::getDependentsCStr(name, recursive);
+}
+
+inline char* logos_core_get_modules_info() { return ModuleManager::getModulesInfoCStr(); }
+
+inline char* logos_core_optional_load_report(const char* name)
+{
+    return ModuleManager::optionalLoadReportCStr(name);
+}
+
+inline void logos_core_refresh_modules() { ModuleManager::discoverInstalledModules(); }
+
+// Core's own token for `key`, as its clients present it; free with delete[].
+inline char* logos_core_get_token(const char* key)
+{
+    char* stored = lp_token_get(key);
+    if (!stored) return nullptr;
+    const std::string token = stored;
+    lp_string_free(stored);
+    char* out = new char[token.size() + 1];
+    std::memcpy(out, token.c_str(), token.size() + 1);
+    return out;
 }
 
 // ---------------------------------------------------------------------------

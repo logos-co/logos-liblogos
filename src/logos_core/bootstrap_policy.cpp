@@ -19,7 +19,7 @@ const std::vector<Row>& rows()
     static const std::vector<Row> table = {
         {"core", {}, true, true, Placement::Default, false, 0},
         {"core_service", {}, true, true, Placement::Default, false, 3},
-        {"capability_module", {"token_registry", "token_delivery"}, true, false,
+        {"capability_module", {"token_delivery"}, true, false,
          Placement::InProcess, true, 4},
         {"modules_state", {}, false, false, Placement::InProcess, false, 2},
         {"package_manager", {}, false, false, Placement::InProcess, false, 1},

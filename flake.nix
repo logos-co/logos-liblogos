@@ -7,7 +7,7 @@
     logos-cpp-sdk.url = "github:logos-co/logos-cpp-sdk/feat/runtime-delegate-export";
     logos-cpp-sdk.inputs.logos-protocol.follows = "logos-protocol";
     # On protocol 0.13 (logos-protocol#97) and the branches stacked on it until they merge.
-    logos-protocol.url = "github:logos-co/logos-protocol/feat/plain-local-inproc";
+    logos-protocol.url = "github:logos-co/logos-protocol/feat/drop-legacy-mode";
     # ONE logos-protocol, and ONE logos-qt-host, in the closure. qt-host bakes
     # sizeof(LogosAPIClient) into its own `operator new` while logos-protocol
     # defines the constructor, so a second protocol here is an 8-byte heap
@@ -17,10 +17,10 @@
     logos-qt-sdk.url = "github:logos-co/logos-qt-sdk";
     logos-qt-sdk.inputs.logos-protocol.follows = "logos-protocol";
     logos-qt-sdk.inputs.logos-plugin-qt.follows = "logos-plugin-qt";
-    logos-plugin-qt.url = "github:logos-co/logos-plugin-qt/chore/relock-protocol-0.13";
+    logos-plugin-qt.url = "github:logos-co/logos-plugin-qt/feat/drop-legacy-mode";
     logos-plugin-qt.inputs.logos-protocol.follows = "logos-protocol";
-    logos-capability-module.url = "github:logos-co/logos-capability-module/feat/token-authority";
-    logos-modules-state-module.url = "github:logos-co/logos-modules-state-module/chore/qt-remote-plain";
+    logos-capability-module.url = "github:logos-co/logos-capability-module/feat/drop-legacy-mode";
+    logos-modules-state-module.url = "github:logos-co/logos-modules-state-module/feat/drop-legacy-mode";
     logos-module.url = "github:logos-co/logos-module";
     process-stats.url = "github:logos-co/process-stats";
     logos-container.url = "github:logos-co/logos-container";
@@ -30,7 +30,7 @@
     # revision of its own means two of every function-local static in there.
     # Only the protocol-carrying chain follows: the rest of its inputs are lock
     # size, not correctness, and deep follows have broken this repo before.
-    default-module-loader.url = "github:logos-co/logos-module-loader-qt/feat/native-module-host-lib";
+    default-module-loader.url = "github:logos-co/logos-module-loader-qt/feat/drop-legacy-mode";
     default-module-loader.inputs.logos-protocol.follows = "logos-protocol";
     default-module-loader.inputs.logos-plugin-qt.follows = "logos-plugin-qt";
     default-module-loader.inputs.logos-cpp-sdk.follows = "logos-cpp-sdk";
@@ -211,8 +211,9 @@
         in {
           # A Basecamp-shaped process: the installed package with the Qt host
           # runtime linked ahead of core. The second run is the negative
-          # control: with no token listener the Qt store must stay empty.
-          qt-embedder-tokens = let
+          # control: with the modules in a plain directory capability_module
+          # cannot run in-process, so there is no authority and no binding.
+          qt-embedder-admission = let
             liblogos = self.packages.${system}.default;
             embedder = import ./nix/qt-embedder-tests.nix {
               inherit pkgs liblogos;
@@ -220,17 +221,17 @@
               logosProtocolQt = logos-protocol.packages.${system}.default;
               logosQtHost = logos-plugin-qt.packages.${system}.logos-qt-host;
             };
-          in pkgs.runCommand "logos-liblogos-qt-embedder-tokens" {} ''
+          in pkgs.runCommand "logos-liblogos-qt-embedder-admission" {} ''
             export QT_QPA_PLATFORM=offscreen
             export HOME=$TMPDIR
             export TEST_MODULES_DIR=${liblogos}/modules
             ${embedder}/bin/qt_embedder_tests
-            if LOGOS_TEST_NO_TOKEN_LISTENER=1 ${embedder}/bin/qt_embedder_tests > control.log 2>&1; then
+            if LOGOS_TEST_MODULES_NOT_BUNDLED=1 ${embedder}/bin/qt_embedder_tests > control.log 2>&1; then
               cat control.log
-              echo "negative control: a consumer was admitted with no token listener" >&2
+              echo "negative control: a runtime without its authority gave a shell binding" >&2
               exit 1
             fi
-            if ! grep -q "never reached the Qt store" control.log; then
+            if ! grep -q "no shell binding" control.log; then
               cat control.log
               echo "negative control failed for another reason" >&2
               exit 1
