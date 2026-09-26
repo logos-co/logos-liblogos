@@ -44,8 +44,8 @@ LOGOS_CORE_EXPORT void logos_core_add_modules_dir(const char* modules_dir);
 // The directories the embedder ships its own modules in: protected input, taken
 // before logos_core_start() only. They are scanned too. Once set, a reserved
 // module name (core_service, capability_module, modules_state, package_manager,
-// package_downloader, logos_*, the first-party shell names; compared without
-// case) resolves only from them, and only their modules receive host services
+// package_downloader, peering_module, peering_identity, logos_*, the first-party
+// shell names; compared without case) resolves only from them, and only their modules receive host services
 // or run in-process. `dirs` is NULL-terminated.
 // Returns 0, or -1 after logos_core_start() or for a NULL `dirs`.
 LOGOS_CORE_EXPORT int logos_core_set_bundled_modules_dirs(const char* const* dirs);
@@ -82,6 +82,14 @@ LOGOS_CORE_EXPORT int logos_core_set_package_config(const char* config_json);
 
 // Further transports for it (tcp, tcp_ssl), as a JSON array.
 LOGOS_CORE_EXPORT int logos_core_set_core_service_transports(const char* transports_json);
+
+// Links with other runtimes: peering_module's configuration, a JSON object
+// (logos-peering's docs/api.md). With it, start loads peering_module and
+// peering_identity (both bundled), configures it with this runtime's shell as
+// the one that manages it, loads the imports as facades and gives exported
+// native modules a tls_tcp listener. NULL or "" clears it. Protected input,
+// before start only; returns 0, or -1 for a document that is not an object.
+LOGOS_CORE_EXPORT int logos_core_set_peering_config(const char* config_json);
 
 // Where core_service.shutdown goes; without one it is refused.
 typedef void (*LogosCoreShutdownHandler)(void* user_data);
@@ -148,7 +156,8 @@ LOGOS_CORE_EXPORT void logos_consumer_release(logos_consumer* consumer);
 //      "modules_dirs": [...], "bundled_modules_dirs": [...],
 //      "persistence_base_path": "...", "module_transports": {"<name>": [...]},
 //      "access_policy": {...}, "placement_policy": {...},
-//      "package_config": {...}, "core_service_transports": [...]}
+//      "package_config": {...}, "core_service_transports": [...],
+//      "peering_config": {...}}
 // The hooks set with logos_core_set_shutdown_handler, _operator_resolver and
 // _core_service_extension are served here: the runtime forwards each call over
 // its private pipe, and they run on this library's threads. A hook must not

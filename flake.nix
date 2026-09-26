@@ -4,10 +4,10 @@
   inputs = {
     logos-nix.url = "github:logos-co/logos-nix";
     nixpkgs.follows = "logos-nix/nixpkgs";
-    logos-cpp-sdk.url = "github:logos-co/logos-cpp-sdk/feat/runtime-delegate-export";
+    logos-cpp-sdk.url = "github:logos-co/logos-cpp-sdk/feat/peering";
     logos-cpp-sdk.inputs.logos-protocol.follows = "logos-protocol";
-    # On protocol 0.13 (logos-protocol#97) and the branches stacked on it until they merge.
-    logos-protocol.url = "github:logos-co/logos-protocol/feat/drop-legacy-mode";
+    # On protocol 0.14 (tls_tcp, logos-protocol#99) and the branches stacked on it until they merge.
+    logos-protocol.url = "github:logos-co/logos-protocol/feat/peering";
     # ONE logos-protocol, and ONE logos-qt-host, in the closure. qt-host bakes
     # sizeof(LogosAPIClient) into its own `operator new` while logos-protocol
     # defines the constructor, so a second protocol here is an 8-byte heap
@@ -17,7 +17,7 @@
     logos-qt-sdk.url = "github:logos-co/logos-qt-sdk";
     logos-qt-sdk.inputs.logos-protocol.follows = "logos-protocol";
     logos-qt-sdk.inputs.logos-plugin-qt.follows = "logos-plugin-qt";
-    logos-plugin-qt.url = "github:logos-co/logos-plugin-qt/feat/drop-legacy-mode";
+    logos-plugin-qt.url = "github:logos-co/logos-plugin-qt/feat/peering";
     logos-plugin-qt.inputs.logos-protocol.follows = "logos-protocol";
     logos-capability-module.url = "github:logos-co/logos-capability-module/feat/drop-legacy-mode";
     logos-modules-state-module.url = "github:logos-co/logos-modules-state-module/feat/drop-legacy-mode";
@@ -31,7 +31,7 @@
     # revision of its own means two of every function-local static in there.
     # Only the protocol-carrying chain follows: the rest of its inputs are lock
     # size, not correctness, and deep follows have broken this repo before.
-    default-module-loader.url = "github:logos-co/logos-module-loader-qt/feat/drop-legacy-mode";
+    default-module-loader.url = "github:logos-co/logos-module-loader-qt/feat/peering";
     default-module-loader.inputs.logos-protocol.follows = "logos-protocol";
     default-module-loader.inputs.logos-plugin-qt.follows = "logos-plugin-qt";
     default-module-loader.inputs.logos-cpp-sdk.follows = "logos-cpp-sdk";

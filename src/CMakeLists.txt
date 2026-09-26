@@ -113,6 +113,8 @@ set(LOGOS_CORE_SOURCES
     logos_core/token_authority.h
     logos_core/package_config.cpp
     logos_core/package_config.h
+    logos_core/peering_link.cpp
+    logos_core/peering_link.h
     core_service/call_envelope.cpp
     core_service/call_envelope.h
     core_service/embedded_core_service.cpp
