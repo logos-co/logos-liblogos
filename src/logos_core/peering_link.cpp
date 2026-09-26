@@ -7,6 +7,8 @@
 
 #include "logos_protocol.h"
 
+#include <export_link.h>
+
 #include <nlohmann/json.hpp>
 #include <spdlog/spdlog.h>
 
@@ -38,6 +40,7 @@ struct State {
     std::map<std::string, std::string> reflected; // a loaded facade's shown state
     std::shared_ptr<lp_client> client;
     std::vector<lp_subscription*> subscriptions;
+    std::shared_ptr<native_host::ExportLink> operatorLink;
 
     std::condition_variable wake;
     std::deque<std::function<void()>> jobs;
@@ -190,6 +193,37 @@ void onEvent(const char* event, const char* data, void*)
     }
 }
 
+// Remote Runtime Control: core_service's tls_tcp listener, certified and
+// authenticated through peering_module, which the runtime calls as the host.
+void startOperatorEndpoint(const json& config)
+{
+    State& s = state();
+    std::shared_ptr<lp_client> client;
+    {
+        std::lock_guard<std::mutex> lock(s.mutex);
+        client = s.client;
+    }
+    if (!client) return;
+    const json control = config.value("control", json::object());
+    const std::string host = control.is_object() ? control.value("host", std::string("0.0.0.0")) : "0.0.0.0";
+    auto link = std::make_shared<native_host::ExportLink>("core_service", client.get());
+    // What the listener's authenticator uses lives as long as core_service's provider.
+    auto keep = std::make_shared<std::pair<std::shared_ptr<lp_client>,
+                                           std::shared_ptr<native_host::ExportLink>>>(client, link);
+    std::string error;
+    const std::string transport = json{{"protocol", "tls_tcp"}, {"host", host}, {"port", 0}}.dump();
+    if (!core_service::addEndpoint(transport, [&](lp_provider* provider) {
+            return link->configure(provider, error);
+        }, keep) || !link->published(error)) {
+        spdlog::error("core_service serves no operators: {}",
+                      error.empty() ? "its tls_tcp listener did not start" : error);
+        return;
+    }
+    std::lock_guard<std::mutex> lock(s.mutex);
+    s.operatorLink = link;
+    spdlog::info("core_service serves paired operators on tls_tcp ({})", host);
+}
+
 void announceExit(const std::string& name, const std::string& role, std::int64_t epoch)
 {
     const json reply = call(role == "facade" ? "facadeExited" : "exportExited",
@@ -264,6 +298,7 @@ void start()
         s.worker = std::thread(run);
     }
     refreshExports();
+    if (config.value("operator", false)) startOperatorEndpoint(config);
     // Facades load in the background: the runtime's ready line never waits on a peer.
     post(refreshImports);
 }
@@ -271,6 +306,15 @@ void start()
 void stop()
 {
     State& s = state();
+    std::shared_ptr<native_host::ExportLink> operatorLink;
+    {
+        std::lock_guard<std::mutex> lock(s.mutex);
+        operatorLink = std::move(s.operatorLink);
+    }
+    if (operatorLink) {
+        operatorLink->stop();
+        core_service::closeSessions();
+    }
     std::thread worker;
     std::vector<lp_subscription*> subscriptions;
     {
