@@ -20,6 +20,8 @@
 #include <optional>
 #include <set>
 #include <unordered_set>
+#include <functional>
+#include <memory>
 #include <vector>
 
 #ifdef _WIN32
@@ -69,6 +71,7 @@ struct Service {
     // One forwarder per module and event ("" is every event).
     std::map<std::string, std::map<std::string, Watch>> watches;
     std::set<std::string> consumers; // admitted here, so retireConsumer may end them
+    std::vector<std::shared_ptr<void>> kept; // an added listener's authenticator state
 };
 
 // Outside the lock: an unsubscribe waits for a forward in flight.
@@ -849,16 +852,42 @@ bool start()
     return true;
 }
 
+bool addEndpoint(const std::string& transportJson, const std::function<bool(lp_provider*)>& configure,
+                 std::shared_ptr<void> keep)
+{
+    Service& s = service();
+    lp_provider* provider = nullptr;
+    {
+        std::lock_guard<std::mutex> lock(s.mutex);
+        if (!s.provider) return false;
+        provider = s.provider;
+        // Before the authenticator exists, so it never outlives what it uses.
+        s.kept.push_back(std::move(keep));
+    }
+    return configure(provider) && lp_provider_add_endpoint(provider, transportJson.c_str()) == LP_OK;
+}
+
+void closeSessions()
+{
+    Service& s = service();
+    std::lock_guard<std::mutex> lock(s.mutex);
+    if (!s.provider) return;
+    lp_provider_set_trust_anchors(s.provider, "");
+    lp_provider_close_sessions(s.provider, "{}");
+}
+
 void stop()
 {
     Service& s = service();
     lp_provider* provider = nullptr;
     std::vector<Watch> watches;
     std::map<std::pair<std::string, std::string>, lp_client*> clients;
+    std::vector<std::shared_ptr<void>> kept;
     {
         std::lock_guard<std::mutex> lock(s.mutex);
         provider = s.provider;
         s.provider = nullptr;
+        kept.swap(s.kept);
         for (auto& [module, events] : s.watches)
             for (auto& [name, watch] : events) watches.push_back(watch);
         s.watches.clear();
@@ -874,6 +903,7 @@ void stop()
         if (client) lp_client_destroy(client);
     if (!provider) return;
     lp_provider_destroy(provider);
+    kept.clear();
     ModuleManager::registry().forgetEmbedded(kName);
     authority::retire(kName);
 }
