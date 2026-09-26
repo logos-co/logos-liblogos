@@ -1,5 +1,6 @@
 # Common build configuration shared across all packages
 { pkgs, logosProtocolPkg, processStats
+, capabilityEngineInclude # capability_module's src/, for logos_capability_engine.h
 , logosContainer       # container contract (headers: ModuleContainer + makeContainer seam)
 , logosModuleLoader    # format-loader contract (headers: ModuleFormatLoader + makeFormatLoader seam)
 , logosPackageManager
@@ -62,6 +63,7 @@
     LOGOS_CONTAINER_ROOT = "${logosContainer}";
     LOGOS_MODULE_LOADER_ROOT = "${logosModuleLoader}";
     LOGOS_PACKAGE_MANAGER_ROOT = "${logosPackageManager}";
+    LOGOS_CAPABILITY_ENGINE_INCLUDE = "${capabilityEngineInclude}";
   };
 
   # Metadata

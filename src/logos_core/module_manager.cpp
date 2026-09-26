@@ -1,5 +1,10 @@
 #include "module_manager.h"
 #include "bootstrap_policy.h"
+#include "token_authority.h"
+#include "package_config.h"
+#include "core_service/embedded_core_service.h"
+#include "core_service/shell_binding.h"
+#include <logos_capability_engine.h>
 #include "module_registry.h"
 #include "access_policy.h"
 #include "dependency_resolver.h"
@@ -571,6 +576,14 @@ namespace {
         return result;
     }
 
+    // The shell reaches every module, as the host it replaces did.
+    std::vector<std::string> withShell(std::vector<std::string> callers) {
+        const std::string shell = logos::core_service::shellIdentity();
+        if (!shell.empty() && std::find(callers.begin(), callers.end(), shell) == callers.end())
+            callers.push_back(shell);
+        return callers;
+    }
+
     // Token authenticates the call. Best-effort; assumes capability_module loaded.
     void registerRestrictionRpc(const std::string& target,
                                 const std::vector<std::string>& callers) {
@@ -608,7 +621,7 @@ namespace {
             for (const auto& restriction : restrictions) {
                 if (logos::bootstrap::isExemptTarget(restriction.target))
                     continue;
-                registerRestrictionRpc(restriction.target, restriction.allowedCallers);
+                registerRestrictionRpc(restriction.target, withShell(restriction.allowedCallers));
             }
         });
     }
@@ -628,7 +641,7 @@ namespace {
 
             for (const auto& r : policy->restrictions)
                 if (r.target == target)
-                    return r.allowedCallers;
+                    return withShell(r.allowedCallers);
         }
 
         // Deduped; no dependents => trusted only (deny-by-default for peers).
@@ -650,7 +663,7 @@ namespace {
                 add(d);
         for (const auto& t : logos::bootstrap::trustedCallers())
             add(t);
-        return callers;
+        return withShell(std::move(callers));
     }
 
     void pushDerivedRestrictionForTarget(const std::string& target) {
@@ -679,8 +692,54 @@ namespace {
         });
     }
 
+    // Capability's own provider names callers through the engine interface once
+    // it is the authority; only core-minted credentials are pushed to it.
+    void attachTokenAuthority(const std::shared_ptr<LogosCore::ModuleLoader>& loader) {
+        auto inproc = std::dynamic_pointer_cast<LogosCore::InprocModuleLoader>(loader);
+        if (!inproc) return;
+        void* symbol = inproc->symbolOf("capability_module", LOGOS_CAPABILITY_ENGINE_SYMBOL);
+        if (!symbol) return;
+        auto engine = reinterpret_cast<logos_module_capability_engine_v1_fn>(symbol);
+        logos::authority::attach(engine(), inproc->providerOf("capability_module"));
+    }
+
+    // The embedder's package config, before package_manager counts as loaded:
+    // its setters answer the runtime only. A void setter's success is the call's
+    // status, not its value.
+    bool applyPackageConfig(const std::string& token, std::string& error) {
+        const auto calls = logos::package_config::current();
+        if (calls.empty()) return true;
+        if (lp_token_save("package_manager", token.c_str()) != LP_OK) {
+            error = "could not keep package_manager's token";
+            return false;
+        }
+        ClientPtr client = moduleClient("package_manager");
+        if (!client) {
+            error = "could not reach package_manager";
+            return false;
+        }
+        return logos::package_config::apply(calls, [&](const std::string& method,
+                                                       const std::string& arg) {
+            char* result = nullptr;
+            char* failure = nullptr;
+            const int status = lp_invoke(client.get(), method.c_str(),
+                                         nlohmann::json::array({arg}).dump().c_str(),
+                                         20000, &result, &failure);
+            lp_string_free(result);
+            lp_string_free(failure);
+            return status == LP_OK;
+        }, error);
+    }
+
+    // Ends an admission unless the load that made it commits.
+    struct AdmissionGuard {
+        std::string name;
+        bool active = false;
+        ~AdmissionGuard() { if (active) logos::authority::retire(name); }
+    };
+
     void notifyCapabilityModule(const std::string& name, const std::string& token) {
-        if (!registryInstance().isLoaded("capability_module"))
+        if (!registryInstance().isLoaded("capability_module") || logos::authority::attached())
             return;
 
         // Serialize with the other core-side policy updates. The plain client
@@ -1053,6 +1112,7 @@ namespace {
             if (recordTerminationDuringLoad(n))
                 return;
 
+            logos::authority::retire(n);
             auto& observer = logos::ModuleStateObserver::instance();
             if (consumeExpectedExit(n)) {
                 observer.record(n, logos::module_state::kStopping,
@@ -1087,9 +1147,24 @@ namespace {
         const std::optional<int64_t> pid =
             handle.pid >= 0 ? std::optional<int64_t>(handle.pid) : std::nullopt;
 
-        // OUTBOUND half of load-time identity: mint a root token, send it into
-        // the child, and register it locally under the module's name.
-        std::string authToken = boost::uuids::to_string(boost::uuids::random_generator()());
+        // OUTBOUND half of load-time identity: a root token, sent into the child
+        // and registered locally under the module's name. capability_module mints
+        // it once it is the token authority; core does until then.
+        AdmissionGuard admission{name, logos::authority::attached()};
+        std::string authToken = admission.active
+            ? logos::authority::admit(name, "module")
+            : boost::uuids::to_string(boost::uuids::random_generator()());
+        if (authToken.empty()) {
+            admission.active = false;
+            markExitExpected(name);
+            loader->terminate(name);
+            consumeExpectedExit(name);
+            abandonLoadAttempt(name);
+            logos::ModuleStateObserver::instance().record(
+                name, logos::module_state::kLoading, logos::module_state::kError,
+                instanceId, pid, "capability_module refused to admit it");
+            return false;
+        }
 
         if (!loader->sendToken(name, authToken)) {
             // We are about to terminate it deliberately, so announce the intent
@@ -1135,6 +1210,20 @@ namespace {
                          "detectable if the process dies.", name);
         }
 
+        std::string configError;
+        if (name == "package_manager" && !applyPackageConfig(authToken, configError)) {
+            spdlog::error("Failed to load module {}: {}", name, configError);
+            invalidateClient(name);
+            markExitExpected(name);
+            loader->terminate(name);
+            consumeExpectedExit(name);
+            abandonLoadAttempt(name);
+            logos::ModuleStateObserver::instance().record(
+                name, logos::module_state::kLoading, logos::module_state::kError,
+                instanceId, pid, configError);
+            return false;
+        }
+
         // Settles a death that arrived while we waited together with the
         // registry write — see commitLoad.
         if (!commitLoad(name, loader, std::move(handle))) {
@@ -1150,7 +1239,10 @@ namespace {
             spdlog::error("Failed to save auth token for {}", name);
             return false;
         }
+        admission.active = false;
 
+        if (name == "capability_module")
+            attachTokenAuthority(loader);
         notifyCapabilityModule(name, authToken);
 
         refreshDerivedRestrictionsForDependenciesOf(name);
@@ -1218,6 +1310,8 @@ namespace {
         }
 
         registryInstance().markUnloaded(name);
+        if (name == "capability_module") logos::authority::detach();
+        else logos::authority::retire(name);
 
         // markUnloaded keeps the dependency edges, so this still resolves them.
         refreshDerivedRestrictionsForDependenciesOf(name);
@@ -1631,6 +1725,14 @@ namespace ModuleManager {
     }
 
     void clear() {
+        // Nothing the runtime admitted outlives it, so nothing is revoked on the
+        // way out: capability's pushes would only race the teardown and fail.
+        logos::authority::detach();
+        // The control surface and the shell's identity go before the fleet does.
+        logos::shell_binding::shutdown();
+        logos::core_service::stop();
+        logos::core_service::resetConfiguration();
+        logos::package_config::reset();
         // BEFORE the lock guard, so it is destroyed after it. See rule 1.
         logos::ScopedModuleStateFlush stateFlusher;
         ScopedLoadEntry entry;
@@ -1650,6 +1752,7 @@ namespace ModuleManager {
         loaderRegistry().terminateAll();
         clearExpectedExits();
         registryInstance().clear();
+        logos::authority::detach();
         startedFlag().store(false);
         {
             std::unique_lock<std::shared_mutex> g(configMutex());

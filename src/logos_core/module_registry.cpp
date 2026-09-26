@@ -298,6 +298,20 @@ std::vector<std::string> ModuleRegistry::bundledModulesDirs() const {
     return m_bundledDirs;
 }
 
+void ModuleRegistry::registerEmbedded(const std::string& name) {
+    std::unique_lock lock(m_mutex);
+    ModuleInfo& info = m_modules[name];
+    info.path = "<embedded>";
+    info.embedded = true;
+    info.loaded = true;
+}
+
+void ModuleRegistry::forgetEmbedded(const std::string& name) {
+    std::unique_lock lock(m_mutex);
+    auto it = m_modules.find(name);
+    if (it != m_modules.end() && it->second.embedded) m_modules.erase(it);
+}
+
 bool ModuleRegistry::isBundled(const std::string& name) const {
     std::shared_lock lock(m_mutex);
     auto it = m_modules.find(name);
@@ -646,6 +660,7 @@ nlohmann::json ModuleRegistry::allModulesInfo() const {
     std::shared_lock lock(m_mutex);
     nlohmann::json modules = nlohmann::json::array();
     for (const auto& [name, info] : m_modules) {
+        if (info.embedded) continue;
         nlohmann::json entry;
         entry["name"]         = name;
         entry["path"]         = info.path;
@@ -653,6 +668,10 @@ nlohmann::json ModuleRegistry::allModulesInfo() const {
         // Unix-seconds timestamp of the current load (0 when not loaded).
         // Callers compute uptime as now - loaded_at while loaded.
         entry["loaded_at"]    = info.loadedAt;
+        // Where it runs while loaded: in this process, or a host process of its own.
+        entry["placement"]    = !info.loaded || !info.loader ? nlohmann::json(nullptr)
+                                : nlohmann::json(info.loader->id() == "inproc" ? "inproc"
+                                                                               : "subprocess");
         // Readiness. null (not false) when no watch is armed -- "nobody looked"
         // and "not ready" are different answers.
         entry["published"]    = info.published.has_value()
@@ -829,7 +848,7 @@ std::vector<std::string> ModuleRegistry::knownModuleNames() const {
     std::vector<std::string> keys;
     keys.reserve(m_modules.size());
     for (const auto& [k, v] : m_modules)
-        keys.push_back(k);
+        if (!v.embedded) keys.push_back(k);
     return keys;
 }
 
@@ -964,7 +983,7 @@ std::vector<std::string> ModuleRegistry::loadedModuleNames() const {
     std::shared_lock lock(m_mutex);
     std::vector<std::string> result;
     for (const auto& [k, v] : m_modules) {
-        if (v.loaded)
+        if (v.loaded && !v.embedded)
             result.push_back(k);
     }
     return result;

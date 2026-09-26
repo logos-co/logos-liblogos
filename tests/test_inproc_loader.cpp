@@ -3,14 +3,18 @@
 #include <gtest/gtest.h>
 #include "logos_core.h"
 #include "inproc_module_loader.h"
+#include "token_authority.h"
 #include "module_manager.h"
 #include "module_registry.h"
+#include "module_state_observer.h"
 #include "qt_test_adapter.h"
 #include "logos_protocol.h"
 #include <nlohmann/json.hpp>
+#include <algorithm>
 #include <chrono>
 #include <cstdlib>
 #include <string>
+#include <mutex>
 #include <thread>
 #include <vector>
 
@@ -138,14 +142,69 @@ protected:
     }
 };
 
+namespace {
+
+// The operator a token names, for core_service's resolver.
+char* testOperators(const char* token, const char*, void*)
+{
+    return token && std::string(token) == "alice-token" ? lp_string_copy("alice") : nullptr;
+}
+
+// A client as `identity`, holding `token` for `target` (or its credential).
+lp_client* clientAs(const std::string& identity, const std::string& credential,
+                    const char* target = nullptr, const char* token = nullptr)
+{
+    lp_token_isolate_identity(identity.c_str());
+    if (!credential.empty()) {
+        lp_token_adopt_credential(identity.c_str(), credential.c_str());
+        lp_token_save_for(identity.c_str(), "capability_module", credential.c_str());
+    }
+    if (target && token) lp_token_save_for(identity.c_str(), target, token);
+    return lp_client_create("core_service", identity.c_str(), nullptr, nullptr);
+}
+
+json callWith(lp_client* client, const char* method, const json& args = json::array())
+{
+    char* result = nullptr;
+    char* error = nullptr;
+    const int status = lp_invoke(client, method, args.dump().c_str(), 5000, &result, &error);
+    json value = status == LP_OK && result ? json::parse(result, nullptr, false) : json(nullptr);
+    lp_string_free(result);
+    lp_string_free(error);
+    return value;
+}
+
+bool forbidden(const json& reply)
+{
+    return reply.is_object() && reply.value("code", std::string{}) == "FORBIDDEN";
+}
+
+struct Events {
+    std::mutex mutex;
+    std::vector<json> seen;
+};
+
+void onEvent(const char*, const char* data, void* userData)
+{
+    auto& events = *static_cast<Events*>(userData);
+    std::lock_guard<std::mutex> lock(events.mutex);
+    events.seen.push_back(json::parse(data ? data : "[]", nullptr, false));
+}
+
+} // namespace
+
 // One test, because an image that ran in this process stays mapped: loading it
 // again, in any later test, needs a restart.
-TEST_F(InprocBundledTest, TheRuntimesModulesRunInProcessUntilUnloaded)
+TEST_F(InprocBundledTest, TheRuntimeRunsItsModulesInProcessBehindCoreService)
 {
     ASSERT_EQ(setBundled(bundled), 0);
     ASSERT_EQ(logos_core_set_placement_policy(R"({"default":"subprocess"})"), 0);
+    ASSERT_EQ(logos_core_set_shell_identity("capability_module"), -1) << "not a shell";
+    ASSERT_EQ(logos_core_set_shell_identity("basecamp"), 0);
+    ASSERT_EQ(logos_core_set_operator_resolver(&testOperators, nullptr), 0);
     logos_core_start();
     EXPECT_EQ(logos_core_set_placement_policy("{}"), -1) << "protected once started";
+    EXPECT_EQ(logos_core_set_shell_identity("basecamp"), -1);
 
     for (const char* name : {"capability_module", "modules_state"}) {
         ModuleRegistry& registry = ModuleManager::registry();
@@ -161,6 +220,9 @@ TEST_F(InprocBundledTest, TheRuntimesModulesRunInProcessUntilUnloaded)
         ASSERT_TRUE(loader) << name;
         EXPECT_EQ(loader->id(), "inproc") << name;
     }
+    // Reported where a client can see it.
+    const json stateInfo = call("core_service", "getModuleInfo", json::array({"modules_state"}));
+    EXPECT_EQ(stateInfo.value("placement", std::string{}), "inproc") << stateInfo.dump();
 
     // Core's feed reaches modules_state in-process, and so does this call.
     EXPECT_TRUE(eventually([] {
@@ -168,9 +230,172 @@ TEST_F(InprocBundledTest, TheRuntimesModulesRunInProcessUntilUnloaded)
         return record.is_object() && record.value("module", std::string{}) == "capability_module";
     })) << call("modules_state", "list_modules").dump();
 
+    // capability_module is the token authority: it minted modules_state's
+    // credential, and names its holder.
+    ASSERT_TRUE(logos::authority::attached());
+    char* raw = logos_core_get_token("modules_state");
+    const std::string credential = raw ? raw : "";
+    delete[] raw;
+    ASSERT_FALSE(credential.empty());
+    const auto holder = logos::authority::resolveCaller(credential.c_str(), "inproc");
+    ASSERT_TRUE(holder.has_value());
+    EXPECT_EQ(json::parse(*holder), (json{{"kind", "module"}, {"name", "modules_state"}}));
+
+    // core_service answers the runtime about modules, and is part of the runtime:
+    // known and loaded for dependency checks, never listed.
+    const json listed = call("core_service", "listModules", json::array({"all"}));
+    ASSERT_TRUE(listed.is_array()) << listed.dump();
+    EXPECT_NE(listed.dump().find("\"modules_state\""), std::string::npos) << listed.dump();
+    EXPECT_EQ(listed.dump().find("\"core_service\""), std::string::npos) << listed.dump();
+    EXPECT_TRUE(ModuleManager::registry().isLoaded("core_service"));
+
+    // The shell: its binding, once, calling as "basecamp".
+    logos_consumer* shell = logos_core_take_shell_binding();
+    ASSERT_NE(shell, nullptr);
+    EXPECT_EQ(logos_core_take_shell_binding(), nullptr);
+    EXPECT_STREQ(logos_consumer_name(shell), "basecamp");
+    auto shellCall = [&](const char* method, const json& args) {
+        char* out = nullptr;
+        char* err = nullptr;
+        const int status = logos_consumer_call(shell, "core_service", method, args.dump().c_str(),
+                                               5000, &out, &err);
+        const json value = status == 0 && out ? json::parse(out, nullptr, false) : json(nullptr);
+        logos_consumer_string_free(out);
+        logos_consumer_string_free(err);
+        return value.is_object() ? value : json::object();
+    };
+    // A load names how much of the graph comes too; one already loaded is ok.
+    EXPECT_EQ(shellCall("loadModule", json::array({"modules_state", "module_only"}))
+                  .value("status", std::string{}), "ok");
+    EXPECT_EQ(shellCall("loadModule", json::array({"modules_state", "everything"}))
+                  .value("code", std::string{}), "INVALID_ARGS");
+    Events events;
+    logos_consumer_subscription* watch =
+        logos_consumer_subscribe(shell, "core_service", "moduleStateChanged", &onEvent, &events);
+    ASSERT_NE(watch, nullptr);
+    char* result = nullptr;
+    char* error = nullptr;
+    ASSERT_EQ(logos_consumer_call(shell, "core_service", "admitConsumer",
+                                  R"(["test_ui_plugin","presentation"])", 5000, &result, &error),
+              0) << (error ? error : "");
+    const json admitted = json::parse(result ? result : "null", nullptr, false);
+    logos_consumer_string_free(result);
+    logos_consumer_string_free(error);
+    ASSERT_EQ(admitted.value("status", std::string{}), "ok") << admitted.dump();
+
+    // A presentation consumer reads but does not control.
+    lp_client* plugin = clientAs("test_ui_plugin", admitted.value("credential", std::string{}));
+    ASSERT_NE(plugin, nullptr);
+    EXPECT_TRUE(callWith(plugin, "getStatus").is_object());
+    EXPECT_TRUE(forbidden(callWith(plugin, "loadModule", json::array({"modules_state"}))));
+    EXPECT_TRUE(forbidden(callWith(plugin, "admitConsumer", json::array({"x", "presentation"}))));
+    // A pair the plugin asks capability for works until its admission ends.
+    lp_client* pluginToState = lp_client_create("modules_state", "test_ui_plugin", nullptr, nullptr);
+    ASSERT_NE(pluginToState, nullptr);
+    auto listModules = [&](std::string* why) {
+        char* out = nullptr;
+        char* err = nullptr;
+        const int status = lp_invoke(pluginToState, "list_modules", "[]", 5000, &out, &err);
+        if (why) *why = err ? err : "";
+        lp_string_free(out);
+        lp_string_free(err);
+        return status == LP_OK;
+    };
+    std::string why;
+    EXPECT_TRUE(listModules(&why)) << why;
+    // The shell retires only what it admitted, never a module.
+    EXPECT_EQ(shellCall("retireConsumer", json::array({"modules_state"})).value("code", std::string{}),
+              "NOT_FOUND");
+    EXPECT_TRUE(logos::authority::resolveCaller(credential.c_str(), "inproc").has_value());
+
+    // An operator the embedder names forwards calls, but never to the token store.
+    lp_client* alice = clientAs("alice-cli", {}, "core_service", "alice-token");
+    ASSERT_NE(alice, nullptr);
+    EXPECT_TRUE(callWith(alice, "listModules", json::array({"loaded"})).is_array());
+    const json refused = callWith(alice, "callModuleMethod",
+                                  json::array({"capability_module", "requestModule",
+                                               json::array({"", "modules_state"})}));
+    EXPECT_EQ(refused.value("code", std::string{}), "METHOD_FAILED") << refused.dump();
+    EXPECT_EQ(refused.value("error", json::object()).value("code", std::string{}), "unauthorized");
+    EXPECT_EQ(callWith(alice, "watchModuleEvents", json::array({"capability_module", ""})),
+              json(false));
+    const json forwarded = callWith(alice, "callModuleMethod",
+                                    json::array({"modules_state", "list_modules", json::array()}));
+    EXPECT_EQ(forwarded.value("status", std::string{}), "ok") << forwarded.dump();
+    EXPECT_TRUE(forbidden(callWith(alice, "admitConsumer", json::array({"y", "presentation"}))));
+    // An unknown token gets nothing.
+    lp_client* stranger = clientAs("stranger-cli", {}, "core_service", "no-such-token");
+    EXPECT_TRUE(callWith(stranger, "listModules").is_null());
+
+    // Detector: each watch left a forwarder behind, so the Nth watcher saw every event N times.
+    Events relayed;
+    lp_subscription* moduleEvents = lp_subscribe(alice, "module_event", &onEvent, &relayed);
+    ASSERT_NE(moduleEvents, nullptr);
+    for (const char* event : {"module_state_changed", "module_state_changed", ""})
+        EXPECT_EQ(callWith(alice, "watchModuleEvents", json::array({"modules_state", event})), json(true))
+            << "'" << event << "'";
+    // modules_state emits module_state_changed for each transition core feeds it.
+    auto probe = [] {
+        logos::ModuleStateObserver::instance().record("watch_probe", logos::module_state::kAbsent,
+                                               logos::module_state::kLoading);
+        logos::ModuleStateObserver::instance().flush();
+    };
+    auto probes = [&] {
+        std::lock_guard<std::mutex> lock(relayed.mutex);
+        return std::count_if(relayed.seen.begin(), relayed.seen.end(), [](const json& e) {
+            return e.is_array() && e.size() >= 3 && e[0] == "modules_state" && e[2] == "watch_probe";
+        });
+    };
+    auto settle = [] { std::this_thread::sleep_for(std::chrono::milliseconds(500)); };
+    probe();
+    EXPECT_TRUE(eventually([&] { return probes() >= 1; }));
+    settle();
+    EXPECT_EQ(probes(), 1) << "one forwarder however often the watch is asked for";
+    // Its module leaving ends the watch, and a new one forwards once.
+    logos::ModuleStateObserver::instance().record("modules_state", logos::module_state::kReady,
+                                           logos::module_state::kError, std::nullopt, std::nullopt,
+                                           std::string("watch test"));
+    logos::ModuleStateObserver::instance().flush();
+    probe();
+    settle();
+    EXPECT_EQ(probes(), 1) << "a watch outlived its module";
+    EXPECT_EQ(callWith(alice, "watchModuleEvents",
+                       json::array({"modules_state", "module_state_changed"})), json(true));
+    probe();
+    EXPECT_TRUE(eventually([&] { return probes() >= 2; }));
+    settle();
+    EXPECT_EQ(probes(), 2);
+    lp_unsubscribe(moduleEvents);
+
+    lp_client_destroy(plugin);
+    lp_client_destroy(alice);
+    lp_client_destroy(stranger);
+    const std::string pluginCredential = admitted.value("credential", std::string{});
+    EXPECT_EQ(shellCall("retireConsumer", json::array({"test_ui_plugin"})).value("status", std::string{}),
+              "ok");
+    EXPECT_FALSE(logos::authority::resolveCaller(pluginCredential.c_str(), "inproc").has_value());
+    // Its cached pair is refused at modules_state too: capability revoked it
+    // there, and the plugin can no longer mint another.
+    EXPECT_TRUE(eventually([&] { return !listModules(nullptr); }))
+        << "modules_state still takes the retired plugin's pair token";
+    lp_client_destroy(pluginToState);
+
     EXPECT_EQ(logos_core_unload_module("modules_state", false), 1);
     EXPECT_FALSE(loaded("modules_state"));
     EXPECT_TRUE(call("modules_state", "list_modules").is_null()) << "its provider is withdrawn";
+    EXPECT_FALSE(logos::authority::resolveCaller(credential.c_str(), "inproc").has_value())
+        << "unloading retires the admission";
     EXPECT_NE(logos_core_load_module("modules_state", LOGOS_LOAD_MODULE_ONLY), 1)
         << "its image is still mapped";
+
+    // The shell saw it go, through core_service.
+    EXPECT_TRUE(eventually([&] {
+        std::lock_guard<std::mutex> lock(events.mutex);
+        for (const json& e : events.seen)
+            if (e.is_array() && e.size() >= 3 && e[0] == "modules_state" && e[2] == "unloaded")
+                return true;
+        return false;
+    }));
+    logos_consumer_unsubscribe(watch);
+    logos_consumer_release(shell);
 }

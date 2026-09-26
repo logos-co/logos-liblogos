@@ -14,6 +14,8 @@
 #include <string>
 #include <unordered_map>
 
+struct lp_provider;
+
 namespace LogosCore {
 
 // The embedder's placement policy: {"default":"subprocess"|"inproc",
@@ -53,6 +55,11 @@ public:
     void terminate(const std::string& name) override;
     void terminateAll() override;
     bool hasModule(const std::string& name) const override;
+
+    // The image and provider of a module running here, for the runtime's own
+    // interfaces to it; nullptr when it is not.
+    void* symbolOf(const std::string& name, const char* symbol) const;
+    lp_provider* providerOf(const std::string& name) const;
 
 private:
     struct Entry;
