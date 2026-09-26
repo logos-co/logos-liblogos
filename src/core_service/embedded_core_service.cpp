@@ -59,14 +59,30 @@ Config& config()
     return value;
 }
 
+struct Watch {
+    lp_subscription* subscription = nullptr;
+    std::string* module = nullptr; // forwardEvent's context
+};
+
 struct Service {
     std::mutex mutex;
     lp_provider* provider = nullptr;
     int sink = 0;
     std::map<std::pair<std::string, std::string>, lp_client*> clients; // (origin, target)
-    std::vector<std::pair<lp_subscription*, std::string*>> watches; // with the module named
+    // One forwarder per module and event ("" is every event).
+    std::map<std::string, std::map<std::string, Watch>> watches;
     std::set<std::string> consumers; // admitted here, so retireConsumer may end them
 };
+
+// Outside the lock: an unsubscribe waits for a forward in flight.
+void release(std::vector<Watch>& watches)
+{
+    for (Watch& watch : watches) {
+        lp_unsubscribe(watch.subscription);
+        delete watch.module;
+    }
+    watches.clear();
+}
 
 Service& service()
 {
@@ -441,9 +457,19 @@ void forwardEvent(const char* event, const char* data, void* userData)
     emit("module_event", forwarded);
 }
 
+// Every forwarder broadcasts module_event to all subscribers, so a second one for
+// the same event would deliver it twice. A watch on every event covers the rest.
 json watchModuleEvents(const Caller& caller, const std::string& module, const std::string& event)
 {
     if (closedToOperator(caller, module) || !contains(loadedNames(), module)) return false;
+    auto covered = [&](const std::map<std::string, Watch>& events) {
+        return events.count("") > 0 || events.count(event) > 0;
+    };
+    {
+        std::lock_guard<std::mutex> lock(service().mutex);
+        const auto it = service().watches.find(module);
+        if (it != service().watches.end() && covered(it->second)) return true;
+    }
     lp_client* client = clientFor("core", module);
     if (!client) return false;
     auto* context = new std::string(module);
@@ -452,8 +478,35 @@ json watchModuleEvents(const Caller& caller, const std::string& module, const st
         delete context;
         return false;
     }
-    std::lock_guard<std::mutex> lock(service().mutex);
-    service().watches.emplace_back(subscription, context);
+    std::vector<Watch> surplus;
+    {
+        std::lock_guard<std::mutex> lock(service().mutex);
+        auto& events = service().watches[module];
+        if (covered(events)) {
+            surplus.push_back({subscription, context}); // an equal watch got here first
+        } else {
+            if (event.empty()) {
+                for (auto& [name, watch] : events) surplus.push_back(watch);
+                events.clear();
+            }
+            events[event] = {subscription, context};
+        }
+    }
+    release(surplus);
+    // Unloaded while subscribing: its transition may already have passed.
+    if (!contains(loadedNames(), module)) {
+        std::vector<Watch> ended;
+        {
+            std::lock_guard<std::mutex> lock(service().mutex);
+            const auto it = service().watches.find(module);
+            if (it != service().watches.end()) {
+                for (auto& [name, watch] : it->second) ended.push_back(watch);
+                service().watches.erase(it);
+            }
+        }
+        release(ended);
+        return false;
+    }
     return true;
 }
 
@@ -614,8 +667,23 @@ char* resolveCaller(const char* token, const char* transport, void*)
     return copy(json{{"kind", "operator"}, {"name", op}});
 }
 
+// A module that leaves ends its watches; one asked for after it returns subscribes afresh.
 void publishTransitions(const std::vector<ModuleTransition>& batch)
 {
+    std::vector<Watch> ended;
+    {
+        std::lock_guard<std::mutex> lock(service().mutex);
+        for (const ModuleTransition& t : batch) {
+            if (t.newState != module_state::kUnloaded && t.newState != module_state::kAbsent
+                && t.newState != module_state::kError)
+                continue;
+            const auto it = service().watches.find(t.module);
+            if (it == service().watches.end()) continue;
+            for (auto& [name, watch] : it->second) ended.push_back(watch);
+            service().watches.erase(it);
+        }
+    }
+    release(ended);
     for (const ModuleTransition& t : batch)
         emit("moduleStateChanged",
              json::array({t.module, t.oldState, t.newState,
@@ -737,13 +805,15 @@ void stop()
 {
     Service& s = service();
     lp_provider* provider = nullptr;
-    std::vector<std::pair<lp_subscription*, std::string*>> watches;
+    std::vector<Watch> watches;
     std::map<std::pair<std::string, std::string>, lp_client*> clients;
     {
         std::lock_guard<std::mutex> lock(s.mutex);
         provider = s.provider;
         s.provider = nullptr;
-        watches.swap(s.watches);
+        for (auto& [module, events] : s.watches)
+            for (auto& [name, watch] : events) watches.push_back(watch);
+        s.watches.clear();
         clients.swap(s.clients);
         s.consumers.clear();
     }
@@ -751,10 +821,7 @@ void stop()
         ModuleStateObserver::instance().removeSink(s.sink);
         s.sink = 0;
     }
-    for (auto& [watch, module] : watches) {
-        lp_unsubscribe(watch);
-        delete module;
-    }
+    release(watches);
     for (auto& [key, client] : clients)
         if (client) lp_client_destroy(client);
     if (!provider) return;
