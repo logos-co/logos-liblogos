@@ -79,42 +79,6 @@ char* recordMethod(const char* method, const char*, void* userData)
     return copyOut("true");
 }
 
-// A capability_module that keeps the last caller list it was given per target,
-// and is slow to take one: A's list naming X but not Y.
-struct Restrictions {
-    std::mutex mutex;
-    std::condition_variable changed;
-    bool slowEntered = false;
-    std::map<std::string, std::vector<std::string>> latest;
-};
-
-char* restrictionDispatch(const char* method, const char* argsJson, void* userData)
-{
-    auto& r = *static_cast<Restrictions*>(userData);
-    const auto args = nlohmann::json::parse(argsJson, nullptr, false);
-    if (std::strcmp(method, "registerRestriction") != 0 || !args.is_array() || args.size() != 3)
-        return copyOut("true");
-    const std::string target = args[1].get<std::string>();
-    const auto callers = args[2].get<std::vector<std::string>>();
-    const auto names = [&](const char* who) {
-        return std::find(callers.begin(), callers.end(), who) != callers.end();
-    };
-    if (target == "target_a" && names("caller_x") && !names("caller_y")) {
-        {
-            std::lock_guard<std::mutex> lock(r.mutex);
-            r.slowEntered = true;
-        }
-        r.changed.notify_all();
-        std::this_thread::sleep_for(std::chrono::milliseconds(800));
-    }
-    {
-        std::lock_guard<std::mutex> lock(r.mutex);
-        r.latest[target] = callers;
-    }
-    r.changed.notify_all();
-    return copyOut("true");
-}
-
 class CoreOutboundTest : public FakeHostFixture {
 protected:
     void SetUp() override {
@@ -184,43 +148,51 @@ TEST_F(CoreOutboundTest, ATcpOnlyModuleIsReachedOverTcp)
 }
 
 // Detector: restriction pushes ran on each loading thread, so under
-// concurrent loads a caller list read before a dependent committed could reach
+// concurrent loads a policy read before a dependent committed could reach
 // capability_module last and refuse that declared caller.
 TEST_F(CoreOutboundTest, TheLastRestrictionPushedIsTheLatest)
 {
     logos_core_set_access_policy(R"({"version":1,"mode":"enforce","restrictions":{}})");
-    plantModule("capability_module", "report-ok");
-    ASSERT_EQ(logos_core_load_module("capability_module", LOGOS_LOAD_MODULE_ONLY), 1);
-    Restrictions restrictions;
-    lp_provider* capability = serve("capability_module", nullptr, restrictionDispatch,
-                                    &restrictions);
     installModule("target_a", {});
     installModule("caller_x", {"target_a"});
     installModule("caller_y", {"target_a"});
     ASSERT_EQ(logos_core_load_module("target_a", LOGOS_LOAD_MODULE_ONLY), 1);
 
-    // X's push for A is slow; Y loads while it is in flight.
+    // X's document for A is slow to land; Y loads while it is in flight.
+    std::mutex mutex;
+    std::condition_variable changed;
+    bool slowEntered = false;
+    stand_in::onRestrictions([&](const nlohmann::json& document) {
+        const auto callers = document.value("target_a", nlohmann::json::array());
+        const auto names = [&](const char* who) {
+            return std::find(callers.begin(), callers.end(), who) != callers.end();
+        };
+        if (!names("caller_x") || names("caller_y")) return;
+        {
+            std::lock_guard<std::mutex> lock(mutex);
+            slowEntered = true;
+        }
+        changed.notify_all();
+        std::this_thread::sleep_for(std::chrono::milliseconds(800));
+    });
     std::thread loadX([] {
         EXPECT_EQ(logos_core_load_module("caller_x", LOGOS_LOAD_MODULE_ONLY), 1);
     });
     {
-        std::unique_lock<std::mutex> lock(restrictions.mutex);
-        ASSERT_TRUE(restrictions.changed.wait_for(lock, std::chrono::seconds(20),
-                                                  [&] { return restrictions.slowEntered; }));
+        std::unique_lock<std::mutex> lock(mutex);
+        EXPECT_TRUE(changed.wait_for(lock, std::chrono::seconds(20), [&] { return slowEntered; }));
     }
     EXPECT_EQ(logos_core_load_module("caller_y", LOGOS_LOAD_MODULE_ONLY), 1);
     loadX.join();
+    stand_in::onRestrictions({});
 
-    std::vector<std::string> callers;
-    {
-        std::lock_guard<std::mutex> lock(restrictions.mutex);
-        callers = restrictions.latest["target_a"];
-    }
+    const auto documents = stand_in::restrictionDocuments();
+    ASSERT_FALSE(documents.empty());
+    const auto callers =
+        nlohmann::json::parse(documents.back()).value("target_a", nlohmann::json::array());
     for (const char* caller : {"caller_x", "caller_y"})
         EXPECT_NE(std::find(callers.begin(), callers.end(), caller), callers.end())
-            << caller << " is not an allowed caller of target_a: "
-            << nlohmann::json(callers).dump();
-    for (const char* name : {"caller_x", "caller_y", "target_a", "capability_module"})
+            << caller << " is not an allowed caller of target_a: " << callers.dump();
+    for (const char* name : {"caller_x", "caller_y", "target_a"})
         logos_core_unload_module(name, false);
-    lp_provider_destroy(capability);
 }

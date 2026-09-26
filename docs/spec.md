@@ -31,11 +31,11 @@ The platform is designed to:
 | **Module Loader** | An abstract interface (`ModuleLoader`) that encapsulates a complete strategy for loading and managing modules. Implemented by `CompositeModuleLoader`, which pairs a `ModuleContainer` with a `ModuleFormatLoader` |
 | **Composite Module Loader** | A concrete `ModuleLoader` that composes a `ModuleContainer` and a `ModuleFormatLoader`, delegating process lifecycle to the container and module-type resolution to the format loader |
 | **Module Loader Registry** | The central registry (`ModuleLoaderRegistry`) that selects the appropriate `ModuleLoader` for a given module based on its format descriptor |
-| **Core Manager** | A built-in module that exposes core functionality via RPC, allowing modules to manage the core without linking against the C API |
-| **Capability Module** | A built-in module that handles authorization tokens for inter-module communication |
+| **core_service** | The runtime's control surface, compiled into liblogos and published as a module of its own: loading, unloading and every query about modules. Embedders call it over their shell binding |
+| **Capability Module** | The token authority: a bundled module, run in-process, that mints every credential and pair token and enforces the access policy |
 | **RPC** | Remote Procedure Call — the mechanism by which modules invoke methods on each other |
 | **IPC** | Inter-Process Communication — the underlying transport |
-| **Token** | A UUID-based authentication credential issued by the core or capability module for securing RPC calls |
+| **Token** | A UUID-based authentication credential issued by capability_module for securing RPC calls (capability_module's own credential is the one the core mints) |
 | **SDK** | The [logos-cpp-sdk](https://github.com/logos-co/logos-cpp-sdk) — client library that abstracts connection management, token handling, and asynchronous invocation |
 
 ## Domain Model
@@ -54,11 +54,11 @@ At a high level, the Logos Core consists of:
 
 **Composite Module Loader** — A `ModuleLoader` implementation that composes a `ModuleContainer` with a `ModuleFormatLoader`. Its `load()` method first asks the format loader to resolve the host binary and build arguments, then delegates process launch to the container. All other operations (sendToken, terminate, hasModule, pid) are forwarded to the container. The default composite loader pairs `SubprocessContainer` with `QtPluginFormatLoader` — but the core does not name those types: it obtains them through the contract factory seams `makeContainer()` / `makeFormatLoader()`, whose definitions the build links in (see Future Work / the `loaderRegistry()` construction site).
 
-**Core Manager** — A built-in module that runs in the core process and exposes core functionality as RPC methods, allowing remote modules to manage the core without linking against the C API directly.
+**core_service** — The runtime's control surface, compiled into liblogos and published as a module of its own at start: loading, unloading and every query about modules, each method answering the callers its scope admits. Embedders call it over their shell binding; nothing else about modules is on the C API.
 
 **Module Host** — A lightweight executable (`logos_host`) that loads a single module in its own process. On startup it first reads an authentication token from the channel its container designated via `--token-source` (default: stdin), then loads the Qt plugin and initializes `LogosAPI` with that token. The host is agnostic to which container spawned it — it just reads bytes from an OS handle — so container concerns (credential delivery) stay independent from loader concerns (plugin loading).
 
-**Capability Module** — A built-in module that handles authorization for inter-module communication by issuing tokens and notifying both communicating parties.
+**Capability Module** — The token authority: bundled with the runtime and run in-process, it admits every module, shell and UI plugin through its engine interface, mints their credentials, and issues the per-pair tokens modules call each other with. Without it nothing loads.
 
 **Remote Object Registry** — A registry that maintains a mapping of module names to remote object replicas and forwards method calls/events.
 
@@ -75,8 +75,8 @@ Each module runs in its own process for isolation:
 │  │  │   └─ CompositeModuleLoader (default)         │  │
 │  │  │       ├─ SubprocessContainer (container)     │  │
 │  │  │       └─ QtPluginFormatLoader (loader)       │  │
-│  │  ├─ Core Manager (built-in module)             │  │
-│  │  ├─ Capability Module (built-in module)        │  │
+│  │  ├─ core_service (embedded control surface)    │  │
+│  │  ├─ capability_module (in-process authority)   │  │
 │  │  └─ Remote Object Registry                     │  │
 │  └────────────────────────────────────────────────┘  │
 │           │ IPC (local socket)                        │
@@ -103,7 +103,7 @@ Each module runs in its own process for isolation:
 
 Since the remote object registry has no built-in security mechanisms, all RPC calls require an authentication token. This is transparent to module developers when using the SDK:
 
-1. **Core → Module**: When a module is loaded, the core generates a UUID token and sends it to the module process via the container's `sendToken()` mechanism. *How* the token reaches the child is the container's private business; the host just reads its token from the channel the container designates via `--token-source` (see [Token delivery channel](#token-delivery-channel)). For the subprocess container this channel is the child's **stdin**: the parent writes the token (newline-framed) to a pipe the child inherits as fd 0, then closes it. The host reads its token from stdin before initializing `LogosAPI`. The module uses this token to authenticate calls from the core.
+1. **Core → Module**: When a module is loaded, the core has capability_module admit it — capability_module mints its credential, a UUID — and sends it to the module process via the container's `sendToken()` mechanism. *How* the token reaches the child is the container's private business; the host just reads its token from the channel the container designates via `--token-source` (see [Token delivery channel](#token-delivery-channel)). For the subprocess container this channel is the child's **stdin**: the parent writes the token (newline-framed) to a pipe the child inherits as fd 0, then closes it. The host reads its token from stdin before initializing `LogosAPI`. The module uses this token to authenticate calls from the core.
 2. **Module → Module**: When modules need to communicate, they request authorization from the Capability Module, which issues a token and notifies both parties. The modules then use this token for subsequent requests.
 3. **Token Storage**: Each module stores tokens in a thread-safe `TokenManager` (part of the SDK). `ModuleProxy` validates tokens before dispatching method calls.
 
@@ -178,7 +178,7 @@ boundary: during processing (`ModuleRegistry::processModuleInternal`) a module w
 6. The selected loader's `load()` is called:
    a. The `ModuleFormatLoader` resolves the host binary (e.g. `logos_host_qt`) and builds CLI arguments (including `--transport-set` if configured)
    b. The `ModuleContainer` launches the process with the resolved binary and arguments, appending its own `--token-source` so the child knows where to read its token (the subprocess container appends `--token-source stdin`)
-7. Core generates a UUID authentication token
+7. Core has capability_module admit the module, which mints its UUID credential (for capability_module itself, the core mints it: the authority's engine exists only once its image has loaded)
 8. Core sends the token to the module via the loader's `sendToken()` (delegates to the container; the subprocess container writes it to the child's stdin pipe — see Token-Based Authentication)
 9. Host process reads the token from the designated channel (`TokenSource`, default stdin — a container concern, but resolved generically with no container dependency), then loads the module plugin and calls `initLogos(LogosAPI*)` (loader concern). As a defense-in-depth identity check, the host **refuses to initialize** the plugin if its `name()` does not match the name it was loaded as (the trusted registry key passed by the core) — a binary cannot run, or receive tokens, under a name it does not implement
 10. The `LogosAPI` instance exposes `modulePath`, `instanceId`, and `instancePersistencePath` as properties
@@ -193,14 +193,14 @@ boundary: during processing (`ModuleRegistry::processModuleInternal`) a module w
 
 #### Cascade Unloading
 
-`logos_core_unload_module(name, true)` unloads the named module together with every currently loaded module that transitively depends on it. Teardown order is leaves-first (dependents before dependencies) so no process is left briefly pointing at a terminated parent. The call is serialised with ordinary load/unload operations under a single lock span — a late-arriving load cannot interleave between tearing down the dependents and the target.
+`core_service.unloadModule(name, true)` unloads the named module together with every currently loaded module that transitively depends on it. Teardown order is leaves-first (dependents before dependencies) so no process is left briefly pointing at a terminated parent. The cascade holds one lock span, so a late-arriving load cannot interleave between tearing down the dependents and the target. capability_module is never unloaded: it stops only with the runtime.
 
 ### Dependency Resolution
 
 - Dependencies are declared in each module's `metadata.json`
-- `logos_core_load_module(name, LOGOS_LOAD_REQUIRED_DEPS)` performs topological sort
-- Circular dependencies are detected and cause the load to fail (returns 0)
-- Missing/unknown dependencies cause the load to fail (returns 0)
+- `core_service.loadModule(name, "required")` performs topological sort
+- Circular dependencies are detected and cause the load to fail
+- Missing/unknown dependencies cause the load to fail
 - The resolver itself (`DependencyResolver::resolve`) returns a `ResolveResult` containing the partial topological order, a list of missing dependency names, and a cycle flag. The load path treats any resolution error as a hard failure; the teardown path (`unloadModuleWithDependents`) uses the partial order best-effort
 - Dependencies are loaded in correct order before the requesting module
 - The core maintains an in-process dependency graph with both forward and reverse edges. The reverse edges are re-derived from the forward edges at the tail of every discovery or metadata-processing pass, so cascade unload and dependent queries answer from memory without re-reading manifests from disk.
@@ -209,35 +209,32 @@ boundary: during processing (`ModuleRegistry::processModuleInternal`) a module w
 
 `metadata.json#optional_dependencies` is a SECOND edge set: concrete modules a module can call but does not require. The registry keeps it, and its reverse edges, apart from `dependencies` — every statement above is about the required set, and each of the differences below is a place where merging them would be wrong.
 
-- **Loaded only when asked for.** `logos_core_load_module(name, LOGOS_LOAD_REQUIRED_DEPS)` resolves and loads the required tree only. An optional dependency is never pulled in, so the caller (an app, `logoscore -l`, a package manager) owns its lifetime. `LOGOS_LOAD_REQUIRED_AND_OPTIONAL` opts into the opposite — see *Loading optional dependencies* below.
+- **Loaded only when asked for.** `loadModule(name, "required")` resolves and loads the required tree only. An optional dependency is never pulled in, so the caller (an app, `logoscore -l`, a package manager) owns its lifetime. `"required_and_optional"` opts into the opposite — see *Loading optional dependencies* below.
 - **Not a failure.** An optional dependency that is absent or unknown never appears in `ResolveResult::missing` and never fails a load.
-- **Ordering only, and only when it can.** Under `LOGOS_LOAD_REQUIRED_DEPS`, `DependencyResolver::resolve` takes the optional edges as SOFT edges: they order modules already in the set — so an optional dependency requested in the same batch comes up first and the dependent's startup calls land — but they never expand it. A soft edge that would close a cycle is dropped, and `hasCycle` continues to reflect the required edges alone: breaking a cycle is what optional dependencies are for, so reporting one as a cycle would refuse the configuration the feature exists to allow.
+- **Ordering only, and only when it can.** Under `"required"`, `DependencyResolver::resolve` takes the optional edges as SOFT edges: they order modules already in the set — so an optional dependency requested in the same batch comes up first and the dependent's startup calls land — but they never expand it. A soft edge that would close a cycle is dropped, and `hasCycle` continues to reflect the required edges alone: breaking a cycle is what optional dependencies are for, so reporting one as a cycle would refuse the configuration the feature exists to allow.
 - **No cascade.** `unloadModuleWithDependents` walks required reverse edges only. A module that declared it tolerates absence is not taken down when the thing it tolerates goes away.
 - **Still a caller.** Under `mode: "enforce"`, a loaded optional dependent IS in a target's derived allowed-caller list. The declaration is what grants the right to call; whether the loader had to supply the target is a separate question. Omitting them would deny a declared call between two loaded modules, and the caller would see a default value rather than an error.
 
-`logos_core_get_module_optional_dependencies(name)` reads the set. There is no `recursive` form: an optional edge says nothing about what lies beyond it.
+`core_service.getModuleOptionalDependencies(name)` reads the set. There is no `recursive` form: an optional edge says nothing about what lies beyond it.
 
 ##### Loading optional dependencies
 
-`LOGOS_LOAD_REQUIRED_AND_OPTIONAL` expands the closure instead of merely ordering it (`DependencyResolver::OptionalLoad::BestEffort`): every optional dependency that is INSTALLED is loaded too, ordered ahead of the module that names it. It is transitive — an optional dependency brings its own required tree with it, and its own optional edges are considered in turn.
+`"required_and_optional"` expands the closure instead of merely ordering it (`DependencyResolver::OptionalLoad::BestEffort`): every optional dependency that is INSTALLED is loaded too, ordered ahead of the module that names it. It is transitive — an optional dependency brings its own required tree with it, and its own optional edges are considered in turn.
 
-Best effort in all three directions, and none of them changes the return value: one that is not installed is skipped silently, one that is installed but fails to load is logged and stepped over, and a branch whose own REQUIRED dependencies are not all installed is left out whole rather than half-loaded. `logos_core_optional_load_report(name)` returns, as JSON, which optional dependencies would be left out and why (`not_installed` or `unsatisfiable`).
+Best effort in all three directions, and none of them fails the load: one that is not installed is skipped silently, one that is installed but fails to load is logged and stepped over, and a branch whose own REQUIRED dependencies are not all installed is left out whole rather than half-loaded. `core_service.getOptionalLoadReport(name)` returns which optional dependencies would be left out and why (`not_installed` or `unsatisfiable`); `loadModule` also reports them as `optional_skipped`.
 
 ### Process Monitoring
 
 - CPU percentage, CPU time, and memory usage tracked per module process
-- Statistics returned as JSON via `logos_core_get_module_stats()`
-- Core Manager process is excluded from stats
+- Statistics returned as a JSON array by `core_service.getModuleStats`
 - Not available on iOS
 
 ### Thread Safety
 
-The C API is designed to be safe for use from multi-threaded host applications:
-
-- **Load/unload operations** (`load_module`, `unload_module`) are serialised — only one runs at a time, so rapid concurrent load/unload cycles on the same or different modules do not produce data races. The cascade variant (`with_dependents=true`) holds the lock for its full leaves-first teardown.
-- **Read-only queries** (`get_known_modules`, `get_loaded_modules`) use a shared reader-writer lock and may execute concurrently with each other and with load/unload operations.
-- **Module discovery** (`refresh_modules`) is protected by the registry's own write lock.
-- **Lifecycle functions** (`init`, `start`, `cleanup`) are not thread-safe and must be called from a single thread.
+- **Loads and unloads** through core_service may run concurrently: loads of different modules proceed at the same time, each under its own module's lock, and a cascade unload holds the fleet lock for its full leaves-first teardown.
+- **Queries** (`listModules`, the graph queries, `getModulesInfo`) read the registry under its shared reader-writer lock.
+- **Module discovery** (`refreshModules`) is protected by the registry's own write lock.
+- **The C API's lifecycle functions** (`init`, `start`, `cleanup`) are not thread-safe and must be called from a single thread; the setters are taken before `start` only.
 
 ### Dev vs Portable Builds
 
@@ -248,51 +245,41 @@ The platform supports two build variants:
 
 ## API Description
 
-### Core Lifecycle
+### The C API
+
+The embedder's configuration before start, the runtime's lifecycle, and the shell binding. Everything about modules is a core_service call made through that binding.
 
 | Function | Purpose |
 |----------|---------|
-| `logos_core_init(argc, argv)` | Initialize global state, optionally set module directory. Creates a QCoreApplication if one does not exist. |
+| `logos_core_init(argc, argv)` | Initialize global state. |
 | `logos_core_add_modules_dir(path)` | Add a module directory to scan (duplicates ignored). |
-| `logos_core_start()` | Scan module directories, process metadata, create Core Manager, load built-in modules, start remote object registry. |
+| `logos_core_set_bundled_modules_dirs(dirs)` | The directories the embedder ships its own modules in; reserved names resolve only from them, and capability_module must be among them. Before start only. |
+| `logos_core_set_placement_policy(json)` | Where modules run: `subprocess` or `inproc`. Before start only. |
+| `logos_core_set_package_config(json)` | package_manager's directories, keyring and signature policy, applied as it loads. Before start only. |
+| `logos_core_set_persistence_base_path(path)` | Where each module's instance persistence lives. |
+| `logos_core_set_module_transports(name, json)` | Register a per-module `LogosTransportSet` for the named module; the loader forwards it to the child via `--transport-set`. Before that module loads. NULL or empty clears it. |
+| `logos_core_set_access_policy(json)` | Install the inter-module access policy (`version`, `mode`, `restrictions`). Only `mode: "enforce"` activates gating. Under it the core also derives restrictions from the dependency graph — a module may only call modules it declared, so each loaded target admits its loaded dependents plus `core`, `core_service` and the shell — and an explicit `restrictions` entry overrides the derived set verbatim. The core hands capability_module the whole policy as one document through its engine interface, on every load and unload; capability_module then refuses to mint a token for a caller a target does not list, and revokes the pairs a new policy denies. NULL or empty clears it. |
+| `logos_core_set_core_service_transports`, `logos_core_set_shutdown_handler`, `logos_core_set_operator_resolver`, `logos_core_set_core_service_extension` | core_service's further transports, the embedder's shutdown handler, its operators, and methods of its own. Before start only. |
+| `logos_core_set_shell_identity(name)` | The embedder's own identity. Before start only. |
+| `logos_core_start()` | Scan the module directories, load capability_module (the token authority), publish core_service, load modules_state, prepare the shell binding. Without capability_module in-process there is no authority: it logs why and publishes nothing, and nothing loads. |
+| `logos_core_take_shell_binding()`, `logos_consumer_*` | The shell's binding, once, after start: calls, async calls and subscriptions as the shell identity. |
+| `logos_core_process_module(path) → char*` | Read a module file's metadata and register it as known without loading. Returns the module name or NULL; free with `delete[]`. |
 | `logos_core_cleanup()` | Unload all modules, stop processes, clean up global state. |
 
-### Module Management
+### core_service
 
-| Function | Purpose |
-|----------|---------|
-| `logos_core_get_loaded_modules() → char**` | Return null-terminated array of loaded module names. Caller must free. |
-| `logos_core_get_known_modules() → char**` | Return null-terminated array of all discovered modules. Caller must free. |
-| `logos_core_load_module(name, deps) → int` | Load a module by name. `deps` is a `LogosLoadDeps`: `LOGOS_LOAD_MODULE_ONLY` (0) loads the module alone and requires its dependencies to be up already; `LOGOS_LOAD_REQUIRED_DEPS` (1) resolves the required tree and loads in topological order; `LOGOS_LOAD_REQUIRED_AND_OPTIONAL` (2) additionally brings up every installed optional dependency, best effort. Returns 1 on success, 0 on failure. |
-| `logos_core_unload_module(name, with_dependents) → int` | Terminate the module's process and remove it. When `with_dependents` is true, cascade unloads every loaded transitive dependent leaves-first. Returns 1 only if every step succeeded. |
-| `logos_core_get_module_dependencies(name, recursive) → char**` | Return null-terminated array of modules that `name` depends on (forward edges). With `recursive=true`, walks the forward dependency graph transitively via BFS. Unknown names yield an empty array. Caller must free. |
-| `logos_core_get_module_dependents(name, recursive) → char**` | Return null-terminated array of modules that depend on `name` (reverse edges). With `recursive=true`, walks the reverse dependency graph transitively via BFS. Unknown names yield an empty array. Caller must free. |
-| `logos_core_process_module(path) → char*` | Read a module file's metadata and register it as known without loading. Returns the module name or NULL. Caller must free. |
-| `logos_core_set_module_transports(name, json)` | Register a per-module `LogosTransportSet` (JSON, see logos-cpp-sdk shape) for the named module. The loader forwards it to the child via `--transport-set` so the child's `LogosAPIProvider` binds every transport instead of only the global default LocalSocket. Must be called before the module is loaded. NULL or empty clears any previously-registered entry. |
-| `logos_core_set_access_policy(json)` | Install the inter-module access policy: a JSON document with `version`, `mode` (e.g. `enforce`), and `restrictions` mapping each target module to its `allowedCallers` allowlist. Core parses it and, once capability_module loads, registers the concrete per-target restrictions with it via `registerRestriction` (authenticated by capability_module's auth token, so only the trusted core channel can register or relax restrictions — a peer module cannot); capability_module then refuses to mint a token (in `requestModule`) for a caller not in a restricted target's allowlist, so the call can never proceed. Only `mode: "enforce"` activates gating. **Under an enforce policy, restrictions are also derived automatically from the dependency graph** — a module may only call modules it declared as a dependency, so for each loaded target core registers its loaded dependents plus a trusted set (`core`, `core_service`) as the allowed callers (re-pushed on every load/unload). An explicit `restrictions` entry overrides the derived set for that target verbatim. Call before modules load. NULL or empty clears any previously-set policy. |
+| Method | Scope | Purpose |
+|--------|-------|---------|
+| `loadModule(name, deps?)` | control | Ensure the module is loaded. `deps` is `module_only`, `required`, or `required_and_optional` (the default): see *Dependency Resolution*. Answers `{status, module, version, dependencies_loaded, optional_skipped?}`. |
+| `unloadModule(name, withDependents?)` | control | Terminate the module's process; `withDependents` cascades leaves-first. |
+| `reloadModule(name)` / `refreshModules()` | control | Reload one module; re-scan the module directories. |
+| `listModules(filter?)`, `getStatus()`, `getModuleInfo(name)`, `getModulesInfo()`, `getModuleStats()` | read | The known and loaded modules, one module's record, every module's record, and CPU/memory per loaded module. |
+| `getModuleDependencies(name, recursive?)`, `getModuleDependents(name, recursive?)`, `getModuleOptionalDependencies(name)`, `getOptionalLoadReport(name)` | read | The dependency graph: forward and reverse edges (a breadth-first walk when `recursive`), the optional edges, and what an optional load would leave out. Unknown names answer an empty array. |
+| `admitConsumer(name, kind)` / `retireConsumer(name)` | shell | Admit a presentation consumer (a UI plugin) and return its credential; end it. |
+| `callModuleMethod(...)`, `watchModuleEvents(...)` | operator | Forward an operator's call or subscription, never to the runtime's own modules. |
+| `shutdown()` | stop | Hand shutdown to the embedder's handler. |
 
-### Token and Monitoring
-
-| Function | Purpose |
-|----------|---------|
-| `logos_core_get_token(key) → char*` | Return the auth token for a key. Caller must free. NULL if not found. |
-| `logos_core_get_module_stats() → char*` | Return JSON array of CPU/memory stats per loaded module. Caller must free. Not available on iOS. |
-
-### Core Manager Module (RPC Surface)
-
-The Core Manager is a built-in module exposing core functionality to remote modules:
-
-| Method | Purpose |
-|--------|---------|
-| `setModulesDirectory(directory)` | Set the module search directory. |
-| `start()` | Start the core's registry and load built-in modules. |
-| `cleanup()` | Unload all modules and shut down. |
-| `getLoadedModules() → std::vector<std::string>` | Return names of loaded modules. |
-| `getKnownModules() → QJsonArray` | Return all known modules with `loaded` flag. |
-| `loadModule(name) → bool` | Load a module by name. |
-| `unloadModule(name) → bool` | Unload a module by name. |
-| `processModule(filePath) → std::string` | Read a module file's metadata and register it. |
-| `getModuleMethods(name) → QJsonArray` | Introspect a module's methods via Qt meta-object system. |
+logos-cpp-sdk ships the contract as `core_service.lidl`.
 
 ## Module Implementation
 
