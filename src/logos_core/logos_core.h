@@ -90,6 +90,7 @@ LOGOS_CORE_EXPORT int logos_core_set_core_service_transports(const char* transpo
 // native modules a tls_tcp listener. NULL or "" clears it. Protected input,
 // before start only; returns 0, or -1 for a document that is not an object.
 LOGOS_CORE_EXPORT int logos_core_set_peering_config(const char* config_json);
+#define LOGOS_CORE_HAS_PEERING_CONFIG 1
 
 // Where core_service.shutdown goes; without one it is refused.
 typedef void (*LogosCoreShutdownHandler)(void* user_data);
