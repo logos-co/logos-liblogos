@@ -767,6 +767,20 @@ std::string shellIdentity()
     return config().shell;
 }
 
+Hooks hooks()
+{
+    std::lock_guard<std::mutex> lock(config().mutex);
+    Hooks value;
+    value.shutdown = config().shutdown;
+    value.shutdownData = config().shutdownData;
+    value.operators = config().operators;
+    value.operatorData = config().operatorData;
+    value.extension = config().extension;
+    value.extensionMethods = config().extensionMethods.dump();
+    value.extensionData = config().extensionData;
+    return value;
+}
+
 void resetConfiguration()
 {
     std::lock_guard<std::mutex> lock(config().mutex);

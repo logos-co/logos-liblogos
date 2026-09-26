@@ -25,12 +25,20 @@ add_executable(logos_core_tests
     test_inproc_loader.cpp
     test_call_envelope.cpp
     test_token_authority.cpp
+    test_runtime_process.cpp
 )
 
 # The stand-in module host the load-path tests start, beside the test binary
 # (see fake_module_host.h). Plain C++, so it builds and runs on every platform.
 add_executable(logos_fake_module_host fake_module_host_main.cpp)
 add_dependencies(logos_core_tests logos_fake_module_host)
+
+# The runtime the runtime-process tests spawn, and a stand-in app that spawns
+# one to be killed, both beside the test binary.
+add_executable(logos_runtime_test_app runtime_app_main.cpp)
+target_link_libraries(logos_runtime_test_app PRIVATE logos_core nlohmann_json::nlohmann_json)
+target_include_directories(logos_runtime_test_app PRIVATE ${CMAKE_SOURCE_DIR}/src/logos_core)
+add_dependencies(logos_core_tests logos_runtime logos_runtime_test_app)
 
 # Imported container/loader targets the tests drive via SubprocessManager /
 # CompositeModuleLoader: logos_container + logos_module_loader (the contracts),

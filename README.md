@@ -102,12 +102,12 @@ The compiled artifacts can be found at `result/`
 The nix build system is organized into modular files in the `/nix` directory:
 - `nix/default.nix` - Common configuration (dependencies, flags, metadata)
 - `nix/build.nix` - Shared build that compiles everything once
-- `nix/bin.nix` - Extracts binaries (logos_host, includes libraries for runtime linking)
+- `nix/bin.nix` - Extracts binaries (`logos_runtime` and the module hosts, with the libraries they link)
 - `nix/lib.nix` - Extracts libraries only
 - `nix/include.nix` - Header installation
 - `nix/tests.nix` - Test suite build (the `tests` check runs it)
 
-**Note:** The `logos-liblogos-bin` package includes both the `logos_host` binary and its required libraries to ensure proper runtime linking.
+**Note:** The `logos-liblogos-bin` package includes `logos_runtime`, the module hosts and the libraries they need, to ensure proper runtime linking.
 
 #### Local Development
 
@@ -182,6 +182,13 @@ int  logos_consumer_call(logos_consumer*, const char* target, const char* method
 
 // The embedder's alone: register a module file.
 char* logos_core_process_module(const char* path);
+
+// Or run the runtime in a process of its own, instead of logos_core_start().
+logos_runtime*  logos_runtime_spawn(const char* config_json, char** out_error);
+logos_consumer* logos_runtime_binding(logos_runtime*);
+char* logos_runtime_process_module(logos_runtime*, const char* path);
+void  logos_runtime_on_exit(logos_runtime*, logos_runtime_exit_cb, void* user_data);
+void  logos_runtime_stop(logos_runtime*);
 ```
 
 Everything else — loading, unloading, refreshing, and every query about modules —
@@ -195,8 +202,9 @@ See `src/logos_core/logos_core.h` for the full API.
 
 A bundled native module whose build stamped it `inproc_eligible` can run inside
 this process instead of in `logos_host_plain`. capability_module always does, and
-runs nowhere else; modules_state and the package modules do by default; anything
-else only when the placement policy says so. An in-process module calls out through the
+runs nowhere else; modules_state does by default; package_manager and
+package_downloader, which download and unpack packages, never do; anything else
+only when the placement policy says so. An in-process module calls out through the
 runtime as its own identity (a runtime delegate), is served over `inproc` and the
 local socket, and shares this process's fate: a crash takes the host down, and
 its image stays mapped after an unload, so loading it again needs a restart.
@@ -233,6 +241,39 @@ gets its own identity: `logos_core_take_shell_binding()` returns a
 with tokens capability_module issues. capability_module mints every credential
 but its own and names every caller; logos-cpp-sdk's `logos::host::LogosCore`
 wraps the binding for C++ embedders.
+
+### The runtime in a process of its own
+
+An app can keep the runtime out of its own process: `logos_runtime_spawn()` starts
+`bin/logos_runtime` (found beside the app, the module hosts or the modules, or at
+`LOGOS_RUNTIME_PATH`) instead of calling `logos_core_start()`. The token authority,
+core_service, modules_state and every module's credential then live there, and the
+app reaches them only through module calls, as its shell.
+
+```c
+logos_core_set_operator_resolver(resolve, NULL);   // hooks are optional, set as before
+char* error = NULL;
+logos_runtime* rt = logos_runtime_spawn(
+    "{\"shell\":\"basecamp\",\"bundled_modules_dirs\":[\"/app/modules\"]}", &error);
+logos_consumer* shell = logos_runtime_binding(rt);  // over the local socket
+/* ... core_service calls, as with logos_core_take_shell_binding() ... */
+logos_runtime_stop(rt);
+```
+
+The configuration carries what the setters take (`modules_dirs`,
+`bundled_modules_dirs`, `persistence_base_path`, `module_transports`,
+`access_policy`, `placement_policy`, `package_config`, `core_service_transports`).
+The runtime's stdin and stdout are a private channel, one JSON object per line,
+that nothing logs: the configuration and the shell's credential cross it, and so
+do the embedder's hooks (extension methods, the operator resolver, shutdown),
+which the app answers on a thread of this library's. The runtime's log reaches
+the app's at each line's level.
+
+The runtime stops, unloading its modules in order, when its stdin closes:
+`logos_runtime_stop()` closes it and waits, and so does the app's death. It also
+watches its parent, and on Windows the app's job object ends it.
+`logos_runtime_on_exit()` reports an exit nobody asked for. One runtime per
+process, and a process that spawned one cannot also start one itself.
 
 ### Inter-module access enforcement (off by default)
 
