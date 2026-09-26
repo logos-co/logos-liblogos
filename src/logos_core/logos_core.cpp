@@ -4,6 +4,7 @@
 #include "module_manager.h"
 #include "module_registry.h"
 #include "bootstrap_policy.h"
+#include "peering_link.h"
 #include "core_service/embedded_core_service.h"
 #include "core_service/shell_binding.h"
 #include "instance_id.h"
@@ -125,6 +126,16 @@ int logos_core_set_core_service_extension(LogosCoreServiceExtension extension,
     return 0;
 }
 
+int logos_core_set_peering_config(const char* config_json) {
+    if (!beforeStart("logos_core_set_peering_config")) return -1;
+    std::string error;
+    if (!logos::peering_link::setConfig(config_json ? config_json : "", error)) {
+        logos::logger("core").error("logos_core_set_peering_config: {}", error);
+        return -1;
+    }
+    return 0;
+}
+
 int logos_core_set_shell_identity(const char* name) {
     if (!beforeStart("logos_core_set_shell_identity")) return -1;
     if (!name || !logos::isValidModuleName(name)) return -1;
@@ -154,6 +165,8 @@ void logos_core_start() {
     // After capability_module: this one is optional, and its snapshot back-fills
     // everything that happened before it was up.
     ModuleManager::initializeModulesState();
+    // Before the shell binding; imports load in the background from here.
+    logos::peering_link::start();
     logos::shell_binding::prepare();
 }
 

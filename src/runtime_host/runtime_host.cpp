@@ -491,7 +491,8 @@ bool configure(const json& config, std::string& error)
     for (const Setter& setter : {Setter{"placement_policy", &logos_core_set_placement_policy},
                                  Setter{"package_config", &logos_core_set_package_config},
                                  Setter{"core_service_transports",
-                                        &logos_core_set_core_service_transports}}) {
+                                        &logos_core_set_core_service_transports},
+                                 Setter{"peering_config", &logos_core_set_peering_config}}) {
         const auto it = config.find(setter.key);
         if (it != config.end() && setter.apply(documentText(*it).c_str()) != 0) {
             error = std::string("its ") + setter.key + " was refused";

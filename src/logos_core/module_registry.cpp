@@ -312,6 +312,49 @@ void ModuleRegistry::forgetEmbedded(const std::string& name) {
     if (it != m_modules.end() && it->second.embedded) m_modules.erase(it);
 }
 
+bool ModuleRegistry::registerFacade(const std::string& name, const nlohmann::json& metadata,
+                                    bool replaceLocal) {
+    std::unique_lock lock(m_mutex);
+    auto it = m_modules.find(name);
+    if (it != m_modules.end()) {
+        const ModuleInfo& existing = it->second;
+        if (existing.loaded || existing.embedded) return false;
+        if (!existing.facade && !replaceLocal) return false;
+    }
+    ModuleInfo& info = m_modules[name];
+    info = ModuleInfo{};
+    info.path = "<peer-facade>";
+    info.format = "peer-facade";
+    info.facade = true;
+    info.metadataJson = metadata.dump();
+    info.version = metadata.value("version", std::string{});
+    recomputeDependentsLocked();
+    return true;
+}
+
+bool ModuleRegistry::forgetFacade(const std::string& name) {
+    std::unique_lock lock(m_mutex);
+    auto it = m_modules.find(name);
+    if (it == m_modules.end() || !it->second.facade || it->second.loaded) return false;
+    m_modules.erase(it);
+    recomputeDependentsLocked();
+    return true;
+}
+
+bool ModuleRegistry::isFacade(const std::string& name) const {
+    std::shared_lock lock(m_mutex);
+    auto it = m_modules.find(name);
+    return it != m_modules.end() && it->second.facade;
+}
+
+std::vector<std::string> ModuleRegistry::facadeNames() const {
+    std::shared_lock lock(m_mutex);
+    std::vector<std::string> names;
+    for (const auto& [name, info] : m_modules)
+        if (info.facade) names.push_back(name);
+    return names;
+}
+
 bool ModuleRegistry::isBundled(const std::string& name) const {
     std::shared_lock lock(m_mutex);
     auto it = m_modules.find(name);
@@ -328,6 +371,16 @@ bool ModuleRegistry::admitsRecordLocked(const std::string& name,
     spdlog::error("Refusing module {}: '{}' is reserved for the runtime's bundled modules",
                   modulePath, name);
     return false;
+}
+
+// An import keeps its name while it exists: the local copy waits.
+bool ModuleRegistry::keepsFacadeRecordLocked(const std::string& name,
+                                             const std::string& modulePath) const {
+    auto it = m_modules.find(name);
+    if (it == m_modules.end() || !it->second.facade) return false;
+    spdlog::info("Module {} is imported from another runtime; ignoring {} until the import "
+                 "is removed", name, modulePath);
+    return true;
 }
 
 // A loaded module keeps the image it runs from until it unloads.
@@ -463,7 +516,7 @@ void ModuleRegistry::discoverInstalledModules() {
     // evict the entry.
     std::vector<std::string> toRemove;
     for (const auto& [name, info] : m_modules) {
-        if (scannedNames.count(name) == 0 && !info.loaded)
+        if (scannedNames.count(name) == 0 && !info.loaded && !info.facade)
             toRemove.push_back(name);
     }
     for (const std::string& name : toRemove) {
@@ -561,6 +614,7 @@ std::string ModuleRegistry::processModuleInternal(const std::string& modulePath,
             return {};
         }
         if (!admitsRecordLocked(name, modulePath)) return {};
+        if (keepsFacadeRecordLocked(name, modulePath)) return name;
         ModuleInfo& info = m_modules[name];
         if (keepsLoadedRecordLocked(info, name, modulePath)) return name;
         info.path = modulePath;
@@ -616,6 +670,7 @@ std::string ModuleRegistry::processModuleInternal(const std::string& modulePath,
 
     // Update module info in place so re-discovery preserves the loaded flag
     // (and any other state that lives on ModuleInfo).
+    if (keepsFacadeRecordLocked(name, modulePath)) return name;
     ModuleInfo& info = m_modules[name];
     if (keepsLoadedRecordLocked(info, name, modulePath)) return name;
     info.path = modulePath;
