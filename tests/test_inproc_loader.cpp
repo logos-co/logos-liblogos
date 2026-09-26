@@ -6,9 +6,11 @@
 #include "token_authority.h"
 #include "module_manager.h"
 #include "module_registry.h"
+#include "module_state_observer.h"
 #include "qt_test_adapter.h"
 #include "logos_protocol.h"
 #include <nlohmann/json.hpp>
+#include <algorithm>
 #include <chrono>
 #include <cstdlib>
 #include <string>
@@ -324,6 +326,47 @@ TEST_F(InprocBundledTest, TheRuntimeRunsItsModulesInProcessBehindCoreService)
     // An unknown token gets nothing.
     lp_client* stranger = clientAs("stranger-cli", {}, "core_service", "no-such-token");
     EXPECT_TRUE(callWith(stranger, "listModules").is_null());
+
+    // Detector: each watch left a forwarder behind, so the Nth watcher saw every event N times.
+    Events relayed;
+    lp_subscription* moduleEvents = lp_subscribe(alice, "module_event", &onEvent, &relayed);
+    ASSERT_NE(moduleEvents, nullptr);
+    for (const char* event : {"module_state_changed", "module_state_changed", ""})
+        EXPECT_EQ(callWith(alice, "watchModuleEvents", json::array({"modules_state", event})), json(true))
+            << "'" << event << "'";
+    // modules_state emits module_state_changed for each transition core feeds it.
+    auto probe = [] {
+        logos::ModuleStateObserver::instance().record("watch_probe", logos::module_state::kAbsent,
+                                               logos::module_state::kLoading);
+        logos::ModuleStateObserver::instance().flush();
+    };
+    auto probes = [&] {
+        std::lock_guard<std::mutex> lock(relayed.mutex);
+        return std::count_if(relayed.seen.begin(), relayed.seen.end(), [](const json& e) {
+            return e.is_array() && e.size() >= 3 && e[0] == "modules_state" && e[2] == "watch_probe";
+        });
+    };
+    auto settle = [] { std::this_thread::sleep_for(std::chrono::milliseconds(500)); };
+    probe();
+    EXPECT_TRUE(eventually([&] { return probes() >= 1; }));
+    settle();
+    EXPECT_EQ(probes(), 1) << "one forwarder however often the watch is asked for";
+    // Its module leaving ends the watch, and a new one forwards once.
+    logos::ModuleStateObserver::instance().record("modules_state", logos::module_state::kReady,
+                                           logos::module_state::kError, std::nullopt, std::nullopt,
+                                           std::string("watch test"));
+    logos::ModuleStateObserver::instance().flush();
+    probe();
+    settle();
+    EXPECT_EQ(probes(), 1) << "a watch outlived its module";
+    EXPECT_EQ(callWith(alice, "watchModuleEvents",
+                       json::array({"modules_state", "module_state_changed"})), json(true));
+    probe();
+    EXPECT_TRUE(eventually([&] { return probes() >= 2; }));
+    settle();
+    EXPECT_EQ(probes(), 2);
+    lp_unsubscribe(moduleEvents);
+
     lp_client_destroy(plugin);
     lp_client_destroy(alice);
     lp_client_destroy(stranger);
