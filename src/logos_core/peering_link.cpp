@@ -4,6 +4,7 @@
 #include "module_manager.h"
 #include "module_registry.h"
 #include "module_state_observer.h"
+#include "token_authority.h"
 
 #include "logos_protocol.h"
 
@@ -115,11 +116,37 @@ void refreshExports()
     state().exports = std::move(names);
 }
 
+// An import's facade may call peering_module alone, whatever the access mode.
+void pushCallerScopes()
+{
+    json scopes = json::object();
+    for (const std::string& name : ModuleManager::registry().facadeNames())
+        scopes[name] = json::array({kPeering});
+    if (!authority::setCallerScopes(scopes.dump()))
+        spdlog::warn("The token authority takes no caller scopes: facades are not confined");
+}
+
+// capability decides each route from the remote policy it holds, so it gets
+// every new one, and then the routes it no longer allows end.
+void pushRemotePolicy()
+{
+    const json policy = call("remotePolicy", json::array());
+    if (failed(policy)) return;
+    if (!authority::setRemotePolicy(policy.dump())) {
+        spdlog::error("The token authority refused the remote policy; every route is refused");
+        return;
+    }
+    const json reevaluated = call("reevaluateRoutes", json::array());
+    if (!failed(reevaluated) && reevaluated.value("revoked", 0) > 0)
+        spdlog::info("A new remote policy ended the routes of {} peer(s)", reevaluated.value("revoked", 0));
+}
+
 void refreshImports()
 {
     const json imports = call("imports", json::array());
     if (failed(imports)) return;
     auto& registry = ModuleManager::registry();
+    std::vector<std::string> toLoad;
     for (const auto& item : imports.items()) {
         const std::string& name = item.key();
         const json& rule = item.value();
@@ -131,14 +158,18 @@ void refreshImports()
                          preferRemote ? "remote, but it is loaded" : "local");
             continue;
         }
-        if (!ModuleManager::loadModule(name.c_str()))
-            spdlog::warn("Import {}: its facade did not load", name);
+        toLoad.push_back(name);
     }
     for (const std::string& name : registry.facadeNames()) {
         if (imports.contains(name)) continue;
         if (registry.isLoaded(name)) ModuleManager::unloadModule(name.c_str());
         registry.forgetFacade(name);
     }
+    // Confined before any of them can ask for a token.
+    pushCallerScopes();
+    for (const std::string& name : toLoad)
+        if (!ModuleManager::loadModule(name.c_str()))
+            spdlog::warn("Import {}: its facade did not load", name);
 }
 
 // The facade's state as its consumers see it: ready while its import is.
@@ -179,6 +210,8 @@ void onEvent(const char* event, const char* data, void*)
     const json args = json::parse(data ? data : "[]", nullptr, false);
     if (name == "importsChanged") {
         post(refreshImports);
+    } else if (name == "remotePolicyChanged") {
+        post(pushRemotePolicy);
     } else if (name == "exportsChanged") {
         post(refreshExports);
     } else if (name == "importStateChanged" && args.is_array() && args.size() >= 3
@@ -291,13 +324,15 @@ void start()
         s.started = true;
         s.stopping = false;
         s.client = ModuleManager::runtimeClient(kPeering);
-        for (const char* event : {"importsChanged", "exportsChanged", "importStateChanged"})
+        for (const char* event : {"importsChanged", "exportsChanged", "importStateChanged",
+                                  "remotePolicyChanged"})
             if (s.client)
                 if (lp_subscription* sub = lp_subscribe(s.client.get(), event, &onEvent, nullptr))
                     s.subscriptions.push_back(sub);
         s.worker = std::thread(run);
     }
     refreshExports();
+    pushRemotePolicy();
     if (config.value("operator", false)) startOperatorEndpoint(config);
     // Facades load in the background: the runtime's ready line never waits on a peer.
     post(refreshImports);
@@ -314,6 +349,10 @@ void stop()
     if (operatorLink) {
         operatorLink->stop();
         core_service::closeSessions();
+    }
+    if (authority::attached()) {
+        authority::setCallerScopes("{}");
+        authority::setRemotePolicy("{}");
     }
     std::thread worker;
     std::vector<lp_subscription*> subscriptions;
