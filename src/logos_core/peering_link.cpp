@@ -39,6 +39,7 @@ struct State {
     std::map<std::string, std::string> roles;     // announced: facade | export
     std::map<std::string, std::pair<std::string, std::string>> importStates;
     std::map<std::string, std::string> reflected; // a loaded facade's shown state
+    std::map<std::string, json> facadeRules;      // the import rule each facade loaded with
     std::shared_ptr<lp_client> client;
     std::vector<lp_subscription*> subscriptions;
     std::shared_ptr<native_host::ExportLink> operatorLink;
@@ -150,7 +151,19 @@ void refreshImports()
     for (const auto& item : imports.items()) {
         const std::string& name = item.key();
         const json& rule = item.value();
-        if (registry.isFacade(name) && registry.isLoaded(name)) continue;
+        if (registry.isFacade(name) && registry.isLoaded(name)) {
+            json loadedWith;
+            {
+                std::lock_guard<std::mutex> lock(state().mutex);
+                loadedWith = state().facadeRules[name];
+            }
+            if (loadedWith == rule) continue;
+            // A changed rule restarts the facade: every consumer's session then
+            // starts over under it, and one it no longer admits gets none.
+            spdlog::info("Import {} changed: its facade restarts", name);
+            ModuleManager::unloadModule(name.c_str());
+            registry.forgetFacade(name);
+        }
         const bool preferRemote = rule.value("prefer", std::string("remote")) == "remote";
         if (!registry.isFacade(name)
             && !registry.registerFacade(name, facadeMetadata(name, rule), preferRemote)) {
@@ -159,11 +172,15 @@ void refreshImports()
             continue;
         }
         toLoad.push_back(name);
+        std::lock_guard<std::mutex> lock(state().mutex);
+        state().facadeRules[name] = rule;
     }
     for (const std::string& name : registry.facadeNames()) {
         if (imports.contains(name)) continue;
         if (registry.isLoaded(name)) ModuleManager::unloadModule(name.c_str());
         registry.forgetFacade(name);
+        std::lock_guard<std::mutex> lock(state().mutex);
+        state().facadeRules.erase(name);
     }
     // Confined before any of them can ask for a token.
     pushCallerScopes();
@@ -374,6 +391,7 @@ void stop()
     s.roles.clear();
     s.importStates.clear();
     s.reflected.clear();
+    s.facadeRules.clear();
     s.config = json();
 }
 
