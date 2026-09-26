@@ -17,6 +17,10 @@
 , peeringLib ? null   # libpeering: facades then run in-process under single_process
 , portableBuild ? false }:
 
+let
+  # A cross build cannot run its tests, so it neither builds them nor needs gtest.
+  canRunTests = pkgs.stdenv.buildPlatform.canExecute pkgs.stdenv.hostPlatform;
+in
 {
   pname = "logos-liblogos";
   version = "0.1.0";
@@ -33,7 +37,6 @@
     logosProtocolPkg
     pkgs.boost
     pkgs.nlohmann_json
-    pkgs.gtest
     pkgs.spdlog
     processStats
     logosContainer
@@ -41,7 +44,8 @@
     logosModuleLoader
     formatLoaderImpl
     logosPackageManager
-  ] ++ pkgs.lib.optional (peeringLib != null) peeringLib;
+  ] ++ pkgs.lib.optional (peeringLib != null) peeringLib
+    ++ pkgs.lib.optional canRunTests pkgs.gtest;
 
   cmakeFlags = [
     "-GNinja"
@@ -55,6 +59,8 @@
     "-DLOGOS_PACKAGE_MANAGER_ROOT=${logosPackageManager}"
   ] ++ pkgs.lib.optionals portableBuild [
     "-DLOGOS_PORTABLE_BUILD=ON"
+  ] ++ pkgs.lib.optionals (!canRunTests) [
+    "-DLOGOS_BUILD_TESTS=OFF"
   ];
 
   # Environment variables
