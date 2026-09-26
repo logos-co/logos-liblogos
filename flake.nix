@@ -2,12 +2,12 @@
   description = "Logos liblogos core library";
 
   inputs = {
-    logos-nix.url = "github:logos-co/logos-nix";
+    logos-nix.url = "github:logos-co/logos-nix/feat/standalone-apps";
     nixpkgs.follows = "logos-nix/nixpkgs";
-    logos-cpp-sdk.url = "github:logos-co/logos-cpp-sdk/feat/peering";
+    logos-cpp-sdk.url = "github:logos-co/logos-cpp-sdk/feat/standalone-apps";
     logos-cpp-sdk.inputs.logos-protocol.follows = "logos-protocol";
     # On protocol 0.14 (tls_tcp, logos-protocol#99) and the branches stacked on it until they merge.
-    logos-protocol.url = "github:logos-co/logos-protocol/feat/peering";
+    logos-protocol.url = "github:logos-co/logos-protocol/feat/standalone-apps";
     # ONE logos-protocol, and ONE logos-qt-host, in the closure. qt-host bakes
     # sizeof(LogosAPIClient) into its own `operator new` while logos-protocol
     # defines the constructor, so a second protocol here is an 8-byte heap
@@ -17,26 +17,26 @@
     logos-qt-sdk.url = "github:logos-co/logos-qt-sdk";
     logos-qt-sdk.inputs.logos-protocol.follows = "logos-protocol";
     logos-qt-sdk.inputs.logos-plugin-qt.follows = "logos-plugin-qt";
-    logos-plugin-qt.url = "github:logos-co/logos-plugin-qt/feat/peering";
+    logos-plugin-qt.url = "github:logos-co/logos-plugin-qt/feat/standalone-apps";
     logos-plugin-qt.inputs.logos-protocol.follows = "logos-protocol";
-    logos-capability-module.url = "github:logos-co/logos-capability-module/feat/peering";
-    logos-modules-state-module.url = "github:logos-co/logos-modules-state-module/feat/drop-legacy-mode";
+    logos-capability-module.url = "github:logos-co/logos-capability-module/feat/standalone-apps";
+    logos-modules-state-module.url = "github:logos-co/logos-modules-state-module/feat/standalone-apps";
     logos-module.url = "github:logos-co/logos-module";
-    process-stats.url = "github:logos-co/process-stats";
+    process-stats.url = "github:logos-co/process-stats/feat/standalone-apps";
     # The channel-process seam that spawns logos_runtime, on its branches until they merge.
-    logos-container.url = "github:logos-co/logos-container/feat/runtime-process";
-    logos-module-loader.url = "github:logos-co/logos-module-loader";
-    default-container.url = "github:logos-co/logos-container-subprocess/feat/runtime-process";
+    logos-container.url = "github:logos-co/logos-container/feat/standalone-apps";
+    logos-module-loader.url = "github:logos-co/logos-module-loader/feat/standalone-apps";
+    default-container.url = "github:logos-co/logos-container-subprocess/feat/standalone-apps";
     # The default loader LINKS logos-protocol, and this process loads it, so a
     # revision of its own means two of every function-local static in there.
     # Only the protocol-carrying chain follows: the rest of its inputs are lock
     # size, not correctness, and deep follows have broken this repo before.
-    default-module-loader.url = "github:logos-co/logos-module-loader-qt/feat/peering";
+    default-module-loader.url = "github:logos-co/logos-module-loader-qt/feat/standalone-apps";
     default-module-loader.inputs.logos-protocol.follows = "logos-protocol";
     default-module-loader.inputs.logos-plugin-qt.follows = "logos-plugin-qt";
     default-module-loader.inputs.logos-cpp-sdk.follows = "logos-cpp-sdk";
     default-module-loader.inputs.logos-qt-sdk.follows = "logos-qt-sdk";
-    logos-package-manager.url = "github:logos-co/logos-package-manager";
+    logos-package-manager.url = "github:logos-co/logos-package-manager/feat/standalone-apps";
   };
 
   outputs = { self, nixpkgs, logos-nix, logos-cpp-sdk, logos-protocol, logos-qt-sdk, logos-plugin-qt, logos-capability-module, logos-modules-state-module, logos-module, logos-package-manager, process-stats, logos-container, default-container, logos-module-loader, default-module-loader }:
