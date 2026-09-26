@@ -73,13 +73,18 @@
       # Applied to `packages` ONLY: `checks` would have to execute PE test
       # binaries on the Linux builder, and a cross devShell offers no way to run
       # what it produces.
+      #
+      # "aarch64-android" likewise: the Qt-free runtime, its plain host and the
+      # bundled plain modules.
       windowsBuildSystem = "x86_64-linux";
       forAllTargets = f:
-        nixpkgs.lib.genAttrs (systems ++ [ "x86_64-windows" ]) (system: f {
+        nixpkgs.lib.genAttrs (systems ++ [ "x86_64-windows" "aarch64-android" ]) (system: f {
           inherit system;
           pkgs =
             if system == "x86_64-windows"
             then logos-nix.lib.mkWindowsPkgs { buildSystem = windowsBuildSystem; }
+            else if system == "aarch64-android"
+            then logos-nix.lib.mobileTargets.aarch64-android.pkgs
             else import nixpkgs { inherit system; };
           logosProtocolPkg = logos-protocol.packages.${system}.logos-protocol-plain;
           capabilityModule = logos-capability-module.packages.${system}.default;
