@@ -39,7 +39,9 @@ std::string take(const logos_capability_engine_v1* engine, char* value)
 
 bool attach(const logos_capability_engine_v1* engine, lp_provider* capabilityProvider)
 {
-    if (!engine || engine->size < sizeof(logos_capability_engine_v1)
+    // Every version-1 authority has the entries up to string_free; later ones are
+    // looked for where they are used.
+    if (!engine || !LOGOS_CAPABILITY_ENGINE_HAS(engine, string_free)
         || engine->version < LOGOS_CAPABILITY_ENGINE_VERSION) {
         spdlog::critical("capability_module's engine interface is missing or older than "
                          "version {}", LOGOS_CAPABILITY_ENGINE_VERSION);
@@ -117,6 +119,31 @@ bool setRestrictions(const std::string& json)
 {
     const logos_capability_engine_v1* engine = current();
     return engine && engine->set_restrictions(json.c_str()) == 0;
+}
+
+std::optional<std::string> evaluateRemoteAccess(const std::string& peer, const std::string& consumer,
+                                                const std::string& target)
+{
+    const logos_capability_engine_v1* engine = current();
+    if (!engine || !LOGOS_CAPABILITY_ENGINE_HAS(engine, evaluate_remote_access)) return std::nullopt;
+    const std::string decision =
+        take(engine, engine->evaluate_remote_access(peer.c_str(), consumer.c_str(), target.c_str()));
+    if (decision.empty()) return std::nullopt;
+    return decision;
+}
+
+bool setRemotePolicy(const std::string& json)
+{
+    const logos_capability_engine_v1* engine = current();
+    return engine && LOGOS_CAPABILITY_ENGINE_HAS(engine, set_remote_policy)
+        && engine->set_remote_policy(json.c_str()) == 0;
+}
+
+bool setCallerScopes(const std::string& json)
+{
+    const logos_capability_engine_v1* engine = current();
+    return engine && LOGOS_CAPABILITY_ENGINE_HAS(engine, set_caller_scopes)
+        && engine->set_caller_scopes(json.c_str()) == 0;
 }
 
 char* resolveCallerCallback(const char* token, const char* transport, void*)

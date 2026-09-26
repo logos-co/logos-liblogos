@@ -19,7 +19,7 @@
     logos-qt-sdk.inputs.logos-plugin-qt.follows = "logos-plugin-qt";
     logos-plugin-qt.url = "github:logos-co/logos-plugin-qt/feat/peering";
     logos-plugin-qt.inputs.logos-protocol.follows = "logos-protocol";
-    logos-capability-module.url = "github:logos-co/logos-capability-module/feat/drop-legacy-mode";
+    logos-capability-module.url = "github:logos-co/logos-capability-module/feat/peering";
     logos-modules-state-module.url = "github:logos-co/logos-modules-state-module/feat/drop-legacy-mode";
     logos-module.url = "github:logos-co/logos-module";
     process-stats.url = "github:logos-co/process-stats";

@@ -105,7 +105,7 @@ Caller currentCaller()
     return {doc.value("kind", std::string{"unknown"}), doc.value("name", std::string{})};
 }
 
-enum class Scope { Read, Control, Shell, Stop, Forward };
+enum class Scope { Read, Control, Shell, Stop, Forward, Peering };
 
 std::optional<Scope> scopeOf(const std::string& method)
 {
@@ -120,6 +120,7 @@ std::optional<Scope> scopeOf(const std::string& method)
         {"admitConsumer", Scope::Shell},   {"retireConsumer", Scope::Shell},
         {"shutdown", Scope::Stop},
         {"callModuleMethod", Scope::Forward}, {"watchModuleEvents", Scope::Forward},
+        {"evaluateRemoteAccess", Scope::Peering},
     };
     auto it = scopes.find(method);
     return it == scopes.end() ? std::nullopt : std::optional<Scope>(it->second);
@@ -143,6 +144,8 @@ bool allowed(const Caller& caller, Scope scope)
     case Scope::Shell: return isShell(caller);
     case Scope::Stop: return isShell(caller) || operatorCaller;
     case Scope::Forward: return operatorCaller;
+    // peering_module's question on the network path, never anyone else's.
+    case Scope::Peering: return caller.kind == "module" && caller.name == "peering_module";
     }
     return false;
 }
@@ -578,6 +581,15 @@ json shutdownRuntime()
     return {{"status", "ok"}, {"message", "Daemon shutting down."}};
 }
 
+// Whether a consumer on a paired runtime may reach `target`: capability decides.
+json evaluateRemoteAccess(const std::string& peer, const std::string& consumer, const std::string& target)
+{
+    const auto decision = authority::evaluateRemoteAccess(peer, consumer, target);
+    const json parsed = decision ? json::parse(*decision, nullptr, false) : json();
+    if (!parsed.is_object()) return error("UNAVAILABLE", "the token authority decides no remote access");
+    return parsed;
+}
+
 json run(const std::string& method, const json& args, const Caller& caller)
 {
     auto text = [&](std::size_t i, const char* fallback = nullptr) -> std::string {
@@ -607,6 +619,7 @@ json run(const std::string& method, const json& args, const Caller& caller)
     if (method == "admitConsumer") return admitConsumer(text(0), text(1, "presentation"));
     if (method == "retireConsumer") return retireConsumer(text(0));
     if (method == "shutdown") return shutdownRuntime();
+    if (method == "evaluateRemoteAccess") return evaluateRemoteAccess(text(0), text(1), text(2));
     return nullptr;
 }
 
@@ -676,6 +689,8 @@ char* methods(void*)
     add("admitConsumer", {{"name", "string"}, {"kind", "string"}}, "LogosMap");
     add("retireConsumer", {{"name", "string"}}, "LogosMap");
     add("shutdown", {}, "LogosMap");
+    add("evaluateRemoteAccess", {{"peer", "string"}, {"consumer", "string"}, {"target", "string"}},
+        "LogosMap");
     {
         std::lock_guard<std::mutex> lock(config().mutex);
         for (const auto& extra : config().extensionMethods) list.push_back(extra);
