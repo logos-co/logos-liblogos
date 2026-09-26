@@ -20,6 +20,8 @@
 #include <optional>
 #include <set>
 #include <unordered_set>
+#include <functional>
+#include <memory>
 #include <vector>
 
 #ifdef _WIN32
@@ -69,6 +71,7 @@ struct Service {
     // One forwarder per module and event ("" is every event).
     std::map<std::string, std::map<std::string, Watch>> watches;
     std::set<std::string> consumers; // admitted here, so retireConsumer may end them
+    std::vector<std::shared_ptr<void>> kept; // an added listener's authenticator state
 };
 
 // Outside the lock: an unsubscribe waits for a forward in flight.
@@ -102,7 +105,7 @@ Caller currentCaller()
     return {doc.value("kind", std::string{"unknown"}), doc.value("name", std::string{})};
 }
 
-enum class Scope { Read, Control, Shell, Stop, Forward };
+enum class Scope { Read, Control, Shell, Stop, Forward, Peering };
 
 std::optional<Scope> scopeOf(const std::string& method)
 {
@@ -117,6 +120,7 @@ std::optional<Scope> scopeOf(const std::string& method)
         {"admitConsumer", Scope::Shell},   {"retireConsumer", Scope::Shell},
         {"shutdown", Scope::Stop},
         {"callModuleMethod", Scope::Forward}, {"watchModuleEvents", Scope::Forward},
+        {"evaluateRemoteAccess", Scope::Peering},
     };
     auto it = scopes.find(method);
     return it == scopes.end() ? std::nullopt : std::optional<Scope>(it->second);
@@ -140,6 +144,8 @@ bool allowed(const Caller& caller, Scope scope)
     case Scope::Shell: return isShell(caller);
     case Scope::Stop: return isShell(caller) || operatorCaller;
     case Scope::Forward: return operatorCaller;
+    // peering_module's question on the network path, never anyone else's.
+    case Scope::Peering: return caller.kind == "module" && caller.name == "peering_module";
     }
     return false;
 }
@@ -575,6 +581,15 @@ json shutdownRuntime()
     return {{"status", "ok"}, {"message", "Daemon shutting down."}};
 }
 
+// Whether a consumer on a paired runtime may reach `target`: capability decides.
+json evaluateRemoteAccess(const std::string& peer, const std::string& consumer, const std::string& target)
+{
+    const auto decision = authority::evaluateRemoteAccess(peer, consumer, target);
+    const json parsed = decision ? json::parse(*decision, nullptr, false) : json();
+    if (!parsed.is_object()) return error("UNAVAILABLE", "the token authority decides no remote access");
+    return parsed;
+}
+
 json run(const std::string& method, const json& args, const Caller& caller)
 {
     auto text = [&](std::size_t i, const char* fallback = nullptr) -> std::string {
@@ -604,6 +619,7 @@ json run(const std::string& method, const json& args, const Caller& caller)
     if (method == "admitConsumer") return admitConsumer(text(0), text(1, "presentation"));
     if (method == "retireConsumer") return retireConsumer(text(0));
     if (method == "shutdown") return shutdownRuntime();
+    if (method == "evaluateRemoteAccess") return evaluateRemoteAccess(text(0), text(1), text(2));
     return nullptr;
 }
 
@@ -673,6 +689,8 @@ char* methods(void*)
     add("admitConsumer", {{"name", "string"}, {"kind", "string"}}, "LogosMap");
     add("retireConsumer", {{"name", "string"}}, "LogosMap");
     add("shutdown", {}, "LogosMap");
+    add("evaluateRemoteAccess", {{"peer", "string"}, {"consumer", "string"}, {"target", "string"}},
+        "LogosMap");
     {
         std::lock_guard<std::mutex> lock(config().mutex);
         for (const auto& extra : config().extensionMethods) list.push_back(extra);
@@ -849,16 +867,42 @@ bool start()
     return true;
 }
 
+bool addEndpoint(const std::string& transportJson, const std::function<bool(lp_provider*)>& configure,
+                 std::shared_ptr<void> keep)
+{
+    Service& s = service();
+    lp_provider* provider = nullptr;
+    {
+        std::lock_guard<std::mutex> lock(s.mutex);
+        if (!s.provider) return false;
+        provider = s.provider;
+        // Before the authenticator exists, so it never outlives what it uses.
+        s.kept.push_back(std::move(keep));
+    }
+    return configure(provider) && lp_provider_add_endpoint(provider, transportJson.c_str()) == LP_OK;
+}
+
+void closeSessions()
+{
+    Service& s = service();
+    std::lock_guard<std::mutex> lock(s.mutex);
+    if (!s.provider) return;
+    lp_provider_set_trust_anchors(s.provider, "");
+    lp_provider_close_sessions(s.provider, "{}");
+}
+
 void stop()
 {
     Service& s = service();
     lp_provider* provider = nullptr;
     std::vector<Watch> watches;
     std::map<std::pair<std::string, std::string>, lp_client*> clients;
+    std::vector<std::shared_ptr<void>> kept;
     {
         std::lock_guard<std::mutex> lock(s.mutex);
         provider = s.provider;
         s.provider = nullptr;
+        kept.swap(s.kept);
         for (auto& [module, events] : s.watches)
             for (auto& [name, watch] : events) watches.push_back(watch);
         s.watches.clear();
@@ -874,6 +918,7 @@ void stop()
         if (client) lp_client_destroy(client);
     if (!provider) return;
     lp_provider_destroy(provider);
+    kept.clear();
     ModuleManager::registry().forgetEmbedded(kName);
     authority::retire(kName);
 }

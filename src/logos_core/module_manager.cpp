@@ -11,6 +11,7 @@
 #include "module_loader_registry.h"
 #include "composite_module_loader.h"
 #include "module_state_observer.h"
+#include "peering_link.h"
 #include <logos_container/container_factory.h>
 #include <logos_module_loader/format_loader_factory.h>
 #include <spdlog/spdlog.h>
@@ -1067,6 +1068,7 @@ namespace {
                 return;
 
             logos::authority::retire(n);
+            logos::peering_link::exited(n);
             auto& observer = logos::ModuleStateObserver::instance();
             if (consumeExpectedExit(n)) {
                 observer.record(n, logos::module_state::kStopping,
@@ -1078,6 +1080,13 @@ namespace {
             }
             observer.flush();
         };
+
+        // peering_module hears of a facade or an export before its host asks
+        // for a certificate; an export gains its tls_tcp listener here.
+        logos::peering_link::Announcement peering = logos::peering_link::beforeSpawn(
+            name, desc.format,
+            std::dynamic_pointer_cast<LogosCore::InprocModuleLoader>(loader) != nullptr,
+            desc.transportSetJson);
 
         // Past here a child process may exist, so a termination belongs to this
         // attempt rather than to whatever the module was doing before.
@@ -1212,6 +1221,7 @@ namespace {
 
         pushRestrictions();
 
+        peering.commit();
         spdlog::info("Module loaded: {}", name);
         logos::ModuleStateObserver::instance().record(
             name, logos::module_state::kLoading, logos::module_state::kLoaded,
@@ -1220,6 +1230,12 @@ namespace {
         // The feed can only exist once its consumer does.
         if (name == kModulesState)
             enableModulesStateFeed();
+
+        // A facade is ready when its import is, not when its host started.
+        if (registryInstance().isFacade(name)) {
+            logos::peering_link::facadeLoaded(name);
+            return true;
+        }
 
         // After the feed: modules_state installs the sink as it loads, and
         // armReadinessWatch is a no-op without one, so it must see its own sink.
@@ -1314,6 +1330,16 @@ namespace ModuleManager {
 
     ModuleRegistry& registry() {
         return registryInstance();
+    }
+
+    nlohmann::json callAsRuntime(const std::string& target, const std::string& method,
+                                 const nlohmann::json& args) {
+        if (!registryInstance().isLoaded(target)) return nullptr;
+        return invokeModule(target, method, args);
+    }
+
+    std::shared_ptr<lp_client> runtimeClient(const std::string& target) {
+        return moduleClient(target);
     }
 
     void anchorCoreApi() {
@@ -1682,6 +1708,7 @@ namespace ModuleManager {
         // While their target still answers; the teardown's own transitions
         // are not sent.
         orderedCalls().stop();
+        logos::peering_link::stop();
         // EXCLUSIVE: markAllLoadedExitsExpected needs the loaded set to hold
         // still, and every load and unload holds this shared for its span.
         std::unique_lock<std::shared_mutex> fleet(fleetMutex());
@@ -1719,6 +1746,7 @@ namespace ModuleManager {
         // While their target still answers; the teardown's own transitions
         // are not sent.
         orderedCalls().stop();
+        logos::peering_link::stop();
         // EXCLUSIVE: markAllLoadedExitsExpected needs the loaded set to hold
         // still, and every load and unload holds this shared for its span.
         std::unique_lock<std::shared_mutex> fleet(fleetMutex());

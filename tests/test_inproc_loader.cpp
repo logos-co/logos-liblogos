@@ -365,6 +365,40 @@ TEST_F(InprocBundledTest, TheRuntimeRunsItsModulesInProcessBehindCoreService)
     lp_client* stranger = clientAs("stranger-cli", {}, "core_service", "no-such-token");
     EXPECT_TRUE(callWith(stranger, "listModules").is_null());
 
+    // The peering scope: peering_module's question alone, which capability decides
+    // from the remote policy the runtime hands it.
+    const std::string peeringCredential = logos::authority::admit("peering_module", "module");
+    ASSERT_FALSE(peeringCredential.empty());
+    lp_client* peering = clientAs("peering_module", peeringCredential);
+    const json question = json::array({"peer-1", "wallet", "modules_state"});
+    const json unlisted = callWith(peering, "evaluateRemoteAccess", question);
+    EXPECT_EQ(unlisted.value("allow", true), false) << unlisted.dump();
+    ASSERT_TRUE(logos::authority::setRemotePolicy(R"({"peer-1/wallet":["modules_state"]})"));
+    const json granted = callWith(peering, "evaluateRemoteAccess", question);
+    EXPECT_EQ(granted.value("allow", false), true) << granted.dump();
+    EXPECT_FALSE(granted.value("decision", std::string{}).empty());
+    EXPECT_TRUE(forbidden(callWith(alice, "evaluateRemoteAccess", question)));
+    ASSERT_TRUE(logos::authority::setRemotePolicy("{}"));
+    // A facade's scope: it gets no token for anything but peering_module.
+    const std::string facadeCredential = logos::authority::admit("an_import", "module");
+    ASSERT_TRUE(logos::authority::setCallerScopes(R"({"an_import":["peering_module"]})"));
+    lp_client* facade = clientAs("an_import", facadeCredential);
+    lp_client* facadeToState = lp_client_create("modules_state", "an_import", nullptr, nullptr);
+    {
+        char* out = nullptr;
+        char* err = nullptr;
+        EXPECT_NE(lp_invoke(facadeToState, "list_modules", "[]", 5000, &out, &err), LP_OK)
+            << "a facade reached a module outside its scope";
+        lp_string_free(out);
+        lp_string_free(err);
+    }
+    lp_client_destroy(facadeToState);
+    lp_client_destroy(facade);
+    lp_client_destroy(peering);
+    ASSERT_TRUE(logos::authority::setCallerScopes("{}"));
+    logos::authority::retire("an_import");
+    logos::authority::retire("peering_module");
+
     // Detector: each watch left a forwarder behind, so the Nth watcher saw every event N times.
     Events relayed;
     lp_subscription* moduleEvents = lp_subscribe(alice, "module_event", &onEvent, &relayed);

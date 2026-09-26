@@ -62,6 +62,9 @@ struct ModuleInfo {
     // Part of the runtime itself (core_service): known and loaded for dependency
     // checks, never listed as a module.
     bool embedded = false;
+    // An import of a module on another runtime, hosted by a facade. It has no
+    // file, so refresh keeps it, and a local copy waits until it is removed.
+    bool facade = false;
     bool loaded = false;
     // Unix timestamp (seconds) of the most recent load, set by markLoaded and
     // cleared to 0 by markUnloaded. 0 ⟺ not currently loaded. Callers derive a
@@ -94,6 +97,14 @@ public:
 
     void registerEmbedded(const std::string& name);
     void forgetEmbedded(const std::string& name);
+
+    // A facade record for an import. False when `name` is loaded, or is a local
+    // module and `replaceLocal` is false.
+    bool registerFacade(const std::string& name, const nlohmann::json& metadata, bool replaceLocal);
+    // Drops a facade record that is not loaded.
+    bool forgetFacade(const std::string& name);
+    bool isFacade(const std::string& name) const;
+    std::vector<std::string> facadeNames() const;
 
     void discoverInstalledModules();
     std::string processModule(const std::string& modulePath);
@@ -202,6 +213,7 @@ private:
 
     bool isUnderBundledDirLocked(const std::string& path) const;
     bool admitsRecordLocked(const std::string& name, const std::string& modulePath) const;
+    bool keepsFacadeRecordLocked(const std::string& name, const std::string& modulePath) const;
     bool keepsLoadedRecordLocked(const ModuleInfo& info, const std::string& name,
                                  const std::string& modulePath) const;
 

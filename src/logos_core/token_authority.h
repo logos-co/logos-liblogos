@@ -33,6 +33,15 @@ std::string grantOperatorPair(const std::string& op, const std::string& target);
 // Replaces the access policy, {"<target>":["<caller>",...]}; false when refused.
 bool setRestrictions(const std::string& json);
 
+// Peering. capability's decision for `consumer` on runtime `peer` reaching
+// `target`, {"allow","decision"}; nothing when its engine has no such entry.
+std::optional<std::string> evaluateRemoteAccess(const std::string& peer, const std::string& consumer,
+                                                const std::string& target);
+// {"<runtime id>/<consumer>":["<target>",...]}; false when refused or unsupported.
+bool setRemotePolicy(const std::string& json);
+// {"<caller>":["<target>",...]}: those callers pair with the targets listed only.
+bool setCallerScopes(const std::string& json);
+
 // For a provider's lp_provider_set_caller_resolver: callers capability knows.
 char* resolveCallerCallback(const char* token, const char* transport, void* userData);
 
