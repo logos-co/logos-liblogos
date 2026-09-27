@@ -30,11 +30,14 @@ PlacementPolicy policy(const std::string& text)
     return parsed;
 }
 
-// The nix check links libpeering: there, a build without it is a failure, not a skip.
+// The nix check links libpeering, except on Windows where the flake leaves it out:
+// elsewhere a build without it is a failure, not a skip.
 bool facadesBuilt()
 {
     if (LogosCore::facadesRunInProcess()) return true;
+#ifndef _WIN32
     if (std::getenv("LOGOS_REQUIRE_TEST_FIXTURES")) ADD_FAILURE() << "built without libpeering";
+#endif
     return false;
 }
 
