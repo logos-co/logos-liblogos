@@ -174,16 +174,20 @@ TEST(RuntimeControl, ARemoteConsumerGetsOnlyTheMethodsItsRuntimeIsGranted)
     EXPECT_TRUE(refused(json::parse(other ? other : "null", nullptr, false)));
     lp_string_free(other);
 
-    // Forwarding needs a grant on the target method too, and never reaches the authority.
+    // Forwarding needs a grant on the target method too; the exact target wins over "*".
     ASSERT_TRUE(policy({{"peer-1/ctl", {{"core_service", {"callModuleMethod", "watchModuleEvents"}},
-                                        {"wallet", {"balance"}}}}}));
+                                        {"wallet", {"balance"}}, {"*", "*"}}}}));
     EXPECT_TRUE(refused(call("callModuleMethod", {"wallet", "send", json::array()})));
     const json unloaded = call("callModuleMethod", {"wallet", "balance", json::array()});
     EXPECT_EQ(unloaded.value("code", std::string()), "MODULE_NOT_LOADED") << unloaded.dump();
-    const json closed = call("callModuleMethod", {"capability_module", "requestModule", json::array()});
-    EXPECT_EQ(closed.value("error", json::object()).value("code", std::string()), "unauthorized") << closed.dump();
-    EXPECT_EQ(call("watchModuleEvents", {"capability_module", ""}), json(false));
-    EXPECT_EQ(call("watchModuleEvents", {"ledger", ""}), json(false));
+    EXPECT_EQ(call("watchModuleEvents", {"ledger", ""}), json(false)) << "granted, not loaded";
+    // Never the runtime's own modules, whatever "*" grants.
+    for (const char* own : {"capability_module", "modules_state", "peering_module", "package_manager"}) {
+        const json closed = call("callModuleMethod", {own, "anything", json::array()});
+        EXPECT_EQ(closed.value("error", json::object()).value("code", std::string()), "unauthorized")
+            << own << ": " << closed.dump();
+        EXPECT_EQ(call("watchModuleEvents", {own, ""}), json(false)) << own;
+    }
 
     ASSERT_TRUE(policy(json::object()));
     logos_core_terminate_all();

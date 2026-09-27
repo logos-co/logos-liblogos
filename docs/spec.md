@@ -307,8 +307,10 @@ endpoint, gets no scope: capability's remote policy decides each method
 (`evaluate_remote_call`), the embedder's included, and a refusal is
 `NOT_AUTHORISED` with the decision id. The shell and peering scopes are never
 its. Forwarding needs a grant on the target method too (any grant on the
-target, to watch its events) and never reaches capability_module or
-core_service; the target sees the operator `@peer:<runtime>:<consumer>`.
+target, to watch its events) and never reaches the runtime's own modules
+(reserved names: capability_module, core_service, modules_state, the package
+and peering modules), so a policy's `"*"` covers user modules only; the target
+sees the operator `@peer:<runtime>:<consumer>`.
 
 logos-cpp-sdk ships the contract as `core_service.lidl`.
 

@@ -379,11 +379,11 @@ TEST_F(InprocBundledTest, TheRuntimeRunsItsModulesInProcessBehindCoreService)
     EXPECT_EQ(granted.value("allow", false), true) << granted.dump();
     EXPECT_FALSE(granted.value("decision", std::string{}).empty());
     EXPECT_TRUE(forbidden(callWith(alice, "evaluateRemoteAccess", question)));
-    // Runtime Control: a remote consumer forwards what capability grants it, per method,
-    // and reaches the target as the operator @peer:<runtime>:<consumer>.
+    // Runtime Control, with the real authority: capability decides each method, and a
+    // forwarded call never reaches the runtime's own modules, granted or not.
     ASSERT_TRUE(logos::authority::setRemotePolicy(
-        R"({"peer-1/ctl":{"core_service":["callModuleMethod","watchModuleEvents"],)"
-        R"("modules_state":["list_modules"]}})"));
+        R"({"peer-1/ctl":{"core_service":["callModuleMethod","watchModuleEvents","getStatus"],)"
+        R"("modules_state":"*"}})"));
     const auto remote = [](const char* method, const json& args) {
         char* out = logos::core_service::dispatchAs(R"({"kind":"remote","peer":"peer-1","name":"ctl"})",
                                                     method, args.dump().c_str());
@@ -391,12 +391,11 @@ TEST_F(InprocBundledTest, TheRuntimeRunsItsModulesInProcessBehindCoreService)
         lp_string_free(out);
         return value;
     };
-    const json granted2 = remote("callModuleMethod", json::array({"modules_state", "list_modules", json::array()}));
-    EXPECT_EQ(granted2.value("status", std::string{}), "ok") << granted2.dump();
-    const json ungranted = remote("callModuleMethod",
-                                  json::array({"modules_state", "module_record", json::array({"core_service"})}));
-    EXPECT_EQ(ungranted.value("code", std::string{}), "NOT_AUTHORISED") << ungranted.dump();
-    EXPECT_EQ(remote("watchModuleEvents", json::array({"modules_state", ""})), json(true));
+    EXPECT_TRUE(remote("getStatus", json::array()).contains("daemon"));
+    EXPECT_EQ(remote("listModules", json::array({"all"})).value("code", std::string{}), "NOT_AUTHORISED");
+    const json own = remote("callModuleMethod", json::array({"modules_state", "list_modules", json::array()}));
+    EXPECT_EQ(own.value("error", json::object()).value("code", std::string{}), "unauthorized") << own.dump();
+    EXPECT_EQ(remote("watchModuleEvents", json::array({"modules_state", ""})), json(false));
     ASSERT_TRUE(logos::authority::setRemotePolicy("{}"));
     // A facade's scope: it gets no token for anything but peering_module.
     const std::string facadeCredential = logos::authority::admit("an_import", "module");

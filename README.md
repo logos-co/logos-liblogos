@@ -231,7 +231,8 @@ Each core_service method answers the callers its scope admits:
 - a remote consumer (Remote Runtime Control, with peering's `runtime_control`
   on) may call a method only when the remote policy grants it, never the
   shell's or peering's; a forwarded call also needs a grant on the target
-  method, and reaches it as the operator `@peer:<runtime>:<consumer>`.
+  method, never reaches the runtime's own modules (reserved names), and
+  reaches its target as the operator `@peer:<runtime>:<consumer>`.
 
 `moduleStateChanged` carries every lifecycle transition. `getModuleInfo` and
 `getModulesInfo` name where a loaded module runs: `placement` is `inproc` or

@@ -457,11 +457,12 @@ bool isPackageModule(const std::string& module)
 }
 
 // An operator's call reaches the target as that operator, never as the runtime,
-// and never reaches the token store or this service; nor does a remote consumer's.
+// and never reaches the token store or this service. A remote consumer's reaches
+// none of the runtime's own modules, so a policy's "*" means user modules only.
 bool closedToOperator(const Caller& caller, const std::string& module)
 {
-    return (caller.kind == "operator" || caller.kind == "remote")
-        && (module == "capability_module" || module == kName);
+    if (caller.kind == "remote") return bootstrap::isReservedName(module);
+    return caller.kind == "operator" && (module == "capability_module" || module == kName);
 }
 
 json callModuleMethod(const Caller& caller, const std::string& module, const std::string& method,
@@ -471,7 +472,8 @@ json callModuleMethod(const Caller& caller, const std::string& module, const std
     if (closedToOperator(caller, module))
         return callEnvelope(module, method, nullptr,
                             CallFailure{"unauthorized",
-                                        "an operator cannot call " + module + " through core_service",
+                                        (caller.kind == "remote" ? "a remote consumer" : "an operator")
+                                            + std::string(" cannot call ") + module + " through core_service",
                                         kName},
                             {});
     // A remote consumer needs a grant on the method too, asked first so a refusal says nothing more.
