@@ -29,8 +29,7 @@ protected:
 
     void TearDown() override
     {
-        logos_core_set_access_policy(nullptr);
-        // clear() re-attaches the stand-in for the next case.
+        // clear() drops the policy and re-attaches the stand-in for the next case.
         FakeHostFixture::TearDown();
     }
 };
@@ -41,6 +40,38 @@ long indexOf(const std::string& event)
     const auto events = stand_in::events();
     const auto it = std::find(events.begin(), events.end(), event);
     return it == events.end() ? -1 : static_cast<long>(it - events.begin());
+}
+
+char* aliceOperator(const char* token, const char*, void*)
+{
+    return token && std::string(token) == "alice-token" ? lp_string_copy("alice") : nullptr;
+}
+
+// callModuleMethod on core_service as operator alice.
+json forwardAsAlice(const char* module, const char* method, const json& args = json::array())
+{
+    lp_token_isolate_identity("@test-alice");
+    lp_token_save_for("@test-alice", "core_service", "alice-token");
+    lp_client* client = lp_client_create("core_service", "@test-alice", nullptr, nullptr);
+    if (!client) return nullptr;
+    char* result = nullptr;
+    char* error = nullptr;
+    const json call = json::array({module, method, args});
+    const int status = lp_invoke(client, "callModuleMethod", call.dump().c_str(), 10000, &result, &error);
+    json value = status == LP_OK && result ? json::parse(result, nullptr, false) : json(nullptr);
+    lp_string_free(result);
+    lp_string_free(error);
+    lp_client_destroy(client);
+    return value;
+}
+
+bool refusedByGrant(const json& reply)
+{
+    if (!reply.is_object()) return false;
+    if (reply.value("code", std::string{}) == "FORBIDDEN") return true;
+    const json error = reply.value("error", json::object());
+    return error.value("code", std::string{}) == "not_authorised"
+        && error.value("origin", std::string{}) == "core_service";
 }
 
 long firstRulesPush()
@@ -326,4 +357,38 @@ TEST_F(TokenAuthorityTest, AVersionOneEngineTakesOnlyVersionOnePolicies)
     EXPECT_EQ(logos_core_load_module("second", LOGOS_LOAD_MODULE_ONLY), 0);
     EXPECT_NE(reasonFor("second", logos::module_state::kError).find("access policy"),
               std::string::npos);
+}
+
+// Detector: operators reach the package modules as core_service, so core_service
+// forwarded any method, whatever the operator's own grant said.
+TEST_F(TokenAuthorityTest, AnOperatorsPackageCallsKeepToItsGrant)
+{
+    ASSERT_EQ(logos_core_set_operator_resolver(&aliceOperator, nullptr), 0);
+    logos_core_register_module("package_manager", "/fake/package_manager");
+    logos_core_register_module("package_downloader", "/fake/package_downloader");
+    logos_core_start();
+    ASSERT_TRUE(ModuleManager::registry().isLoaded("core_service"));
+    logos_core_mark_module_loaded("package_manager");
+    logos_core_mark_module_loaded("package_downloader");
+    // package_manager, served here and holding a token core_service presents.
+    lp_provider* packages = lp_provider_create("package_manager", R"([{"protocol":"inproc"}])");
+    ASSERT_NE(packages, nullptr);
+    ASSERT_EQ(lp_provider_save_token(packages, "core_service", "pm-token"), LP_OK);
+    ASSERT_EQ(lp_token_save_for("core_service", "package_manager", "pm-token"), LP_OK);
+    ASSERT_EQ(lp_provider_register(packages, [](const char*, const char*, void*) {
+        return lp_string_copy("\"served\""); }, [](void*) { return lp_string_copy("[]"); },
+        nullptr, nullptr), LP_OK);
+    stand_in::grant("@op:alice", "package_manager", R"(["listKeys"])");
+    stand_in::grant("@op:alice", "package_downloader", "[]");
+
+    const json outside = forwardAsAlice("package_manager", "installPlugin", {"x.lgx"});
+    EXPECT_EQ(outside.value("code", std::string{}), "METHOD_FAILED") << outside.dump();
+    EXPECT_TRUE(refusedByGrant(outside)) << outside.dump();
+    for (const char* method : {"listKeys", "name"}) {
+        const json served = forwardAsAlice("package_manager", method);
+        EXPECT_EQ(served.value("result", json()), "served") << method << ": " << served.dump();
+    }
+    const json none = forwardAsAlice("package_downloader", "listPackages");
+    EXPECT_EQ(none.value("code", std::string{}), "FORBIDDEN") << none.dump();
+    lp_provider_destroy(packages);
 }

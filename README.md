@@ -228,7 +228,9 @@ Each core_service method answers the callers its scope admits:
   loaded", and blocks for the bring-up); capability_module is never unloaded;
 - only the shell admits presentation consumers (`admitConsumer`);
 - only operators forward calls (`callModuleMethod`, `watchModuleEvents`), and
-  never to the runtime's own modules.
+  never to the runtime's own modules. A call goes under the operator's own
+  grant, which core_service checks itself for the package modules: those take
+  operators' calls as core_service.
 
 `moduleStateChanged` carries every lifecycle transition. `getModuleInfo` and
 `getModulesInfo` name where a loaded module runs: `placement` is `inproc` or

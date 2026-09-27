@@ -299,7 +299,7 @@ The embedder's configuration before start, the runtime's lifecycle, and the shel
 | `listModules(filter?)`, `getStatus()`, `getModuleInfo(name)`, `getModulesInfo()`, `getModuleStats()` | read | The known and loaded modules, one module's record, every module's record, and CPU/memory per loaded module. |
 | `getModuleDependencies(name, recursive?)`, `getModuleDependents(name, recursive?)`, `getModuleOptionalDependencies(name)`, `getOptionalLoadReport(name)` | read | The dependency graph: forward and reverse edges (a breadth-first walk when `recursive`), the optional edges, and what an optional load would leave out. Unknown names answer an empty array. |
 | `admitConsumer(name, kind)` / `retireConsumer(name)` | shell | Admit a presentation consumer (a UI plugin) and return its credential; end it. |
-| `callModuleMethod(...)`, `watchModuleEvents(...)` | operator | Forward an operator's call or subscription, never to the runtime's own modules. |
+| `callModuleMethod(...)`, `watchModuleEvents(...)` | operator | Forward an operator's call or subscription, never to the runtime's own modules. A call reaches its target as `@op:<name>`, under that operator's grant; the package modules take it as core_service, which first checks the operator's own grant (`FORBIDDEN` for none, `METHOD_FAILED` with `not_authorised` for a method outside it). |
 | `shutdown()` | stop | Hand shutdown to the embedder's handler. |
 
 logos-cpp-sdk ships the contract as `core_service.lidl`.
