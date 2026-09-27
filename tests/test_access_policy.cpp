@@ -7,10 +7,10 @@
 // itself lives in capability_module (tested there). These tests pin the parse
 // contract:
 //   - the exact basecamp/daemon production document parses correctly
-//   - mode != "enforce" is reflected via enforce()==false (core registers nothing)
-//   - tolerant parsing: unknown keys ignored, missing/!object restrictions ->
-//     empty, missing allowedCallers -> target with empty caller list
-//   - the ONLY hard failure is invalid JSON -> std::nullopt
+//   - mode "off", or none, is reflected via enforce()==false (core registers nothing)
+//   - tolerant where it cannot open a target: unknown keys ignored, missing
+//     restrictions -> empty, missing allowedCallers -> target with no callers
+//   - refused: invalid JSON, a field of the wrong type, an unknown version or mode
 // =============================================================================
 #include <gtest/gtest.h>
 
@@ -68,15 +68,26 @@ TEST(AccessPolicyParse, ParsesProductionDocument) {
 
 // ── mode semantics ───────────────────────────────────────────────────────────
 
-TEST(AccessPolicyParse, NonEnforceModeReportsEnforceFalse) {
+TEST(AccessPolicyParse, OffModeReportsEnforceFalse) {
     auto policy = parseAccessPolicy(
-        "{\"version\":1,\"mode\":\"audit\",\"restrictions\":{"
+        "{\"version\":1,\"mode\":\"off\",\"restrictions\":{"
         "\"package_manager\":{\"allowedCallers\":[\"package_manager_ui\"]}}}");
     ASSERT_TRUE(policy.has_value());
-    EXPECT_EQ(policy->mode, "audit");
+    EXPECT_EQ(policy->mode, "off");
     EXPECT_FALSE(policy->enforce());
-    // Restrictions still parse — core just won't register them in non-enforce.
+    // Restrictions still parse — core just won't register them when off.
     EXPECT_EQ(policy->restrictions.size(), 1u);
+}
+
+// Detector: a mistyped mode switched enforcement off and the runtime started open.
+TEST(AccessPolicyParse, AnUnknownModeIsRefused) {
+    for (const char* mode : {"audit", "enforced", "Enforce", ""}) {
+        std::string error;
+        EXPECT_FALSE(parseAccessPolicy(std::string("{\"version\":1,\"mode\":\"") + mode
+                                       + "\",\"restrictions\":{}}", &error).has_value())
+            << "'" << mode << "'";
+        EXPECT_NE(error.find("mode"), std::string::npos) << error;
+    }
 }
 
 TEST(AccessPolicyParse, MissingModeIsNotEnforce) {
@@ -150,6 +161,28 @@ TEST(AccessPolicyParse, NonStringCallersAreSkipped) {
 }
 
 // ── Hard failures ────────────────────────────────────────────────────────────
+
+// Detector: a wrong-typed version or mode escaped the parser as an exception.
+TEST(AccessPolicyParse, AFieldOfTheWrongTypeIsRefused) {
+    for (const char* text : {
+             R"({"version":"1","mode":"enforce"})",
+             R"({"version":1.5,"mode":"enforce"})",
+             R"({"version":1,"mode":1})",
+             R"({"version":1,"mode":"enforce","restrictions":[]})",
+             R"({"version":1,"mode":"enforce","restrictions":{"t":["a"]}})",
+             R"({"version":1,"mode":"enforce","restrictions":{"t":{"allowedCallers":"a"}}})",
+             R"({"version":1,"mode":"enforce","restrictions":{"t":{"allowedCallers":{"a":"*"}}}})"}) {
+        std::string error;
+        EXPECT_FALSE(parseAccessPolicy(text, &error).has_value()) << text;
+        EXPECT_FALSE(error.empty()) << text;
+    }
+}
+
+TEST(AccessPolicyParse, AnUnknownVersionIsRefused) {
+    EXPECT_FALSE(parseAccessPolicy(R"({"version":3,"mode":"enforce"})").has_value());
+    EXPECT_FALSE(parseAccessPolicy(R"({"version":-1,"mode":"enforce"})").has_value());
+    EXPECT_TRUE(parseAccessPolicy(R"({"version":0,"mode":"enforce"})").has_value());
+}
 
 TEST(AccessPolicyParse, InvalidJsonReturnsNullopt) {
     EXPECT_FALSE(parseAccessPolicy("{not valid json").has_value());

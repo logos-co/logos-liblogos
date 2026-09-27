@@ -233,13 +233,16 @@ LOGOS_CORE_EXPORT void logos_core_set_module_transports(const char* module_name,
 //     }
 //
 // A restricted target rejects callers outside its allowlist; a target
-// absent from `restrictions` is unrestricted. Only `mode` == "enforce"
-// activates gating (any other value registers nothing). Enforced by
-// capability_module, which won't issue a token — hence won't allow the
-// call — for a disallowed caller.
+// absent from `restrictions` is unrestricted, and one with no callers admits
+// only the shell. `mode` "enforce" activates gating; "off", or no mode, leaves
+// every target open. Enforced by capability_module, which won't issue a
+// token — hence won't allow the call — for a disallowed caller.
 //
-// Must be called before logos_core_start(). NULL or "" clears the policy.
-LOGOS_CORE_EXPORT void logos_core_set_access_policy(const char* policy_json);
+// Protected input, before logos_core_start() only. NULL or "" clears the
+// policy. Returns 0, or -1 after start or for a policy it refuses (invalid
+// JSON, a field of the wrong type, an unknown version or mode); after a
+// refusal logos_core_start() does not start the runtime.
+LOGOS_CORE_EXPORT int logos_core_set_access_policy(const char* policy_json);
 
 #ifdef __cplusplus
 }

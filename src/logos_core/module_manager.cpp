@@ -311,6 +311,12 @@ namespace {
         return p;
     }
 
+    // Set when the embedder's last policy was refused: the runtime then does not start.
+    std::atomic<bool>& accessPolicyRefusedFlag() {
+        static std::atomic<bool> refused{false};
+        return refused;
+    }
+
     // Trusted callers and exempt targets come from the bootstrap policy table.
 
     // Built-in default loader, composed from the container + format-loader the
@@ -565,17 +571,18 @@ namespace {
     }
 
     // A module may only call modules it declared as a dependency, so `target`'s
-    // allowed callers are its loaded dependents plus the trusted set. Empty when
-    // exempt or no enforce policy (fail-open); explicit policy overrides verbatim.
-    std::vector<std::string> derivedAllowedCallersFor(const std::string& target) {
+    // allowed callers are its loaded dependents plus the trusted set. nullopt when
+    // exempt or no enforce policy: no rule, so the target is open. An explicit
+    // rule overrides verbatim, and one with no callers admits only the shell.
+    std::optional<std::vector<std::string>> listRuleFor(const std::string& target) {
         if (logos::bootstrap::isExemptTarget(target))
-            return {};
+            return std::nullopt;
 
         {
             std::shared_lock<std::shared_mutex> g(configMutex());
             const auto& policy = parsedEnforcePolicy();
             if (!policy)
-                return {};
+                return std::nullopt;
 
             for (const auto& r : policy->restrictions)
                 if (r.target == target)
@@ -606,6 +613,10 @@ namespace {
         return withShell(std::move(callers));
     }
 
+    std::vector<std::string> derivedAllowedCallersFor(const std::string& target) {
+        return listRuleFor(target).value_or(std::vector<std::string>{});
+    }
+
     // The whole access policy capability_module enforces, as one document: the
     // explicit rules, and the derived ones of every loaded module. A target
     // absent is unrestricted; without an enforce policy the document is empty.
@@ -625,9 +636,8 @@ namespace {
         for (const auto& target : targets) {
             if (document.contains(target))
                 continue;
-            const auto callers = derivedAllowedCallersFor(target);
-            if (!callers.empty())
-                document[target] = callers;
+            if (const auto callers = listRuleFor(target))
+                document[target] = *callers;
         }
         return document;
     }
@@ -637,13 +647,16 @@ namespace {
     // Each push reads the loaded set, so the pushes have to be ordered against
     // each other or the last word can come from a reader that ran before the
     // other module committed. runOnOwner runs them one at a time.
-    void pushRestrictions() {
+    bool pushRestrictions() {
         if (!logos::authority::attached())
-            return;
-        runOnOwner([]() {
-            if (!logos::authority::setRestrictions(restrictionsDocument().dump()))
+            return true;
+        bool taken = false;
+        runOnOwner([&taken]() {
+            taken = logos::authority::setRestrictions(restrictionsDocument().dump());
+            if (!taken)
                 spdlog::error("capability_module refused the access policy");
         });
+        return taken;
     }
 
     // capability_module becomes the token authority through its engine
@@ -1074,6 +1087,8 @@ namespace {
                 return;
 
             logos::authority::retire(n);
+            // Its callers' routes to what it depended on go with it.
+            pushRestrictions();
             auto& observer = logos::ModuleStateObserver::instance();
             if (consumeExpectedExit(n)) {
                 observer.record(n, logos::module_state::kStopping,
@@ -1402,41 +1417,43 @@ namespace ModuleManager {
     }
 
     // THE deny-by-default switch. `mode: "enforce"` is the whole flag: it is
-    // what turns the derived restrictions on (derivedAllowedCallersFor
-    // returns {} without it, so core registers nothing and capability_module
-    // leaves every target open). Anything else — no policy, empty policy,
-    // unparseable policy, a different mode — is OFF, i.e. exactly the behaviour
-    // of a host that never calls this at all.
+    // what turns the derived restrictions on (listRuleFor answers no rule
+    // without it, so core registers nothing and capability_module leaves every
+    // target open). No policy, an empty one, or `mode: "off"` is OFF, exactly
+    // the behaviour of a host that never calls this at all.
     //
-    // Every branch says out loud which side it landed on. Enforcement that
-    // silently failed to arm is the dangerous outcome: it looks identical to
-    // enforcement that is working and simply has nothing to deny, so an
-    // operator who mistyped `"mode":"enforced"` would otherwise get a
+    // Anything else is refused, and a refusal keeps the runtime from starting:
+    // enforcement that silently failed to arm looks identical to enforcement
+    // with nothing to deny, so a mistyped `"mode":"enforced"` must not leave a
     // wide-open runtime and a clean log.
-    void setAccessPolicy(const std::string& policyJson) {
+    bool setAccessPolicy(const std::string& policyJson, std::string* error) {
         std::unique_lock<std::shared_mutex> g(configMutex());  // guards the read at push time
-        accessPolicyJson() = policyJson;
-        // Cache the parse only in enforce mode; malformed/non-enforce stays empty.
+        accessPolicyJson().clear();
         parsedEnforcePolicy().reset();
 
         if (policyJson.empty()) {
+            accessPolicyRefusedFlag() = false;
             spdlog::info("Inter-module access enforcement is OFF (no access policy set): "
                          "any loaded module may call any other");
-            return;
+            return true;
         }
 
-        auto parsed = LogosCore::parseAccessPolicy(policyJson);
+        std::string why;
+        auto parsed = LogosCore::parseAccessPolicy(policyJson, &why);
         if (!parsed) {
-            spdlog::warn("logos_core_set_access_policy: policy is not valid JSON — "
-                         "inter-module access enforcement stays OFF");
-            return;
+            accessPolicyRefusedFlag() = true;
+            spdlog::error("logos_core_set_access_policy: {}; the runtime will not start "
+                          "until a policy is taken", why);
+            if (error) *error = why;
+            return false;
         }
+        accessPolicyRefusedFlag() = false;
+        accessPolicyJson() = policyJson;
         if (!parsed->enforce()) {
-            spdlog::warn("logos_core_set_access_policy: mode is \"{}\", not \"enforce\" — "
-                         "inter-module access enforcement stays OFF ({} restriction(s) "
-                         "parsed but not registered)",
-                         parsed->mode, parsed->restrictions.size());
-            return;
+            spdlog::warn("logos_core_set_access_policy: mode is \"off\" — "
+                         "inter-module access enforcement is OFF ({} restriction(s) "
+                         "parsed but not registered)", parsed->restrictions.size());
+            return true;
         }
 
         spdlog::info("Inter-module access enforcement is ON (mode=enforce): deny-by-default — "
@@ -1444,6 +1461,11 @@ namespace ModuleManager {
                      "{} explicit restriction(s) override the derived allow-list",
                      parsed->restrictions.size());
         parsedEnforcePolicy() = std::move(parsed);
+        return true;
+    }
+
+    bool accessPolicyRefused() {
+        return accessPolicyRefusedFlag();
     }
 
     void discoverInstalledModules() {
@@ -1766,6 +1788,7 @@ namespace ModuleManager {
             moduleTransportsMap().clear();
             accessPolicyJson().clear();  // same rationale — don't leak across restarts
             parsedEnforcePolicy().reset();
+            accessPolicyRefusedFlag() = false;
         }
         // Same rationale again: the next run may have a host that does report.
         hostStaysSilent().store(false);

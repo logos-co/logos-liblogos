@@ -1869,10 +1869,40 @@ TEST_F(DerivedRestrictionsManagerTest, NoEnforcePolicyDerivesNothing) {
     // No policy set at all -> derivation off -> empty.
     EXPECT_TRUE(derived("b").empty());
 
-    // A non-enforce policy is also inert.
-    ModuleManager::setAccessPolicy(
-        "{\"version\":1,\"mode\":\"audit\",\"restrictions\":{}}");
+    // A policy that is off is also inert.
+    EXPECT_TRUE(ModuleManager::setAccessPolicy(
+        "{\"version\":1,\"mode\":\"off\",\"restrictions\":{}}"));
     EXPECT_TRUE(derived("b").empty());
+}
+
+// Detector: a mistyped mode left enforcement off, and the runtime started anyway.
+TEST_F(DerivedRestrictionsManagerTest, ARefusedPolicyClearsTheLastOneAndKeepsTheRuntimeDown) {
+    reg("b", {});
+    logos_core_mark_module_loaded("b");
+    ASSERT_TRUE(ModuleManager::setAccessPolicy(enforceEnvelope()));
+    ASSERT_FALSE(derived("b").empty());
+
+    std::string error;
+    EXPECT_FALSE(ModuleManager::setAccessPolicy(
+        "{\"version\":1,\"mode\":\"enforced\",\"restrictions\":{}}", &error));
+    EXPECT_NE(error.find("enforced"), std::string::npos) << error;
+    EXPECT_TRUE(ModuleManager::accessPolicyRefused());
+    EXPECT_TRUE(derived("b").empty()) << "the refused policy's predecessor stayed in force";
+
+    EXPECT_TRUE(ModuleManager::setAccessPolicy(""));
+    EXPECT_FALSE(ModuleManager::accessPolicyRefused());
+}
+
+// Detector: an explicit rule with no callers was dropped from the document,
+// which left its target open to everyone.
+TEST_F(DerivedRestrictionsManagerTest, ARuleWithNoCallersAdmitsOnlyTheShell) {
+    reg("b", {});
+    logos_core_mark_module_loaded("b");
+    ASSERT_TRUE(ModuleManager::setAccessPolicy(
+        "{\"version\":1,\"mode\":\"enforce\",\"restrictions\":{\"b\":{}}}"));
+    EXPECT_TRUE(derived("b").empty());
+    ASSERT_EQ(logos_core_set_shell_identity("basecamp"), 0);
+    EXPECT_EQ(derived("b"), (std::set<std::string>{"basecamp"}));
 }
 
 TEST_F(DerivedRestrictionsManagerTest, ExplicitPolicyOverridesDerived) {
@@ -1958,9 +1988,9 @@ TEST_F(DenyByDefaultFlagTest, FlagOff_UndeclaredCallerStaysUnrestricted) {
     // target` working exactly as before.
     EXPECT_TRUE(derived("target").empty());
 
-    // Same for a policy that isn't in enforce mode: still off, still open.
-    ModuleManager::setAccessPolicy(
-        "{\"version\":1,\"mode\":\"audit\",\"restrictions\":{}}");
+    // Same for a policy that is off: still open.
+    EXPECT_TRUE(ModuleManager::setAccessPolicy(
+        "{\"version\":1,\"mode\":\"off\",\"restrictions\":{}}"));
     EXPECT_TRUE(derived("target").empty());
 }
 

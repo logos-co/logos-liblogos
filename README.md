@@ -170,8 +170,9 @@ void logos_core_set_module_transports(const char* name, const char* transport_se
 // Inter-module access policy (per-target allowed-caller allowlists).
 // Core turns it into one document per change and hands it to
 // capability_module, which then denies token issuance for disallowed
-// (caller, target) pairs. Call before logos_core_start(); NULL/"" clears.
-void logos_core_set_access_policy(const char* policy_json);
+// (caller, target) pairs. Before logos_core_start() only; NULL/"" clears.
+// -1 for a policy it refuses, and the runtime then does not start.
+int  logos_core_set_access_policy(const char* policy_json);
 
 // The embedder's shell identity (before start), and its binding (after).
 int  logos_core_set_shell_identity(const char* name);
@@ -297,10 +298,12 @@ capability_module logs the refusal with both names:
 [capability_module] access policy denies 'caller_module' -> 'target_module'
 ```
 
-Anything other than `mode: "enforce"` — no policy, `NULL`, `""`, unparseable
-JSON, a different mode — leaves enforcement **off**, which is the pre-existing
-behaviour. Core says which side it landed on at startup, so a mistyped mode is
-visible rather than silently permissive:
+No policy, `NULL`, `""` or `mode: "off"` leaves enforcement **off**, which is
+the pre-existing behaviour. A policy the runtime cannot use (unparseable JSON, a
+field of the wrong type, an unknown version or mode) is refused: the setter
+returns -1, `logos_runtime_spawn` fails, and `logos_core_start()` does not start
+the runtime, so a mistyped mode never leaves it silently open. Core says which
+side it landed on:
 
 ```
 Inter-module access enforcement is ON (mode=enforce): deny-by-default — ...
@@ -318,7 +321,8 @@ need an explicit entry):
 ```
 
 `capability_module`, `core` and `core_service` are never restricted as targets,
-and the shell stays among the allowed callers of an explicit entry too.
+and the shell stays among the allowed callers of an explicit entry too. An
+entry with no callers admits only the shell.
 
 Hosts expose this as `--access-policy` — see the logoscore CLI and Basecamp
 READMEs.

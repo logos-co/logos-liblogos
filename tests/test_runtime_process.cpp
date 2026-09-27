@@ -387,6 +387,20 @@ TEST_F(RuntimeProcessTest, WithoutItsAuthorityItNeverBecomesReady)
     EXPECT_NE(next.runtime, nullptr) << (error ? error : "");
 }
 
+// Detector: the spawn's access_policy was set unchecked, so a policy the runtime
+// refused left it running with enforcement off.
+TEST_F(RuntimeProcessTest, ARefusedAccessPolicyFailsTheSpawn)
+{
+    char* error = nullptr;
+    Spawned spawned;
+    const json policy = {{"version", 1}, {"mode", "enforced"}};
+    spawned.runtime = logos_runtime_spawn(config({{"access_policy", policy}}).dump().c_str(), &error);
+    EXPECT_EQ(spawned.runtime, nullptr);
+    EXPECT_NE(std::string(error ? error : "").find("access_policy"), std::string::npos)
+        << (error ? error : "(no error)");
+    logos_consumer_string_free(error);
+}
+
 TEST_F(RuntimeProcessTest, OneRuntimePerProcess)
 {
     char* error = nullptr;

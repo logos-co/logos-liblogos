@@ -8,7 +8,9 @@
 
 #include <nlohmann/json.hpp>
 
+#include <chrono>
 #include <string>
+#include <thread>
 
 using json = nlohmann::json;
 
@@ -107,4 +109,41 @@ TEST_F(TokenAuthorityTest, EachLoadAndUnloadSendsTheWholePolicy)
     const json unloaded = json::parse(documents[2]);
     EXPECT_FALSE(unloaded.contains("healthy")) << unloaded.dump();
     EXPECT_TRUE(unloaded.contains("not_loaded")) << unloaded.dump();
+}
+
+// Detector: a rule with no callers was dropped from the document, and a target
+// absent from it is open to everyone.
+TEST_F(TokenAuthorityTest, ARuleWithNoCallersIsSentNotDropped)
+{
+    ASSERT_EQ(logos_core_set_access_policy(
+        R"({"version":1,"mode":"enforce","restrictions":{"quiet":{},"hushed":{"allowedCallers":[]}}})"), 0);
+    plantModule("healthy", "report-ok");
+
+    ASSERT_EQ(logos_core_load_module("healthy", LOGOS_LOAD_MODULE_ONLY), 1);
+    const auto documents = stand_in::restrictionDocuments();
+    ASSERT_FALSE(documents.empty());
+    const json document = json::parse(documents.back());
+    EXPECT_EQ(document.value("quiet", json()), json::array()) << document.dump();
+    EXPECT_EQ(document.value("hushed", json()), json::array()) << document.dump();
+}
+
+// Detector: a module that died left its routes in capability_module's rules
+// until something else loaded or unloaded.
+TEST_F(TokenAuthorityTest, ACrashSendsThePolicyAgain)
+{
+    ASSERT_EQ(logos_core_set_access_policy(R"({"version":1,"mode":"enforce","restrictions":{}})"), 0);
+    plantModule("doomed", "report-ok");
+    ASSERT_EQ(logos_core_load_module("doomed", LOGOS_LOAD_MODULE_ONLY), 1);
+    ASSERT_TRUE(json::parse(stand_in::restrictionDocuments().back()).contains("doomed"));
+    const auto pids = ModuleManager::getModuleProcessIds();
+    ASSERT_TRUE(pids.count("doomed")) << "no pid for doomed";
+
+    ASSERT_TRUE(logos_test::killPid(pids.at("doomed")));
+    const auto stillListed = [] {
+        return json::parse(stand_in::restrictionDocuments().back()).contains("doomed");
+    };
+    for (int i = 0; i < 500 && stillListed(); ++i)
+        std::this_thread::sleep_for(std::chrono::milliseconds(10));
+    EXPECT_FALSE(logos_core_is_module_loaded("doomed"));
+    EXPECT_FALSE(stillListed()) << stand_in::restrictionDocuments().back();
 }

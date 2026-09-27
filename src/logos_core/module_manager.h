@@ -62,7 +62,10 @@ namespace ModuleManager {
     // concrete per-target restrictions with capability_module once that
     // module is loaded (see initializeCapabilityModule). Must be called
     // BEFORE logos_core_start(). Empty clears any previously set policy.
-    void setAccessPolicy(const std::string& policyJson);
+    // A policy it refuses clears the policy and keeps the runtime from starting
+    // until a later one is taken.
+    bool setAccessPolicy(const std::string& policyJson, std::string* error = nullptr);
+    bool accessPolicyRefused();
 
     // Allowed callers core would register for `target` (see the .cpp).
     // A pure read with no RPC — exposed so tests can observe the derivation.

@@ -23,14 +23,16 @@ struct AccessPolicy {
     std::string mode;
     std::vector<AccessRestriction> restrictions;
 
-    // Only "enforce" turns restrictions into denials; any other value
-    // leaves the policy informational and core registers nothing.
+    // Only "enforce" turns restrictions into denials; "off", or no mode, leaves
+    // every target open. The parser refuses any other mode.
     bool enforce() const { return mode == "enforce"; }
 };
 
-// Returns nullopt only on invalid JSON. Otherwise tolerant: unknown keys
-// ignored, missing "restrictions"/"allowedCallers" yield empty lists.
-std::optional<AccessPolicy> parseAccessPolicy(const std::string& json);
+// nullopt, with why in `error`, for a policy the runtime refuses: invalid JSON, a
+// field of the wrong type, or an unknown version or mode. Unknown keys and
+// non-string callers are ignored; a target without allowedCallers names none.
+std::optional<AccessPolicy> parseAccessPolicy(const std::string& json,
+                                              std::string* error = nullptr);
 
 } // namespace LogosCore
 
