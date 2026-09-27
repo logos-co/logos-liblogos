@@ -1,18 +1,35 @@
 // A stand-in app for the runtime-process tests: spawns the runtime with the
 // configuration in argv[1], prints its pid and its module hosts' pids, and stays
-// up until it is killed.
+// up until it is killed. With "exit" in argv[2] it calls exit(1) instead, as an
+// app's error path does: the runtime live and an event subscription armed.
 #include "logos_core.h"
 
 #include <nlohmann/json.hpp>
 
 #include <chrono>
 #include <cstdio>
+#include <cstdlib>
 #include <string>
 #include <thread>
+
+namespace {
+
+// Destroyed after the statics the libraries made while running: time for any
+// thread woken during exit to reach one of them.
+struct SlowTeardown {
+    bool armed = false;
+    ~SlowTeardown()
+    {
+        if (armed) std::this_thread::sleep_for(std::chrono::milliseconds(500));
+    }
+} g_teardown;
+
+} // namespace
 
 int main(int argc, char* argv[])
 {
     if (argc < 2) return 2;
+    const bool exitLive = argc > 2 && std::string(argv[2]) == "exit";
     char* error = nullptr;
     logos_runtime* runtime = logos_runtime_spawn(argv[1], &error);
     if (!runtime) {
@@ -20,6 +37,9 @@ int main(int argc, char* argv[])
         std::fflush(stdout);
         return 1;
     }
+    if (exitLive)
+        logos_consumer_subscribe(logos_runtime_binding(runtime), "core_service", "moduleStateChanged",
+                                 [](const char*, const char*, void*) {}, nullptr);
     auto call = [&](const char* method) {
         char* result = nullptr;
         char* failure = nullptr;
@@ -40,5 +60,10 @@ int main(int argc, char* argv[])
                 std::printf("HOST_PID %lld\n", module.value("pid", 0LL));
     std::printf("READY\n");
     std::fflush(stdout);
+    if (exitLive) {
+        g_teardown.armed = true;
+        std::this_thread::sleep_for(std::chrono::milliseconds(500)); // the subscription arms
+        std::exit(1);
+    }
     for (;;) std::this_thread::sleep_for(std::chrono::hours(1));
 }
