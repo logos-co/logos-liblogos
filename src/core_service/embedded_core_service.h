@@ -54,6 +54,10 @@ bool addEndpoint(const std::string& transportJson, const std::function<bool(lp_p
 // Ends the sessions on those listeners and admits no new one.
 void closeSessions();
 
+// What a call answers the caller `callerJson` (heap JSON, lp_string_free). For tests:
+// only a tls_tcp session binds a remote consumer.
+char* dispatchAs(const char* callerJson, const char* method, const char* argsJson);
+
 } // namespace logos::core_service
 
 #endif

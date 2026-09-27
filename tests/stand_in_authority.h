@@ -112,17 +112,40 @@ inline int setRestrictions(const char* document)
 
 inline void stringFree(char* value) { std::free(value); }
 
-// Decides like capability: the policy lists the consumer (or "*") and the target (or "*").
+// Grants like capability: the exact key, else <peer>/*; the exact target, else "*"
+// (never for core_service). "*", a method list, or null.
+inline nlohmann::json grantFor(const std::string& peer, const std::string& consumer, const std::string& target)
+{
+    const nlohmann::json& policy = state().remotePolicy;
+    auto rule = policy.find(peer + "/" + consumer);
+    if (rule == policy.end()) rule = policy.find(peer + "/*");
+    if (rule == policy.end()) return nullptr;
+    const bool wild = target != "core_service";
+    if (rule->is_array()) {
+        for (const auto& t : *rule)
+            if (t == target || (wild && t == "*")) return "*";
+        return nullptr;
+    }
+    auto grant = rule->find(target);
+    if (grant == rule->end() && wild) grant = rule->find("*");
+    return grant == rule->end() ? nlohmann::json() : *grant;
+}
+
 inline char* evaluateRemoteAccess(const char* peer, const char* consumer, const char* target)
 {
     std::lock_guard<std::mutex> lock(state().mutex);
-    bool allow = false;
-    for (const std::string& key : {std::string(peer) + "/" + consumer, std::string(peer) + "/*"}) {
-        const auto it = state().remotePolicy.find(key);
-        if (it == state().remotePolicy.end()) continue;
-        for (const auto& t : *it)
-            if (t == target || t == "*") allow = true;
-    }
+    const nlohmann::json grant = grantFor(peer, consumer, target);
+    const bool allow = grant == "*" || (grant.is_array() && !grant.empty());
+    return copy(nlohmann::json{{"allow", allow}, {"decision", "stand-in"}}.dump());
+}
+
+inline char* evaluateRemoteCall(const char* peer, const char* consumer, const char* target, const char* method)
+{
+    std::lock_guard<std::mutex> lock(state().mutex);
+    const nlohmann::json grant = grantFor(peer, consumer, target);
+    bool allow = grant == "*";
+    if (grant.is_array())
+        for (const auto& m : grant) allow = allow || m == method;
     return copy(nlohmann::json{{"allow", allow}, {"decision", "stand-in"}}.dump());
 }
 
@@ -150,6 +173,7 @@ inline const logos_capability_engine_v1& engine()
         sizeof(logos_capability_engine_v1), LOGOS_CAPABILITY_ENGINE_VERSION,
         &admit, &retire, &resolveCaller, &credentialFor, &grantOperatorPair,
         &setRestrictions, &stringFree, &evaluateRemoteAccess, &setRemotePolicy, &setCallerScopes,
+        &evaluateRemoteCall,
     };
     return table;
 }

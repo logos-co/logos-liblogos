@@ -132,6 +132,17 @@ std::optional<std::string> evaluateRemoteAccess(const std::string& peer, const s
     return decision;
 }
 
+std::optional<std::string> evaluateRemoteCall(const std::string& peer, const std::string& consumer,
+                                              const std::string& target, const std::string& method)
+{
+    const logos_capability_engine_v1* engine = current();
+    if (!engine || !LOGOS_CAPABILITY_ENGINE_HAS(engine, evaluate_remote_call)) return std::nullopt;
+    const std::string decision = take(engine, engine->evaluate_remote_call(peer.c_str(), consumer.c_str(),
+                                                                          target.c_str(), method.c_str()));
+    if (decision.empty()) return std::nullopt;
+    return decision;
+}
+
 bool setRemotePolicy(const std::string& json)
 {
     const logos_capability_engine_v1* engine = current();

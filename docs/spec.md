@@ -302,6 +302,14 @@ The embedder's configuration before start, the runtime's lifecycle, and the shel
 | `callModuleMethod(...)`, `watchModuleEvents(...)` | operator | Forward an operator's call or subscription, never to the runtime's own modules. |
 | `shutdown()` | stop | Hand shutdown to the embedder's handler. |
 
+A remote consumer, `{kind:"remote", peer, name}` on the `logos_runtime_control`
+endpoint, gets no scope: capability's remote policy decides each method
+(`evaluate_remote_call`), the embedder's included, and a refusal is
+`NOT_AUTHORISED` with the decision id. The shell and peering scopes are never
+its. Forwarding needs a grant on the target method too (any grant on the
+target, to watch its events) and never reaches capability_module or
+core_service; the target sees the operator `@peer:<runtime>:<consumer>`.
+
 logos-cpp-sdk ships the contract as `core_service.lidl`.
 
 ## Module Implementation

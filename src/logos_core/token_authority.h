@@ -37,7 +37,10 @@ bool setRestrictions(const std::string& json);
 // `target`, {"allow","decision"}; nothing when its engine has no such entry.
 std::optional<std::string> evaluateRemoteAccess(const std::string& peer, const std::string& consumer,
                                                 const std::string& target);
-// {"<runtime id>/<consumer>":["<target>",...]}; false when refused or unsupported.
+// Its decision for one Runtime Control operation, `target`.`method`, likewise.
+std::optional<std::string> evaluateRemoteCall(const std::string& peer, const std::string& consumer,
+                                              const std::string& target, const std::string& method);
+// {"<runtime id>/<consumer>": grants}; false when refused or unsupported.
 bool setRemotePolicy(const std::string& json);
 // {"<caller>":["<target>",...]}: those callers pair with the targets listed only.
 bool setCallerScopes(const std::string& json);

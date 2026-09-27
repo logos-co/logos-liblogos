@@ -1748,8 +1748,10 @@ namespace ModuleManager {
         // Nothing the runtime admitted outlives it, so nothing is revoked on the
         // way out: capability's pushes would only race the teardown and fail.
         logos::authority::detach();
-        // The control surface and the shell's identity go before the fleet does.
+        // The control surface and the shell's identity go before the fleet does;
+        // peering first, whose Runtime Control link uses core_service's provider.
         logos::shell_binding::shutdown();
+        logos::peering_link::stop();
         logos::core_service::stop();
         logos::core_service::resetConfiguration();
         logos::package_config::reset();
@@ -1764,7 +1766,6 @@ namespace ModuleManager {
         // While their target still answers; the teardown's own transitions
         // are not sent.
         orderedCalls().stop();
-        logos::peering_link::stop();
         // EXCLUSIVE: markAllLoadedExitsExpected needs the loaded set to hold
         // still, and every load and unload holds this shared for its span.
         std::unique_lock<std::shared_mutex> fleet(fleetMutex());

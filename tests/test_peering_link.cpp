@@ -1,7 +1,11 @@
 // Peering in the engine: the bundled rows, facade records for imports, the
-// export listener, and the peering configuration as protected input.
+// export listener, the peering configuration as protected input, and what
+// core_service lets a remote consumer do.
 #include <gtest/gtest.h>
 #include "logos_core.h"
+#include "logos_protocol.h"
+#include "core_service/embedded_core_service.h"
+#include "token_authority.h"
 #include "bootstrap_policy.h"
 #include "module_manager.h"
 #include "module_registry.h"
@@ -133,4 +137,55 @@ TEST(PeeringLink, TheConfigurationIsAProtectedObject)
     logos_core_terminate_all();
     logos_core_clear();
     EXPECT_FALSE(logos::peering_link::configured());
+}
+
+// Runtime Control (logos-lips runtime §9): each operation needs the remote policy's grant.
+TEST(RuntimeControl, ARemoteConsumerGetsOnlyTheMethodsItsRuntimeIsGranted)
+{
+    logos_core_terminate_all();
+    logos_core_clear();
+    logos_core_start();
+    const auto call = [](const char* method, const json& args = json::array()) {
+        char* out = logos::core_service::dispatchAs(R"({"kind":"remote","peer":"peer-1","name":"ctl"})",
+                                                    method, args.dump().c_str());
+        const json value = out ? json::parse(out, nullptr, false) : json();
+        lp_string_free(out);
+        return value;
+    };
+    const auto refused = [](const json& reply) {
+        return reply.is_object() && reply.value("code", std::string()) == "NOT_AUTHORISED";
+    };
+    const auto policy = [](const json& document) { return logos::authority::setRemotePolicy(document.dump()); };
+
+    EXPECT_TRUE(refused(call("getStatus")));
+    ASSERT_TRUE(policy({{"peer-1/ctl", {{"core_service", {"getStatus", "admitConsumer", "evaluateRemoteAccess"}}}}}));
+    EXPECT_FALSE(refused(call("getStatus"))) << call("getStatus").dump();
+    EXPECT_TRUE(refused(call("listModules", {"all"})));
+    // Never the shell's or peering's, granted or not.
+    EXPECT_TRUE(refused(call("admitConsumer", {"viewer", "presentation"})));
+    EXPECT_TRUE(refused(call("evaluateRemoteAccess", {"peer-1", "ctl", "x"})));
+    // "*" is every export, never core_service; another consumer has no grant.
+    ASSERT_TRUE(policy({{"peer-1/*", {"*"}}}));
+    EXPECT_TRUE(refused(call("getStatus")));
+    ASSERT_TRUE(policy({{"peer-1/ctl", {{"core_service", "*"}}}}));
+    EXPECT_FALSE(refused(call("getStatus")));
+    char* other = logos::core_service::dispatchAs(R"({"kind":"remote","peer":"peer-1","name":"other"})",
+                                                  "getStatus", "[]");
+    EXPECT_TRUE(refused(json::parse(other ? other : "null", nullptr, false)));
+    lp_string_free(other);
+
+    // Forwarding needs a grant on the target method too, and never reaches the authority.
+    ASSERT_TRUE(policy({{"peer-1/ctl", {{"core_service", {"callModuleMethod", "watchModuleEvents"}},
+                                        {"wallet", {"balance"}}}}}));
+    EXPECT_TRUE(refused(call("callModuleMethod", {"wallet", "send", json::array()})));
+    const json unloaded = call("callModuleMethod", {"wallet", "balance", json::array()});
+    EXPECT_EQ(unloaded.value("code", std::string()), "MODULE_NOT_LOADED") << unloaded.dump();
+    const json closed = call("callModuleMethod", {"capability_module", "requestModule", json::array()});
+    EXPECT_EQ(closed.value("error", json::object()).value("code", std::string()), "unauthorized") << closed.dump();
+    EXPECT_EQ(call("watchModuleEvents", {"capability_module", ""}), json(false));
+    EXPECT_EQ(call("watchModuleEvents", {"ledger", ""}), json(false));
+
+    ASSERT_TRUE(policy(json::object()));
+    logos_core_terminate_all();
+    logos_core_clear();
 }

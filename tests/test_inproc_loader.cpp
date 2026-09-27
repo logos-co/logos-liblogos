@@ -4,6 +4,7 @@
 #include "logos_core.h"
 #include "inproc_module_loader.h"
 #include "token_authority.h"
+#include "core_service/embedded_core_service.h"
 #include "module_manager.h"
 #include "module_registry.h"
 #include "module_state_observer.h"
@@ -378,6 +379,24 @@ TEST_F(InprocBundledTest, TheRuntimeRunsItsModulesInProcessBehindCoreService)
     EXPECT_EQ(granted.value("allow", false), true) << granted.dump();
     EXPECT_FALSE(granted.value("decision", std::string{}).empty());
     EXPECT_TRUE(forbidden(callWith(alice, "evaluateRemoteAccess", question)));
+    // Runtime Control: a remote consumer forwards what capability grants it, per method,
+    // and reaches the target as the operator @peer:<runtime>:<consumer>.
+    ASSERT_TRUE(logos::authority::setRemotePolicy(
+        R"({"peer-1/ctl":{"core_service":["callModuleMethod","watchModuleEvents"],)"
+        R"("modules_state":["list_modules"]}})"));
+    const auto remote = [](const char* method, const json& args) {
+        char* out = logos::core_service::dispatchAs(R"({"kind":"remote","peer":"peer-1","name":"ctl"})",
+                                                    method, args.dump().c_str());
+        const json value = out ? json::parse(out, nullptr, false) : json();
+        lp_string_free(out);
+        return value;
+    };
+    const json granted2 = remote("callModuleMethod", json::array({"modules_state", "list_modules", json::array()}));
+    EXPECT_EQ(granted2.value("status", std::string{}), "ok") << granted2.dump();
+    const json ungranted = remote("callModuleMethod",
+                                  json::array({"modules_state", "module_record", json::array({"core_service"})}));
+    EXPECT_EQ(ungranted.value("code", std::string{}), "NOT_AUTHORISED") << ungranted.dump();
+    EXPECT_EQ(remote("watchModuleEvents", json::array({"modules_state", ""})), json(true));
     ASSERT_TRUE(logos::authority::setRemotePolicy("{}"));
     // A facade's scope: it gets no token for anything but peering_module.
     const std::string facadeCredential = logos::authority::admit("an_import", "module");

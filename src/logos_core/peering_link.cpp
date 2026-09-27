@@ -42,7 +42,7 @@ struct State {
     std::map<std::string, json> facadeRules;      // the import rule each facade loaded with
     std::shared_ptr<lp_client> client;
     std::vector<lp_subscription*> subscriptions;
-    std::shared_ptr<native_host::ExportLink> operatorLink;
+    std::shared_ptr<native_host::ExportLink> controlLink;
 
     std::condition_variable wake;
     std::deque<std::function<void()>> jobs;
@@ -243,9 +243,9 @@ void onEvent(const char* event, const char* data, void*)
     }
 }
 
-// Remote Runtime Control: core_service's tls_tcp listener, certified and
-// authenticated through peering_module, which the runtime calls as the host.
-void startOperatorEndpoint(const json& config)
+// Remote Runtime Control (logos_runtime_control): core_service's tls_tcp listener,
+// certified and authenticated through peering_module, which the runtime calls as the host.
+void startRuntimeControlEndpoint(const json& config)
 {
     State& s = state();
     std::shared_ptr<lp_client> client;
@@ -254,24 +254,33 @@ void startOperatorEndpoint(const json& config)
         client = s.client;
     }
     if (!client) return;
-    const json control = config.value("control", json::object());
-    const std::string host = control.is_object() ? control.value("host", std::string("0.0.0.0")) : "0.0.0.0";
+    const auto control = config.find("control");
+    std::string host = "0.0.0.0";
+    if (control != config.end() && control->is_object() && control->contains("host")
+        && (*control)["host"].is_string())
+        host = (*control)["host"].get<std::string>();
     auto link = std::make_shared<native_host::ExportLink>("core_service", client.get());
     // What the listener's authenticator uses lives as long as core_service's provider.
     auto keep = std::make_shared<std::pair<std::shared_ptr<lp_client>,
                                            std::shared_ptr<native_host::ExportLink>>>(client, link);
     std::string error;
     const std::string transport = json{{"protocol", "tls_tcp"}, {"host", host}, {"port", 0}}.dump();
-    if (!core_service::addEndpoint(transport, [&](lp_provider* provider) {
-            return link->configure(provider, error);
-        }, keep) || !link->published(error)) {
-        spdlog::error("core_service serves no operators: {}",
+    const bool added = core_service::addEndpoint(transport, [&](lp_provider* provider) {
+        return link->configure(provider, error);
+    }, keep);
+    if (!added || !link->published(error)) {
+        // A listener peering_module never heard of admits nobody.
+        if (added) {
+            link->stop();
+            core_service::closeSessions();
+        }
+        spdlog::error("core_service serves no Runtime Control: {}",
                       error.empty() ? "its tls_tcp listener did not start" : error);
         return;
     }
     std::lock_guard<std::mutex> lock(s.mutex);
-    s.operatorLink = link;
-    spdlog::info("core_service serves paired operators on tls_tcp ({})", host);
+    s.controlLink = link;
+    spdlog::info("core_service serves Runtime Control on tls_tcp ({})", host);
 }
 
 void announceExit(const std::string& name, const std::string& role, std::int64_t epoch)
@@ -350,7 +359,9 @@ void start()
     }
     refreshExports();
     pushRemotePolicy();
-    if (config.value("operator", false)) startOperatorEndpoint(config);
+    const auto runtimeControl = config.find("runtime_control");
+    if (runtimeControl != config.end() && runtimeControl->is_boolean() && runtimeControl->get<bool>())
+        startRuntimeControlEndpoint(config);
     // Facades load in the background: the runtime's ready line never waits on a peer.
     post(refreshImports);
 }
@@ -358,13 +369,13 @@ void start()
 void stop()
 {
     State& s = state();
-    std::shared_ptr<native_host::ExportLink> operatorLink;
+    std::shared_ptr<native_host::ExportLink> controlLink;
     {
         std::lock_guard<std::mutex> lock(s.mutex);
-        operatorLink = std::move(s.operatorLink);
+        controlLink = std::move(s.controlLink);
     }
-    if (operatorLink) {
-        operatorLink->stop();
+    if (controlLink) {
+        controlLink->stop();
         core_service::closeSessions();
     }
     if (authority::attached()) {
