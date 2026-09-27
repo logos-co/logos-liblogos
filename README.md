@@ -158,6 +158,10 @@ int  logos_core_set_placement_policy(const char* policy_json);
 // only), applied as it loads: its setters answer only the runtime.
 int  logos_core_set_package_config(const char* config_json);
 
+// Each module's configuration (before start only), {"<module>": <document>}:
+// delivered with its credential, before it can be called, on every start.
+int  logos_core_set_module_config(const char* config_json);
+
 // Instance persistence
 void logos_core_set_persistence_base_path(const char* path);
 
@@ -265,7 +269,8 @@ logos_runtime_stop(rt);
 
 The configuration carries what the setters take (`modules_dirs`,
 `bundled_modules_dirs`, `persistence_base_path`, `module_transports`,
-`access_policy`, `placement_policy`, `package_config`, `core_service_transports`).
+`access_policy`, `module_config`, `placement_policy`, `package_config`,
+`core_service_transports`).
 The runtime's stdin and stdout are a private channel, one JSON object per line,
 that nothing logs: the configuration and the shell's credential cross it, and so
 do the embedder's hooks (extension methods, the operator resolver, shutdown),
@@ -374,6 +379,32 @@ fails the runtime's start.
 
 Hosts expose this as `--access-policy` — see the logoscore CLI and Basecamp
 READMEs.
+
+### Module configuration
+
+`logos_core_set_module_config` (or the spawn's `module_config`) gives a module
+one JSON document:
+
+```jsonc
+{"peering_module": {"listen": "..."}, "my_module": {"endpoint": "https://..."}}
+```
+
+- **When**: with its credential, before its context is set (so before
+  `onContextReady`) and before it can be called, on every start: load, reload
+  and a start after a crash.
+- **How**: a subprocess host is launched with `--configuration-source stdin` and
+  reads the document as the line after its credential; an in-process module
+  gets it from the native host directly. The module's image takes it through
+  its optional `logos_module_set_configuration` export, which the cpp and Rust
+  SDKs expose as `LogosModuleContext::configuration()` and
+  `RustModuleContext.configuration`.
+- **Whole**: a module's document replaces the one set before, never merged;
+  `null` removes it.
+- **Fails closed**: the load fails, before the module is published, if its
+  image lacks the export or refuses the document, if its host is too old for the
+  flag, or if it is a Qt plugin module, whose host takes no configuration.
+- **No authority**: grants belong in the access policy, never in a module's
+  configuration.
 
 ### Thread safety
 

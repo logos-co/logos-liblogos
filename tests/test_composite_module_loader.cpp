@@ -196,6 +196,47 @@ TEST_F(CompositeModuleLoaderTest, SendToken_DelegatesToContainer) {
     EXPECT_EQ(container->sendTokenCalls[0].second, "tok123");
 }
 
+// ---------------------------------------------------------------------------
+// A configuration: the host is told to read it, and it follows the credential
+// ---------------------------------------------------------------------------
+
+TEST_F(CompositeModuleLoaderTest, Load_AConfiguredModulesHostReadsItsConfiguration) {
+    ModuleDescriptor desc;
+    desc.name = "configured";
+    desc.path = "/lib/configured.so";
+    desc.loaderConfig[kTakesConfiguration] = true;
+    LoadedModuleHandle handle;
+
+    ASSERT_TRUE(composite->load(desc, nullptr, handle));
+    std::vector<std::string> expected = {"--name", "configured", "--path", "/lib/configured.so",
+                                         "--configuration-source", "stdin"};
+    EXPECT_EQ(container->launchCalls[0].args, expected);
+
+    ASSERT_TRUE(composite->sendStartupInput("configured", "tok", std::string(R"({"a":1})")));
+    ASSERT_EQ(container->sendTokenCalls.size(), 1u);
+    EXPECT_EQ(container->sendTokenCalls[0].second, "tok\n{\"a\":1}");
+}
+
+// Both or neither: a host told to read a configuration waits for its line, and
+// one not told would drop it and start unconfigured.
+TEST_F(CompositeModuleLoaderTest, SendStartupInput_TheConfigurationMatchesTheLaunch) {
+    ModuleDescriptor plain;
+    plain.name = "plain";
+    ModuleDescriptor configured;
+    configured.name = "configured";
+    configured.loaderConfig[kTakesConfiguration] = true;
+    LoadedModuleHandle handle;
+    ASSERT_TRUE(composite->load(plain, nullptr, handle));
+    ASSERT_TRUE(composite->load(configured, nullptr, handle));
+
+    EXPECT_FALSE(composite->sendStartupInput("plain", "tok", std::string("{}")));
+    EXPECT_FALSE(composite->sendStartupInput("configured", "tok", std::nullopt));
+    EXPECT_FALSE(composite->sendStartupInput("configured", "tok", std::string("{\n}")));
+    EXPECT_TRUE(container->sendTokenCalls.empty());
+    EXPECT_TRUE(composite->sendStartupInput("plain", "tok", std::nullopt));
+    EXPECT_EQ(container->sendTokenCalls.back().second, "tok");
+}
+
 TEST_F(CompositeModuleLoaderTest, Terminate_DelegatesToContainer) {
     ModuleDescriptor desc;
     desc.name = "to_term";

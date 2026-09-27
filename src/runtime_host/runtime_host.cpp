@@ -487,6 +487,7 @@ bool configure(const json& config, std::string& error)
         int (*apply)(const char*);
     };
     for (const Setter& setter : {Setter{"access_policy", &logos_core_set_access_policy},
+                                 Setter{"module_config", &logos_core_set_module_config},
                                  Setter{"placement_policy", &logos_core_set_placement_policy},
                                  Setter{"package_config", &logos_core_set_package_config},
                                  Setter{"core_service_transports",

@@ -26,6 +26,7 @@ add_executable(logos_core_tests
     test_call_envelope.cpp
     test_token_authority.cpp
     test_runtime_process.cpp
+    test_module_config.cpp
 )
 
 # The stand-in module host the load-path tests start, beside the test binary
@@ -110,5 +111,23 @@ foreach(_fixture dep_range_fixture dep_malformed_fixture)
         "${CMAKE_CURRENT_BINARY_DIR}/../lib/${_fixture}_plugin.metadata.json"
         COPYONLY)
 endforeach()
+
+# A native module that reports the configuration it was given, once per name the
+# runtime-process tests install, and without logos_module_set_configuration as
+# `unconfigurable`; in lib/ like the fixtures above.
+foreach(_fixture configured_inproc configured_hosted unconfigurable)
+    add_library(${_fixture}_plugin SHARED fixtures/configured_fixture_plugin.cpp)
+    target_compile_definitions(${_fixture}_plugin PRIVATE FIXTURE_NAME="${_fixture}")
+    target_include_directories(${_fixture}_plugin PRIVATE ${LOGOS_PROTOCOL_ROOT}/include)
+    set_target_properties(${_fixture}_plugin PROPERTIES PREFIX ""
+        LIBRARY_OUTPUT_DIRECTORY "${CMAKE_CURRENT_BINARY_DIR}/../lib"
+        RUNTIME_OUTPUT_DIRECTORY "${CMAKE_CURRENT_BINARY_DIR}/../lib")
+    # No mingw runtime DLLs to find beside it when a host loads it.
+    if(WIN32)
+        target_link_options(${_fixture}_plugin PRIVATE -static)
+    endif()
+    add_dependencies(logos_core_tests ${_fixture}_plugin)
+endforeach()
+target_compile_definitions(unconfigurable_plugin PRIVATE CONFIGURED_FIXTURE_NO_EXPORT)
 
 gtest_discover_tests(logos_core_tests DISCOVERY_MODE PRE_TEST)

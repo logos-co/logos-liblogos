@@ -5,7 +5,9 @@
 // fake_module_host.h), and `enter` and `report` marks go to host_events beside
 // it. With LOGOS_TEST_PID_DIR set, it writes its pid to <dir>/<name>.pid,
 // reports ok and stays up. It predates --inspect, as an old host does, unless
-// LOGOS_TEST_INSPECT_LOG names a file to count inspections in.
+// LOGOS_TEST_INSPECT_LOG names a file to count inspections in; and likewise
+// --configuration-source, unless LOGOS_TEST_CONFIGURATION_LOG names a file to
+// append "<module> <configuration>" to, read from stdin after the credential.
 
 #include <chrono>
 #include <cstdlib>
@@ -117,6 +119,9 @@ int main(int argc, char** argv)
 #endif
     const char* inspectLog = std::getenv("LOGOS_TEST_INSPECT_LOG");
     if (inspectLog && !*inspectLog) inspectLog = nullptr;
+    const char* configurationLog = std::getenv("LOGOS_TEST_CONFIGURATION_LOG");
+    if (configurationLog && !*configurationLog) configurationLog = nullptr;
+    bool configured = false;
     std::string path, name, instance;
     int seconds = 300;
     for (int i = 1; i < argc; ++i) {
@@ -124,6 +129,14 @@ int main(int argc, char** argv)
         if ((arg == "-p" || arg == "--path") && i + 1 < argc) path = argv[++i];
         else if ((arg == "-n" || arg == "--name") && i + 1 < argc) name = argv[++i];
         else if (arg == "--instance-persistence-path" && i + 1 < argc) instance = argv[++i];
+        else if (arg == "--configuration-source" && i + 1 < argc) {
+            if (!configurationLog) {
+                std::cerr << "The following argument was not expected: --configuration-source"
+                          << std::endl;
+                return 109;
+            }
+            configured = std::string(argv[++i]) == "stdin";
+        }
         else if (arg == "--help") {
             // Discovery reads a host's usage to learn whether it can inspect.
             std::cout << (inspectLog ? "usage: --inspect <plugin>"
@@ -165,6 +178,15 @@ int main(int argc, char** argv)
         if (!first.empty() && first.back() == '\r') first.pop_back();
     }
     if (first == "die") return 3;
+    if (configured) {
+        std::string token, configuration;
+        std::getline(std::cin, token);
+        if (!std::getline(std::cin, configuration)) {
+            report("@logos-load-status failed no configuration followed the credential");
+            return 1;
+        }
+        std::ofstream(configurationLog, std::ios::app) << moduleOf(path) << ' ' << configuration << '\n';
+    }
     // A host that exits after reporting takes its token first, as the real one
     // does: exiting before the loader writes it fails the load another way.
     if (first == "report-fail") {

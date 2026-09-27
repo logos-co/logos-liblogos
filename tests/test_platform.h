@@ -143,6 +143,20 @@ inline fs::path thisExecutable()
 #endif
 }
 
+// A library the suite built into lib/, beside bin/ (build tree, package, or the
+// Windows staging directory alike).
+inline fs::path fixtureLibrary(const std::string& stem)
+{
+#ifdef _WIN32
+    const char* suffix = ".dll";
+#elif defined(__APPLE__)
+    const char* suffix = ".dylib";
+#else
+    const char* suffix = ".so";
+#endif
+    return thisExecutable().parent_path().parent_path() / "lib" / (stem + suffix);
+}
+
 // The stand-in module host, built beside this test binary.
 inline fs::path fakeHostPath()
 {

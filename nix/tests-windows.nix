@@ -42,7 +42,9 @@ pkgs.stdenv.mkDerivation {
     # Their DLLs are linked in beside them by the mingw fixup hook.
     cp bin/logos_core_tests.exe bin/logos_fake_module_host.exe bin/logos_runtime.exe \
        bin/logos_runtime_test_app.exe bin/liblogos_core.dll $out/bin/
-    cp lib/*_fixture_plugin.fixture lib/*_fixture_plugin.metadata.json $out/lib/
+    cp lib/*_fixture_plugin.fixture lib/*_fixture_plugin.metadata.json \
+       lib/configured_inproc_plugin.dll lib/configured_hosted_plugin.dll \
+       lib/unconfigurable_plugin.dll $out/lib/
     # The host and bundled modules as the package ships them, DLLs included.
     cp -rL ${bin}/bin/. $out/host/
     cp -rL ${bin}/modules/. $out/modules/

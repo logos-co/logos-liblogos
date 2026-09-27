@@ -5,6 +5,7 @@
 #include "dependency_gate.h"
 #include "module_loader_registry.h"
 #include "inproc_module_loader.h"
+#include <optional>
 #include <string>
 #include <vector>
 #include <unordered_map>
@@ -66,6 +67,13 @@ namespace ModuleManager {
     // until a later one is taken.
     bool setAccessPolicy(const std::string& policyJson, std::string* error = nullptr);
     bool accessPolicyRefused();
+
+    // Each module's configuration, {"<module>": <document>, ...}: a module's
+    // document replaces the one set before, whole, and null removes it. Empty
+    // clears every one. Before logos_core_start(). A load delivers the document
+    // with the module's credential.
+    bool setModuleConfig(const std::string& json, std::string* error = nullptr);
+    std::optional<std::string> moduleConfiguration(const std::string& name);
 
     // Allowed callers core would register for `target` (see the .cpp).
     // A pure read with no RPC — exposed so tests can observe the derivation.

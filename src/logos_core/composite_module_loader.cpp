@@ -27,12 +27,39 @@ bool CompositeModuleLoader::load(const ModuleDescriptor& desc,
         return false;
 
     auto args = loader_->buildArguments(desc);
+    // The flag is the capability check: a host too old to read a configuration
+    // refuses it and exits, rather than starting the module without one.
+    const bool configured = takesConfiguration(desc);
+    if (configured) {
+        args.push_back("--configuration-source");
+        args.push_back("stdin");
+    }
+    {
+        std::lock_guard<std::mutex> lock(configuredMutex_);
+        if (configured) configured_.insert(desc.name);
+        else configured_.erase(desc.name);
+    }
     return container_->launch(desc, host, args, std::move(onTerminated), out);
 }
 
 bool CompositeModuleLoader::sendToken(const std::string& name, const std::string& token)
 {
-    return container_->sendToken(name, token);
+    return sendStartupInput(name, token, std::nullopt);
+}
+
+bool CompositeModuleLoader::sendStartupInput(const std::string& name, const std::string& token,
+                                             const std::optional<std::string>& configuration)
+{
+    bool launchedConfigured = false;
+    {
+        std::lock_guard<std::mutex> lock(configuredMutex_);
+        launchedConfigured = configured_.count(name) > 0;
+    }
+    // Both or neither: a host told to read a configuration waits for its line.
+    if (launchedConfigured != configuration.has_value()) return false;
+    if (!configuration) return container_->sendToken(name, token);
+    if (configuration->find_first_of("\r\n") != std::string::npos) return false;
+    return container_->sendToken(name, token + "\n" + *configuration);
 }
 
 LoadOutcome CompositeModuleLoader::awaitLoad(const std::string& name,

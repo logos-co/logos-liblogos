@@ -187,6 +187,12 @@ void logos_core_set_module_transports(const char* module_name,
         transport_set_json ? std::string(transport_set_json) : std::string{});
 }
 
+int logos_core_set_module_config(const char* config_json) {
+    if (!beforeStart("logos_core_set_module_config")) return -1;
+    return ModuleManager::setModuleConfig(config_json ? std::string(config_json) : std::string{})
+        ? 0 : -1;
+}
+
 int logos_core_set_access_policy(const char* policy_json) {
     // NULL/"" clears the policy (see header) — unlike the module-name
     // setters above, this does not abort on NULL.

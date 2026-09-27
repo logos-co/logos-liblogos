@@ -152,6 +152,12 @@ namespace {
         return path;
     }
 
+    // Each module's configuration document, serialized. Guarded by configMutex().
+    std::unordered_map<std::string, std::string>& moduleConfigurations() {
+        static std::unordered_map<std::string, std::string> m;
+        return m;
+    }
+
     std::atomic<bool>& startedFlag() {
         static std::atomic<bool> value{false};
         return value;
@@ -1064,13 +1070,20 @@ namespace {
         // calling load. The loader threads it through to the child via
         // a CLI argument so the child's LogosAPIProvider binds the right
         // listeners. Modules without an entry inherit the global default.
+        // Its configuration, if the embedder gave it one: delivered with its
+        // credential, before it is reachable, on every load.
+        std::optional<std::string> configuration;
         {
             std::shared_lock<std::shared_mutex> g(configMutex());
             if (auto it = moduleTransportsMap().find(name);
                 it != moduleTransportsMap().end()) {
                 desc.transportSetJson = it->second;
             }
+            if (auto it = moduleConfigurations().find(name); it != moduleConfigurations().end())
+                configuration = it->second;
         }
+        if (configuration)
+            desc.loaderConfig[LogosCore::kTakesConfiguration] = true;
 
         // ── Protocol-version load gate ─────────────────────────────────
         // Read the module's embedded metadata without loading it and apply
@@ -1247,7 +1260,7 @@ namespace {
             return false;
         }
 
-        if (!loader->sendToken(name, authToken)) {
+        if (!loader->sendStartupInput(name, authToken, configuration)) {
             // We are about to terminate it deliberately, so announce the intent
             // BEFORE calling terminate() — otherwise onTerminated, which may
             // already be running on the asio thread, reports this as a crash.
@@ -1262,7 +1275,9 @@ namespace {
             abandonLoadAttempt(name);
             logos::ModuleStateObserver::instance().record(
                 name, logos::module_state::kLoading, logos::module_state::kError,
-                instanceId, pid, "failed to deliver the module's auth token");
+                instanceId, pid, configuration
+                    ? "failed to deliver the module's credential and configuration"
+                    : "failed to deliver the module's auth token");
             return false;
         }
 
@@ -1573,6 +1588,37 @@ namespace ModuleManager {
 
     bool accessPolicyRefused() {
         return accessPolicyRefusedFlag();
+    }
+
+    bool setModuleConfig(const std::string& json, std::string* error) {
+        const auto refuse = [error](std::string why) {
+            spdlog::error("logos_core_set_module_config: {}", why);
+            if (error) *error = std::move(why);
+            return false;
+        };
+        std::unique_lock<std::shared_mutex> g(configMutex());
+        if (json.empty()) {
+            moduleConfigurations().clear();
+            return true;
+        }
+        const nlohmann::json doc = nlohmann::json::parse(json, nullptr, false);
+        if (!doc.is_object())
+            return refuse("the module configuration maps module names to documents");
+        for (const auto& [name, value] : doc.items())
+            if (!logos::isValidModuleName(name) || name == "core_service")
+                return refuse("'" + name + "' is not a module that can be configured");
+        for (const auto& [name, value] : doc.items()) {
+            if (value.is_null()) moduleConfigurations().erase(name);
+            else moduleConfigurations()[name] = value.dump();
+        }
+        return true;
+    }
+
+    std::optional<std::string> moduleConfiguration(const std::string& name) {
+        std::shared_lock<std::shared_mutex> g(configMutex());
+        const auto it = moduleConfigurations().find(name);
+        if (it == moduleConfigurations().end()) return std::nullopt;
+        return it->second;
     }
 
     void discoverInstalledModules() {
@@ -1893,6 +1939,7 @@ namespace ModuleManager {
         {
             std::unique_lock<std::shared_mutex> cfg(configMutex());
             moduleTransportsMap().clear();
+            moduleConfigurations().clear();
             accessPolicyJson().clear();  // same rationale — don't leak across restarts
             activePolicy().reset();
             policyVersion() = 0;
