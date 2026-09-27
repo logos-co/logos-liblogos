@@ -595,9 +595,24 @@ namespace {
         return callers;
     }
 
+    bool isPackageModule(const std::string& name) {
+        return name == "package_manager" || name == "package_downloader";
+    }
+
+    // A version 1 rule as written, plus the shell, and on the package modules
+    // core_service, which carries operators' package commands.
+    std::vector<std::string> versionOneRule(const LogosCore::AccessRestriction& rule) {
+        auto callers = withShell(rule.allowedCallers);
+        if (isPackageModule(rule.target)
+            && std::find(callers.begin(), callers.end(), "core_service") == callers.end())
+            callers.push_back("core_service");
+        return callers;
+    }
+
     // A module may only call modules it declared as a dependency, so `target`'s
     // allowed callers are its loaded dependents plus the trusted set. A version 1
-    // rule overrides that verbatim, and one with no callers admits only the shell.
+    // rule overrides that (versionOneRule), so one with no callers admits only the
+    // shell, and operators through core_service.
     // nullopt for no list rule: exempt, no policy, a version 2 rule (sent as
     // written), or not derived in explicit mode.
     std::optional<std::vector<std::string>> listRuleFor(const std::string& target) {
@@ -613,7 +628,7 @@ namespace {
             for (const auto& r : policy->restrictions)
                 if (r.target == target)
                     return policy->version == 2 ? std::nullopt
-                                                : std::optional(withShell(r.allowedCallers));
+                                                : std::optional(versionOneRule(r));
             if (!policy->enforce())
                 return std::nullopt;
         }
@@ -644,10 +659,6 @@ namespace {
 
     std::vector<std::string> derivedAllowedCallersFor(const std::string& target) {
         return listRuleFor(target).value_or(std::vector<std::string>{});
-    }
-
-    bool isPackageModule(const std::string& name) {
-        return name == "package_manager" || name == "package_downloader";
     }
 
     // A version 2 rule as written. The package modules also admit core_service,

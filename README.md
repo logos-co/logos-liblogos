@@ -334,9 +334,11 @@ need an explicit entry):
 ```
 
 `capability_module`, `core` and `core_service` are never restricted as targets,
-and the shell stays among the allowed callers of an explicit entry too. An
-entry with no callers admits only the shell. Under version 1, operators
-(logosctl's tokens, reaching modules through core_service) are never restricted.
+and the shell stays among the allowed callers of an explicit entry too, as does
+`core_service` on `package_manager` and `package_downloader`, which operators'
+package commands reach through it. An entry with no callers admits only those.
+Under version 1, operators (logosctl's tokens, reaching modules through
+core_service) are never restricted.
 
 `mode: "explicit"` sends only the entries written: unlisted modules stay open,
 so a deployer can protect one module without enforcing dependencies everywhere.

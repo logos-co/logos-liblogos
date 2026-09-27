@@ -335,6 +335,24 @@ TEST_F(TokenAuthorityTest, ExplicitModeSendsOnlyTheRulesWritten)
               json::parse(R"({"listed":["x","@op:*"]})"));
 }
 
+// Detector: under a version 1 rule on a package module, operators' package commands
+// (which arrive as core_service) were refused, though version 1 leaves operators free.
+TEST_F(TokenAuthorityTest, VersionOnePackageRulesAdmitCoreService)
+{
+    ASSERT_EQ(logos_core_set_shell_identity("basecamp"), 0);
+    ASSERT_EQ(logos_core_set_access_policy(R"({"version":1,"mode":"explicit","restrictions":{
+        "package_manager":{"allowedCallers":["package_manager_ui"]},
+        "package_downloader":{"allowedCallers":[]},
+        "listed":{"allowedCallers":["x"]}}})"), 0);
+    plantModule("healthy", "report-ok");
+    ASSERT_EQ(logos_core_load_module("healthy", LOGOS_LOAD_MODULE_ONLY), 1);
+
+    EXPECT_EQ(json::parse(stand_in::restrictionDocuments().back()), json::parse(R"({
+        "package_manager":["package_manager_ui","basecamp","core_service","@op:*"],
+        "package_downloader":["basecamp","core_service","@op:*"],
+        "listed":["x","basecamp","@op:*"]})"));
+}
+
 // Detector for the fallback: an older capability_module cannot bind operators or
 // grant methods, so it gets version 1 rules as before, and a version 2 policy
 // is refused rather than half-enforced.
