@@ -21,10 +21,12 @@
 #include <sstream>
 #include <unordered_set>
 #include <boost/dll/runtime_symbol_info.hpp>
+#ifndef LOGOS_CORE_NO_SUBPROCESS
 #if __has_include(<boost/process/v1.hpp>)
 #include <boost/process/v1.hpp>
 #else
 #include <boost/process.hpp>
+#endif
 #endif
 #include <package_manager_lib.h>
 
@@ -76,6 +78,7 @@ std::optional<nlohmann::json> readMetadataSidecar(const std::string& modulePath)
     return value;
 }
 
+#ifndef LOGOS_CORE_NO_SUBPROCESS
 #ifdef _WIN32
 constexpr const char* kExecutableSuffix = ".exe";
 #else
@@ -171,6 +174,16 @@ std::optional<nlohmann::json> spawnInspect(
         return std::nullopt;
     }
 }
+#else
+// No process may be created (iOS): a module without a sidecar goes undiscovered.
+std::optional<nlohmann::json> spawnInspect(
+    const std::string& modulePath, const std::vector<std::string>&)
+{
+    spdlog::error("{} has no metadata sidecar, and this build runs no logos_host_qt "
+                  "--inspect to read it", modulePath);
+    return std::nullopt;
+}
+#endif
 
 // An --inspect spawn costs 40-100 ms and discovery repeats on every refresh, so
 // a binary is asked once until its size or mtime changes.

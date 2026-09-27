@@ -353,6 +353,9 @@ logos_runtime* logos_runtime_spawn(const char* config_json, char** out_error)
         if (out_error) *out_error = lp_string_copy(why.c_str());
         return nullptr;
     };
+#ifdef LOGOS_CORE_NO_SUBPROCESS
+    return fail("this build creates no process: embed the runtime (logos_runtime_embed)");
+#endif
     json config = json::parse(config_json ? config_json : "", nullptr, false);
     if (!config.is_object()) return fail("the configuration is not a JSON object");
     const std::string shell = textOf(config, "shell");

@@ -179,8 +179,25 @@ if(LOGOS_PORTABLE_BUILD)
     target_compile_definitions(logos_core PRIVATE LOGOS_PORTABLE_BUILD=1)
 endif()
 
+# No process creation where the platform forbids it (iOS): the runtime runs
+# embedded, every module in its process; spawning refuses, logos_runtime is not built.
+if(CMAKE_SYSTEM_NAME STREQUAL "iOS")
+    set(_logos_no_subprocess_default ON)
+else()
+    set(_logos_no_subprocess_default OFF)
+endif()
+option(LOGOS_CORE_NO_SUBPROCESS "Build without process creation (embedded runtime only)"
+       ${_logos_no_subprocess_default})
+
 # Find Boost (header-only usage + Boost.Process/Asio)
-find_package(Boost REQUIRED COMPONENTS process filesystem)
+if(LOGOS_CORE_NO_SUBPROCESS)
+    find_package(Boost REQUIRED COMPONENTS filesystem)
+    target_compile_definitions(logos_core PRIVATE LOGOS_CORE_NO_SUBPROCESS=1)
+    set(LOGOS_CORE_BOOST Boost::filesystem)
+else()
+    find_package(Boost REQUIRED COMPONENTS process filesystem)
+    set(LOGOS_CORE_BOOST Boost::process)
+endif()
 
 # Find logos-package-manager library
 if(DEFINED LOGOS_PACKAGE_MANAGER_ROOT AND EXISTS "${LOGOS_PACKAGE_MANAGER_ROOT}/lib")
@@ -253,7 +270,7 @@ target_link_libraries(logos_core PUBLIC
     package_manager_lib
     lgx_lib
     nlohmann_json::nlohmann_json
-    Boost::process
+    ${LOGOS_CORE_BOOST}
     spdlog::spdlog
 )
 
@@ -330,6 +347,7 @@ else()
 endif()
 
 # The runtime in a process of its own, which an app spawns (logos_runtime_spawn).
+if(NOT LOGOS_CORE_NO_SUBPROCESS)
 add_executable(logos_runtime runtime_host/main.cpp)
 target_link_libraries(logos_runtime PRIVATE logos_core)
 target_include_directories(logos_runtime PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/logos_core)
@@ -343,6 +361,7 @@ elseif(NOT WIN32)
         BUILD_WITH_INSTALL_RPATH TRUE)
 endif()
 install(TARGETS logos_runtime RUNTIME DESTINATION bin)
+endif()
 
 # The test suite drives the internal C++ classes as well as the C API, and on
 # Windows the DLL exports only the C API (see above). There the suite links the

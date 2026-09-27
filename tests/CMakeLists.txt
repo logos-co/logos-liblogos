@@ -40,7 +40,10 @@ add_dependencies(logos_core_tests logos_fake_module_host)
 add_executable(logos_runtime_test_app runtime_app_main.cpp)
 target_link_libraries(logos_runtime_test_app PRIVATE logos_core nlohmann_json::nlohmann_json)
 target_include_directories(logos_runtime_test_app PRIVATE ${CMAKE_SOURCE_DIR}/src/logos_core)
-add_dependencies(logos_core_tests logos_runtime logos_runtime_test_app)
+add_dependencies(logos_core_tests logos_runtime_test_app)
+if(TARGET logos_runtime)
+    add_dependencies(logos_core_tests logos_runtime)
+endif()
 
 # Imported container/loader targets the tests drive via SubprocessManager /
 # CompositeModuleLoader: logos_container + logos_module_loader (the contracts),
