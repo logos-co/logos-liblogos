@@ -131,8 +131,23 @@ TEST(Placement, AMalformedPolicyIsRejected)
     PlacementPolicy parsed;
     std::string error;
     for (const char* text : {"[]", R"({"default":"elsewhere"})", R"({"modules":[]})",
-                             R"({"modules":{"m":true}})", R"({"single_process":"yes"})"})
+                             R"({"modules":{"m":true}})", R"({"single_process":"yes"})",
+                             R"({"local_endpoints":false})",
+                             R"({"single_process":true,"local_endpoints":"no"})"})
         EXPECT_FALSE(LogosCore::parsePlacementPolicy(text, parsed, error)) << text;
+}
+
+// Only a runtime that runs everything itself may do without local sockets.
+TEST(Placement, LocalEndpointsGoOnlyWithSingleProcess)
+{
+    PlacementPolicy parsed;
+    std::string error;
+    ASSERT_TRUE(LogosCore::parsePlacementPolicy(R"({"single_process":true,"local_endpoints":false})",
+                                                parsed, error)) << error;
+    EXPECT_TRUE(parsed.singleProcess);
+    EXPECT_FALSE(parsed.localEndpoints);
+    ASSERT_TRUE(LogosCore::parsePlacementPolicy("{}", parsed, error)) << error;
+    EXPECT_TRUE(parsed.localEndpoints);
 }
 
 class InprocBundledTest : public ::testing::Test {

@@ -44,7 +44,19 @@ std::string inprocTransportSet(const std::string& configured)
     json set = configured.empty() ? json::array() : json::parse(configured, nullptr, false);
     if (set.is_object()) set = json::array({set});
     if (!set.is_array()) set = json::array();
-    if (set.empty()) set.push_back({{"protocol", "qt_remote_plain"}});
+    if (ModuleManager::placementPolicy().localEndpoints) {
+        if (set.empty()) set.push_back({{"protocol", "qt_remote_plain"}});
+    } else {
+        // No local socket; a network listener the embedder configured stays.
+        json kept = json::array();
+        for (const auto& entry : set) {
+            const std::string protocol =
+                entry.is_object() ? entry.value("protocol", std::string{}) : std::string{};
+            if (protocol != "qt_remote_plain" && protocol != "qt_remote" && protocol != "local")
+                kept.push_back(entry);
+        }
+        set = std::move(kept);
+    }
     const bool served = std::any_of(set.begin(), set.end(), [](const json& entry) {
         return entry.is_object() && entry.value("protocol", std::string{}) == "inproc";
     });
@@ -177,6 +189,18 @@ bool parsePlacementPolicy(const std::string& text, PlacementPolicy& out, std::st
             return false;
         }
         policy.singleProcess = it->get<bool>();
+    }
+    if (auto it = doc.find("local_endpoints"); it != doc.end()) {
+        if (!it->is_boolean()) {
+            error = "\"local_endpoints\" must be a boolean";
+            return false;
+        }
+        policy.localEndpoints = it->get<bool>();
+    }
+    // Something in another process would need them.
+    if (!policy.localEndpoints && !policy.singleProcess) {
+        error = "\"local_endpoints\": false needs \"single_process\": true";
+        return false;
     }
     out = std::move(policy);
     return true;

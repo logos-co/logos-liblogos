@@ -167,8 +167,14 @@ LOGOS_CORE_EXPORT void logos_consumer_release(logos_consumer* consumer);
 // (free with logos_consumer_string_free). One runtime per process.
 typedef struct logos_runtime logos_runtime;
 LOGOS_CORE_EXPORT logos_runtime* logos_runtime_spawn(const char* config_json, char** out_error);
-// The shell's binding into it; every call takes the local socket. Owned by the
-// handle, and valid until logos_runtime_stop().
+// The runtime in this process instead, where no process may be spawned (iOS):
+// the same configuration, "hooks" aside (set them with the logos_core_set_*
+// setters), and the caller its shell. Once per process, even after
+// logos_runtime_stop(): the images it loaded stay mapped. With placement_policy
+// {"single_process": true, "local_endpoints": false} it binds no local socket.
+LOGOS_CORE_EXPORT logos_runtime* logos_runtime_embed(const char* config_json, char** out_error);
+// The shell's binding into it; every call takes the local socket (inproc when
+// embedded). Owned by the handle, and valid until logos_runtime_stop().
 LOGOS_CORE_EXPORT logos_consumer* logos_runtime_binding(logos_runtime* runtime);
 // logos_core_process_module, run there: the module's name, or NULL if refused.
 // Free with logos_consumer_string_free.
