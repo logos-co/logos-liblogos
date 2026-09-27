@@ -13,9 +13,13 @@
 #include "qt_test_adapter.h"
 #include "test_platform.h"
 #include <nlohmann/json.hpp>
+#include <chrono>
+#include <cstdio>
+#include <cstdlib>
 #include <filesystem>
 #include <fstream>
 #include <string>
+#include <thread>
 
 namespace fs = std::filesystem;
 using json = nlohmann::json;
@@ -193,3 +197,99 @@ TEST(RuntimeControl, ARemoteConsumerGetsOnlyTheMethodsItsRuntimeIsGranted)
     logos_core_terminate_all();
     logos_core_clear();
 }
+
+#ifndef _WIN32
+namespace {
+
+// Destroyed after the statics the runtime made while running: time for a thread
+// still running during exit to reach one of them.
+struct SlowTeardown {
+    bool armed = false;
+    ~SlowTeardown()
+    {
+        if (armed) std::this_thread::sleep_for(std::chrono::seconds(1));
+    }
+} g_slowTeardown;
+
+// tests/fixtures/peering_stub_module.cpp, bundled as peering_module in `dir`.
+bool installStub(const fs::path& dir)
+{
+    const fs::path stub = logos_test::thisExecutable().parent_path().parent_path() / "lib"
+        / "peering_stub_module.fixture";
+#ifdef __APPLE__
+    const std::string file = "peering_module_plugin.dylib";
+#else
+    const std::string file = "peering_module_plugin.so";
+#endif
+    const fs::path moduleDir = dir / "peering_module";
+    std::error_code ec;
+    fs::create_directories(moduleDir, ec);
+    if (!fs::copy_file(stub, moduleDir / file, fs::copy_options::overwrite_existing, ec)) return false;
+    json main = json::object();
+    for (const char* os : {"darwin", "linux"})
+        for (const char* arch : {"arm64", "aarch64", "amd64", "x86_64"})
+            for (const char* suffix : {"", "-dev"})
+                main[std::string(os) + "-" + arch + suffix] = file;
+    std::ofstream(moduleDir / "manifest.json")
+        << json{{"name", "peering_module"}, {"version", "0.1.0"}, {"type", "core"}, {"main", main}}.dump();
+    std::ofstream(moduleDir / "peering_module_plugin.metadata.json")
+        << json{{"name", "peering_module"}, {"version", "0.1.0"}, {"type", "core"},
+                {"interface", "universal"}, {"transport", "qt_remote_plain"},
+                {"main", "peering_module_plugin"}, {"dependencies", json::array()},
+                {"logos_protocol_version", LOGOS_PROTOCOL_VERSION_STRING},
+                {"inproc_eligible", true}}.dump();
+    return true;
+}
+
+} // namespace
+
+// exit() with peering live, as an app's error path does with its runtime running:
+// the child below starts peering_link, whose first job is still running, and exits.
+TEST(PeeringLink, AnAppMayExitWithPeeringLive)
+{
+    const char* bundled = std::getenv("TEST_BUNDLED_MODULES_DIR");
+    if (!bundled || !*bundled) {
+        if (std::getenv("LOGOS_REQUIRE_TEST_FIXTURES")) FAIL() << "TEST_BUNDLED_MODULES_DIR not set";
+        GTEST_SKIP() << "TEST_BUNDLED_MODULES_DIR not set";
+    }
+    TmpDir stub;
+    ASSERT_TRUE(installStub(stub.path));
+    logos_test::setEnv("PEERING_EXIT_BUNDLED", bundled);
+    logos_test::setEnv("PEERING_EXIT_STUB", stub.path.string());
+    logos_test::Child child;
+    const bool started = child.start(logos_test::thisExecutable().string(),
+        {"--gtest_filter=PeeringLinkChild.DISABLED_ExitsWithPeeringLive",
+         "--gtest_also_run_disabled_tests"}, true);
+    logos_test::unsetEnv("PEERING_EXIT_BUNDLED");
+    logos_test::unsetEnv("PEERING_EXIT_STUB");
+    ASSERT_TRUE(started);
+    std::string output;
+    char buffer[512];
+    while (output.find("LIVE\n") == std::string::npos) {
+        const size_t n = child.read(buffer, sizeof buffer);
+        if (n == 0) break;
+        output.append(buffer, n);
+    }
+    const int code = child.wait(std::chrono::seconds(30));
+    EXPECT_NE(output.find("CONFIGURED"), std::string::npos) << "peering never started\n" << output;
+    EXPECT_EQ(code, 3) << "a negative code is the signal that ended it\n" << output;
+}
+
+// The child of AnAppMayExitWithPeeringLive, never run on its own.
+TEST(PeeringLinkChild, DISABLED_ExitsWithPeeringLive)
+{
+    const char* bundled = std::getenv("PEERING_EXIT_BUNDLED");
+    const char* stub = std::getenv("PEERING_EXIT_STUB");
+    ASSERT_TRUE(bundled && stub);
+    logos::authority::detach();
+    const char* dirs[] = {bundled, stub, nullptr};
+    ASSERT_EQ(logos_core_set_bundled_modules_dirs(dirs), 0);
+    ASSERT_EQ(logos_core_set_placement_policy(R"({"single_process":true})"), 0);
+    ASSERT_EQ(logos_core_set_peering_config(R"({"name":"exit-test"})"), 0);
+    logos_core_start();
+    std::printf("LIVE\n");
+    std::fflush(stdout);
+    g_slowTeardown.armed = true;
+    std::exit(3);
+}
+#endif
