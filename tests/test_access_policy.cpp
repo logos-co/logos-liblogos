@@ -226,6 +226,45 @@ TEST(AccessPolicyParse, VersionTwoTakesExactlyItsGrammar) {
     }
 }
 
+// A peered runtime's consumer reaches modules as "@op:@peer:<runtime id>:<consumer>",
+// and a rule may name any libpeering admits; anything else after "@op:@peer:" is refused.
+TEST(AccessPolicyParse, VersionTwoNamesAPeeredOperatorExactly) {
+    const std::string uuid = "3f2b8c1e-9a4d-4e7f-b2c6-0d1e2f3a4b5c";
+    const std::string peer = "@op:@peer:" + uuid + ":wallet_ui";
+    auto policy = parseAccessPolicy(R"({"version":2,"restrictions":{
+        "keyed":{"allowedCallers":{")" + peer + R"(":["balance"]}},
+        "listed":{"allowedCallers":[")" + peer + R"("]}}})");
+    ASSERT_TRUE(policy.has_value());
+    EXPECT_EQ((*findTarget(*policy, "keyed")->grants)[peer], nlohmann::json({"balance"}));
+    EXPECT_EQ(findTarget(*policy, "listed")->allowedCallers, (std::vector<std::string>{peer}));
+
+    const auto parses = [](const std::string& caller, std::string* error = nullptr) {
+        return parseAccessPolicy(R"({"version":2,"restrictions":{"t":{"allowedCallers":{")"
+                                 + caller + R"(":"*"}}}})", error).has_value();
+    };
+    // Any version or variant nibble, and consumers up to 128 characters.
+    EXPECT_TRUE(parses("@op:@peer:3f2b8c1e-9a4d-1e7f-c2c6-0d1e2f3a4b5c:wallet_ui"));
+    EXPECT_TRUE(parses("@op:@peer:" + uuid + ":w" + std::string(127, '_')));
+    for (const std::string bad : {
+             std::string("@op:@peer:"),
+             "@op:@peer:" + uuid,
+             "@op:@peer:" + uuid + ":",
+             "@op:@peer:" + uuid + ":bad name",
+             "@op:@peer:" + uuid + ":a:b",
+             "@op:@peer:" + uuid + ":wallet-ui",
+             "@op:@peer:" + uuid + ":1wallet",
+             "@op:@peer:" + uuid + ":_wallet",
+             "@op:@peer:" + uuid + ":w" + std::string(128, '_'),
+             std::string("@op:@peer:3F2B8C1E-9A4D-4E7F-B2C6-0D1E2F3A4B5C:wallet_ui"),
+             std::string("@op:@peer:3f2b8c1e9a4d4e7fb2c60d1e2f3a4b5c:wallet_ui"),
+             std::string("@op:@peer:3f2b8c1e09a4d04e7f0b2c600d1e2f3a4b5c:wallet_ui"),
+             std::string("@op:@peer:not-a-runtime:wallet_ui")}) {
+        std::string error;
+        EXPECT_FALSE(parses(bad, &error)) << bad;
+        EXPECT_NE(error.find("is not a caller"), std::string::npos) << bad << ": " << error;
+    }
+}
+
 // The runtime's own modules are never restricted, and core_service's entry on the
 // package modules is the runtime's to add.
 TEST(AccessPolicyParse, VersionTwoNeverNamesTheRuntimesOwnModules) {

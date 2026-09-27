@@ -359,7 +359,9 @@ A version 2 policy can grant methods, per caller:
 ```
 
 - **Callers**: a module, UI plugin or shell name; `@op:<name>` for one operator
-  token and `@op:*` for any; `*` for any other caller, never an operator.
+  token and `@op:*` for any; `*` for any other caller, never an operator. A
+  consumer a peered runtime forwards is the operator
+  `@op:@peer:<runtime id>:<consumer>`.
 - **Grants**: a list is only those methods, `"*"` every method, `[]` none. The
   list form (`"allowedCallers": ["a", "b"]`) grants each caller every method,
   and a rule without callers admits nobody.

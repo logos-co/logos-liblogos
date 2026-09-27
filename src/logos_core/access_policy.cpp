@@ -25,11 +25,34 @@ bool isOperatorName(const std::string& name)
     return true;
 }
 
+// A peered runtime's consumer, as core_service names it: "@peer:<runtime id>:<consumer>",
+// each as libpeering admits it (a lowercase 8-4-4-4-12 hex id; a letter, then [A-Za-z0-9_]).
+bool isPeerOperatorName(const std::string& name)
+{
+    const std::string prefix = "@peer:";
+    constexpr std::size_t kId = 36;
+    constexpr std::size_t kMaxConsumer = 128;
+    if (name.rfind(prefix, 0) != 0 || name.size() < prefix.size() + kId + 2) return false;
+    for (std::size_t i = 0; i < kId; ++i) {
+        const bool dash = i == 8 || i == 13 || i == 18 || i == 23;
+        const char c = name[prefix.size() + i];
+        if (dash ? c != '-' : !((c >= '0' && c <= '9') || (c >= 'a' && c <= 'f'))) return false;
+    }
+    if (name[prefix.size() + kId] != ':') return false;
+    const std::string consumer = name.substr(prefix.size() + kId + 1);
+    const auto letter = [](char c) { return (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z'); };
+    if (consumer.size() > kMaxConsumer || !letter(consumer[0])) return false;
+    for (const char c : consumer)
+        if (!letter(c) && !(c >= '0' && c <= '9') && c != '_') return false;
+    return true;
+}
+
 // "*", "@op:*", "@op:<operator>", or a module, UI or shell name.
 bool isCallerKey(const std::string& caller)
 {
     if (caller == "*" || caller == "@op:*") return true;
-    if (caller.rfind("@op:", 0) == 0) return isOperatorName(caller.substr(4));
+    if (caller.rfind("@op:", 0) == 0)
+        return isOperatorName(caller.substr(4)) || isPeerOperatorName(caller.substr(4));
     return logos::isValidModuleName(caller);
 }
 
