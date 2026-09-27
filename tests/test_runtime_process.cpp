@@ -205,6 +205,48 @@ struct SavedEnv {
     }
 };
 
+// The stand-in app (tests/runtime_app_main.cpp), read up to its READY line.
+struct StandInApp {
+    logos_test::Child child;
+    std::int64_t runtimePid = 0;
+    std::vector<std::int64_t> hosts;
+    std::string output;
+
+    bool start(const std::string& config, const std::vector<std::string>& more = {})
+    {
+        const auto app = logos_test::thisExecutable().parent_path()
+#ifdef _WIN32
+            / "logos_runtime_test_app.exe";
+#else
+            / "logos_runtime_test_app";
+#endif
+        std::vector<std::string> args{config};
+        args.insert(args.end(), more.begin(), more.end());
+        if (!std::filesystem::exists(app) || !child.start(app.string(), args, true)) {
+            output = "could not start " + app.string();
+            return false;
+        }
+        // A whole line, "\r\n" on Windows' text-mode stdout.
+        const auto said = [&](const char* word) {
+            const auto at = output.find(word);
+            return at != std::string::npos && output.find('\n', at) != std::string::npos;
+        };
+        char buffer[512];
+        while (!said("READY") && !said("SPAWN_FAILED")) {
+            const size_t n = child.read(buffer, sizeof buffer);
+            if (n == 0) break;
+            output.append(buffer, n);
+        }
+        std::istringstream lines(output);
+        for (std::string word; lines >> word;) {
+            std::int64_t pid = 0;
+            if (word == "RUNTIME_PID" && lines >> pid) runtimePid = pid;
+            else if (word == "HOST_PID" && lines >> pid) hosts.push_back(pid);
+        }
+        return said("READY");
+    }
+};
+
 } // namespace
 
 class RuntimeProcessTest : public ::testing::Test {
@@ -411,43 +453,30 @@ TEST_F(RuntimeProcessTest, AnUnexpectedExitIsReported)
 // SIGKILL on the app (TerminateProcess on Windows) takes the runtime and its hosts down.
 TEST_F(RuntimeProcessTest, TheRuntimeAndItsHostsGoDownWithTheirApp)
 {
-    const auto app = logos_test::thisExecutable().parent_path()
-#ifdef _WIN32
-        / "logos_runtime_test_app.exe";
-#else
-        / "logos_runtime_test_app";
-#endif
-    ASSERT_TRUE(std::filesystem::exists(app)) << app;
     const json placement = {{"modules", {{"modules_state", "subprocess"}}}};
-    logos_test::Child child;
-    ASSERT_TRUE(child.start(app.string(), {config({{"placement_policy", placement}}).dump()}, true));
+    StandInApp app;
+    ASSERT_TRUE(app.start(config({{"placement_policy", placement}}).dump())) << app.output;
+    ASSERT_GT(app.runtimePid, 0) << app.output;
+    ASSERT_FALSE(app.hosts.empty()) << app.output;
 
-    std::int64_t runtimePid = 0;
-    std::vector<std::int64_t> hosts;
-    std::string output;
-    char buffer[512];
-    // A whole line, "\r\n" on Windows' text-mode stdout.
-    const auto said = [&](const char* word) {
-        const auto at = output.find(word);
-        return at != std::string::npos && output.find('\n', at) != std::string::npos;
-    };
-    while (!said("READY") && !said("SPAWN_FAILED")) {
-        const size_t n = child.read(buffer, sizeof buffer);
-        if (n == 0) break;
-        output.append(buffer, n);
-    }
-    ASSERT_TRUE(said("READY")) << output;
-    std::istringstream lines(output);
-    for (std::string word; lines >> word;) {
-        std::int64_t pid = 0;
-        if (word == "RUNTIME_PID" && lines >> pid) runtimePid = pid;
-        else if (word == "HOST_PID" && lines >> pid) hosts.push_back(pid);
-    }
-    ASSERT_GT(runtimePid, 0) << output;
-    ASSERT_FALSE(hosts.empty()) << output;
+    app.child.kill();
+    EXPECT_TRUE(eventually([&] { return !alive(app.runtimePid); })) << "the runtime outlived its app";
+    for (const auto host : app.hosts)
+        EXPECT_TRUE(eventually([&] { return !alive(host); })) << "host " << host << " outlived its app";
+}
 
-    child.kill();
-    EXPECT_TRUE(eventually([&] { return !alive(runtimePid); })) << "the runtime outlived its app";
-    for (const auto host : hosts)
+// exit(1) with the runtime live and no stop: the app ends with that code, not on
+// a mutex its teardown already destroyed, and the runtime and its hosts follow.
+TEST_F(RuntimeProcessTest, AnAppMayExitWithItsRuntimeLive)
+{
+    const json placement = {{"modules", {{"modules_state", "subprocess"}}}};
+    StandInApp app;
+    ASSERT_TRUE(app.start(config({{"placement_policy", placement}}).dump(), {"exit"})) << app.output;
+    ASSERT_GT(app.runtimePid, 0) << app.output;
+    ASSERT_FALSE(app.hosts.empty()) << app.output;
+
+    EXPECT_EQ(app.child.wait(std::chrono::seconds(30)), 1) << "a negative code is the signal that ended it";
+    EXPECT_TRUE(eventually([&] { return !alive(app.runtimePid); })) << "the runtime outlived its app";
+    for (const auto host : app.hosts)
         EXPECT_TRUE(eventually([&] { return !alive(host); })) << "host " << host << " outlived its app";
 }

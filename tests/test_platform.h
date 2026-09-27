@@ -5,12 +5,15 @@
 // environment edits, temporary directories, child processes, and the path of
 // the stand-in module host (tests/fake_module_host_main.cpp).
 
+#include <chrono>
+#include <climits>
 #include <cstdint>
 #include <filesystem>
 #include <random>
 #include <sstream>
 #include <stdexcept>
 #include <string>
+#include <thread>
 #include <vector>
 
 #ifdef _WIN32
@@ -333,6 +336,35 @@ public:
 #endif
         m_pid = 0;
         closeOutput();
+    }
+
+    // Its exit code once it exits on its own (-signal if one ended it), or
+    // INT_MIN if it has not within `limit`; it is killed then.
+    int wait(std::chrono::milliseconds limit)
+    {
+        int code = INT_MIN;
+#ifdef _WIN32
+        DWORD status = 0;
+        if (m_process && WaitForSingleObject(m_process, static_cast<DWORD>(limit.count())) == WAIT_OBJECT_0
+            && GetExitCodeProcess(m_process, &status))
+            code = static_cast<int>(status);
+#else
+        const auto deadline = std::chrono::steady_clock::now() + limit;
+        while (m_pid > 0) {
+            int status = 0;
+            const pid_t done = ::waitpid(static_cast<pid_t>(m_pid), &status, WNOHANG);
+            if (done == static_cast<pid_t>(m_pid)) {
+                code = WIFEXITED(status) ? WEXITSTATUS(status) : -WTERMSIG(status);
+                m_pid = 0;
+            } else if ((done < 0 && errno != EINTR) || std::chrono::steady_clock::now() >= deadline) {
+                break;
+            } else {
+                std::this_thread::sleep_for(std::chrono::milliseconds(20));
+            }
+        }
+#endif
+        kill();
+        return code;
     }
 
 private:
