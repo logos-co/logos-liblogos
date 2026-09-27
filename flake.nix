@@ -26,7 +26,7 @@
     # The channel-process seam that spawns logos_runtime, on its branches until they merge.
     logos-container.url = "github:logos-co/logos-container/feat/runtime-process";
     logos-module-loader.url = "github:logos-co/logos-module-loader";
-    default-container.url = "github:logos-co/logos-container-subprocess/fix/channel-process-outlives-exit";
+    default-container.url = "github:logos-co/logos-container-subprocess/feat/runtime-process";
     # The default loader LINKS logos-protocol, and this process loads it, so a
     # revision of its own means two of every function-local static in there.
     # Only the protocol-carrying chain follows: the rest of its inputs are lock

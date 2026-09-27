@@ -11,16 +11,16 @@
         ]
       },
       "locked": {
-        "lastModified": 1790533807,
+        "lastModified": 1790536314,
         "narHash": "sha256-OBKBSClFZIqda4+1DsGaPKIpf7jlixvgHxsdSNN098E=",
         "owner": "logos-co",
         "repo": "logos-container-subprocess",
-        "rev": "aba5c702f0b26c103588c9e887f27e82b9d0b12a",
+        "rev": "18293312a63407a12330292580ca168126f0dcef",
         "type": "github"
       },
       "original": {
         "owner": "logos-co",
-        "ref": "fix/channel-process-outlives-exit",
+        "ref": "feat/runtime-process",
         "repo": "logos-container-subprocess",
         "type": "github"
       }
