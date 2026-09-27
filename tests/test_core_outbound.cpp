@@ -1,83 +1,18 @@
 // What core sends to other modules, and how it reaches them.
 
 #include "fake_module_host.h"
-#include "logos_protocol.h"
 
 #include <nlohmann/json.hpp>
-
-#ifdef _WIN32
-#include <winsock2.h>
-#include <ws2tcpip.h>
-#else
-#include <arpa/inet.h>
-#include <netinet/in.h>
-#include <sys/socket.h>
-#include <unistd.h>
-#endif
 
 #include <algorithm>
 #include <chrono>
 #include <condition_variable>
-#include <cstdlib>
-#include <cstring>
-#include <map>
 #include <mutex>
 #include <string>
 #include <thread>
 #include <vector>
 
 namespace {
-
-char* copyOut(const std::string& value)
-{
-    auto* out = static_cast<char*>(std::malloc(value.size() + 1));
-    std::memcpy(out, value.c_str(), value.size() + 1);
-    return out;
-}
-
-char* noMethods(void*) { return copyOut("[]"); }
-
-std::uint16_t freeTcpPort()
-{
-#ifdef _WIN32
-    WSADATA wsa;
-    WSAStartup(MAKEWORD(2, 2), &wsa);
-    const SOCKET fd = ::socket(AF_INET, SOCK_STREAM, 0);
-    using Length = int;
-#else
-    const int fd = ::socket(AF_INET, SOCK_STREAM, 0);
-    using Length = socklen_t;
-#endif
-    sockaddr_in address{};
-    address.sin_family = AF_INET;
-    address.sin_addr.s_addr = htonl(INADDR_LOOPBACK);
-    ::bind(fd, reinterpret_cast<sockaddr*>(&address), sizeof(address));
-    Length length = sizeof(address);
-    ::getsockname(fd, reinterpret_cast<sockaddr*>(&address), &length);
-#ifdef _WIN32
-    ::closesocket(fd);
-#else
-    ::close(fd);
-#endif
-    return ntohs(address.sin_port);
-}
-
-struct Received {
-    std::mutex mutex;
-    std::condition_variable changed;
-    std::vector<std::string> methods;
-};
-
-char* recordMethod(const char* method, const char*, void* userData)
-{
-    auto& received = *static_cast<Received*>(userData);
-    {
-        std::lock_guard<std::mutex> lock(received.mutex);
-        received.methods.push_back(method);
-    }
-    received.changed.notify_all();
-    return copyOut("true");
-}
 
 class CoreOutboundTest : public FakeHostFixture {
 protected:
@@ -88,7 +23,6 @@ protected:
 
     void TearDown() override {
         logos_core_set_access_policy(nullptr);
-        logos_core_set_module_transports("modules_state", "");
         FakeHostFixture::TearDown();
     }
 
@@ -103,48 +37,22 @@ protected:
         ASSERT_NE(registered, nullptr);
         delete[] registered;
     }
-
-    // A stand-in for a loaded module, served from this process.
-    lp_provider* serve(const std::string& name, const char* transports, lp_dispatch_cb dispatch,
-                       void* userData) {
-        char* token = logos_core_get_token(name.c_str());
-        EXPECT_NE(token, nullptr);
-        lp_provider* provider = lp_provider_create(name.c_str(), transports);
-        EXPECT_NE(provider, nullptr);
-        EXPECT_EQ(lp_provider_save_token(provider, "core", token ? token : ""), LP_OK);
-        delete[] token;
-        EXPECT_EQ(lp_provider_register(provider, dispatch, noMethods, nullptr, userData), LP_OK);
-        return provider;
-    }
 };
 
 } // namespace
 
-// Detector: core rewrote every module's tcp or tcp_ssl transport to local, so
-// an embedder's module listening on tcp only was unreachable. Here the one
-// core dials on its own: modules_state, for the lifecycle feed.
-TEST_F(CoreOutboundTest, ATcpOnlyModuleIsReachedOverTcp)
+// tcp was removed in logos-protocol 0.15. A module configured with it fails
+// to load, with why, rather than serving its local socket alone.
+TEST_F(CoreOutboundTest, AModuleConfiguredWithARemovedTransportIsRefused)
 {
-    const std::string tcp = "[{\"protocol\":\"tcp\",\"host\":\"127.0.0.1\",\"port\":"
-        + std::to_string(freeTcpPort()) + "}]";
-    logos_core_set_module_transports("modules_state", tcp.c_str());
-    plantModule("modules_state", "report-ok");
-    ASSERT_EQ(logos_core_load_module("modules_state", LOGOS_LOAD_MODULE_ONLY), 1);
-    Received received;
-    lp_provider* stateModule = serve("modules_state", tcp.c_str(), recordMethod, &received);
-
+    logos_core_set_module_transports("churn",
+                                     R"([{"protocol":"tcp","host":"127.0.0.1","port":6001}])");
     plantModule("churn", "report-ok");
-    ASSERT_EQ(logos_core_load_module("churn", LOGOS_LOAD_MODULE_ONLY), 1);
-    {
-        std::unique_lock<std::mutex> lock(received.mutex);
-        EXPECT_TRUE(received.changed.wait_for(lock, std::chrono::seconds(15), [&] {
-            return std::count(received.methods.begin(), received.methods.end(),
-                              "note_transition") > 0;
-        })) << "nothing reached modules_state over tcp";
-    }
-    ASSERT_EQ(logos_core_unload_module("churn", false), 1);
-    ASSERT_EQ(logos_core_unload_module("modules_state", false), 1);
-    lp_provider_destroy(stateModule);
+    EXPECT_EQ(logos_core_load_module("churn", LOGOS_LOAD_MODULE_ONLY), 0);
+    EXPECT_FALSE(logos_core_is_module_loaded("churn"));
+    const std::string reason = reasonFor("churn", logos::module_state::kError);
+    EXPECT_NE(reason.find("removed in protocol 0.15"), std::string::npos) << reason;
+    logos_core_set_module_transports("churn", "");
 }
 
 // Detector: restriction pushes ran on each loading thread, so under

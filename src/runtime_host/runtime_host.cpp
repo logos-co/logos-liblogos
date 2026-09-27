@@ -484,14 +484,18 @@ bool configure(const json& config, std::string& error)
     }
     if (const auto it = config.find("access_policy"); it != config.end())
         logos_core_set_access_policy(documentText(*it).c_str());
+    if (config.contains("core_service_transports")) {
+        error = "core_service_transports was removed with the tcp and tcp_ssl transports "
+                "(logos-protocol 0.15): another runtime reaches core_service over Remote "
+                "Runtime Control (developer guide §9.6)";
+        return false;
+    }
     struct Setter {
         const char* key;
         int (*apply)(const char*);
     };
     for (const Setter& setter : {Setter{"placement_policy", &logos_core_set_placement_policy},
                                  Setter{"package_config", &logos_core_set_package_config},
-                                 Setter{"core_service_transports",
-                                        &logos_core_set_core_service_transports},
                                  Setter{"peering_config", &logos_core_set_peering_config}}) {
         const auto it = config.find(setter.key);
         if (it != config.end() && setter.apply(documentText(*it).c_str()) != 0) {

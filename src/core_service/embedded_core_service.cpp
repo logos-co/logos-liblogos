@@ -41,7 +41,6 @@ constexpr unsigned kConcurrentCalls = 8;
 
 struct Config {
     std::mutex mutex;
-    std::string transports;
     ShutdownHandler shutdown = nullptr;
     void* shutdownData = nullptr;
     OperatorResolver operators = nullptr;
@@ -795,12 +794,6 @@ void publishTransitions(const std::vector<ModuleTransition>& batch)
 
 } // namespace
 
-void setTransports(const std::string& text)
-{
-    std::lock_guard<std::mutex> lock(config().mutex);
-    config().transports = text;
-}
-
 void setShutdownHandler(ShutdownHandler handler, void* userData)
 {
     std::lock_guard<std::mutex> lock(config().mutex);
@@ -853,7 +846,6 @@ Hooks hooks()
 void resetConfiguration()
 {
     std::lock_guard<std::mutex> lock(config().mutex);
-    config().transports.clear();
     config().shutdown = nullptr;
     config().shutdownData = nullptr;
     config().operators = nullptr;
@@ -880,14 +872,8 @@ bool start()
         spdlog::error("core_service: capability_module refused to admit it");
         return false;
     }
-    json transports = json::array({{{"protocol", "inproc"}}, {{"protocol", "qt_remote_plain"}}});
-    {
-        std::lock_guard<std::mutex> lock(config().mutex);
-        const json extra = json::parse(config().transports.empty() ? "[]" : config().transports,
-                                       nullptr, false);
-        if (extra.is_array())
-            for (const auto& t : extra) transports.push_back(t);
-    }
+    // Another runtime reaches it over Remote Runtime Control (peering_link).
+    const json transports = json::array({{{"protocol", "inproc"}}, {{"protocol", "qt_remote_plain"}}});
     lp_provider* provider = lp_provider_create(kName, transports.dump().c_str());
     if (!provider) {
         spdlog::error("core_service: its provider could not be created");

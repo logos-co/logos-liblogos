@@ -412,6 +412,20 @@ TEST_F(RuntimeProcessTest, OneRuntimePerProcess)
     logos_consumer_string_free(noShell);
 }
 
+// Removed with tcp and tcp_ssl (logos-protocol 0.15): refused, never ignored.
+TEST_F(RuntimeProcessTest, TheRemovedCoreServiceTransportsKeyIsRefused)
+{
+    char* error = nullptr;
+    Spawned refused;
+    const json tcp = json::array({{{"protocol", "tcp"}, {"port", 6001}}});
+    refused.runtime = logos_runtime_spawn(
+        config({{"core_service_transports", tcp}}).dump().c_str(), &error);
+    EXPECT_EQ(refused.runtime, nullptr);
+    ASSERT_NE(error, nullptr);
+    EXPECT_NE(std::string(error).find("Remote Runtime Control"), std::string::npos) << error;
+    logos_consumer_string_free(error);
+}
+
 TEST_F(RuntimeProcessTest, AnUnexpectedExitIsReported)
 {
     char* error = nullptr;

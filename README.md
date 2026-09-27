@@ -213,7 +213,7 @@ its image stays mapped after an unload, so loading it again needs a restart.
 
 `logos_core_start()` loads capability_module, the token authority, and publishes
 `core_service`, the runtime's control surface, as a module of its own (inproc and
-the local socket, plus what `logos_core_set_core_service_transports` adds).
+the local socket; another runtime reaches it over Remote Runtime Control).
 capability_module has to be bundled and run in-process: without it there is no
 authority, `logos_core_start()` logs why and publishes nothing, and nothing
 loads.
@@ -267,7 +267,9 @@ logos_runtime_stop(rt);
 
 The configuration carries what the setters take (`modules_dirs`,
 `bundled_modules_dirs`, `persistence_base_path`, `module_transports`,
-`access_policy`, `placement_policy`, `package_config`, `core_service_transports`).
+`access_policy`, `placement_policy`, `package_config`, `peering_config`).
+`core_service_transports`, removed with tcp and tcp_ssl in logos-protocol 0.15, is
+refused.
 The runtime's stdin and stdout are a private channel, one JSON object per line,
 that nothing logs: the configuration and the shell's credential cross it, and so
 do the embedder's hooks (extension methods, the operator resolver, shutdown),

@@ -22,7 +22,6 @@ using Extension = char* (*)(const char* callerJson, const char* method, const ch
                             void* userData);
 
 // Protected input, taken before start.
-void setTransports(const std::string& json);
 void setShutdownHandler(ShutdownHandler handler, void* userData);
 void setOperatorResolver(OperatorResolver resolver, void* userData);
 void setExtension(Extension extension, const std::string& methodsJson, void* userData);
