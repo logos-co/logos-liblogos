@@ -234,9 +234,13 @@ LOGOS_CORE_EXPORT void logos_core_set_module_transports(const char* module_name,
 //
 // A restricted target rejects callers outside its allowlist; a target
 // absent from `restrictions` is unrestricted, and one with no callers admits
-// only the shell. `mode` "enforce" activates gating; "off", or no mode, leaves
-// every target open. Enforced by capability_module, which won't issue a
-// token — hence won't allow the call — for a disallowed caller.
+// only the shell. `mode` "enforce" gates the entries plus rules derived from
+// declared dependencies, "explicit" the entries only; "off", or no mode,
+// leaves every target open. Version 2 grants methods per caller,
+// {"allowedCallers": {"<caller>": "*" | ["method", ...]}}, with "@op:<name>",
+// "@op:*" and "*" callers, and binds operators (see the README). Enforced by
+// capability_module, which won't issue a token — hence won't allow the call —
+// for a disallowed caller, and scopes the token of a method grant.
 //
 // Protected input, before logos_core_start() only. NULL or "" clears the
 // policy. Returns 0, or -1 after start or for a policy it refuses (invalid

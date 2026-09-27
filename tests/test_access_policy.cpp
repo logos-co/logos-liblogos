@@ -16,8 +16,11 @@
 
 #include "access_policy.h"
 
+#include <nlohmann/json.hpp>
+
 #include <algorithm>
 #include <string>
+#include <vector>
 
 using LogosCore::AccessPolicy;
 using LogosCore::parseAccessPolicy;
@@ -160,6 +163,95 @@ TEST(AccessPolicyParse, NonStringCallersAreSkipped) {
     EXPECT_TRUE(callersContain(*t, "also_ok"));
 }
 
+// ── Version 2 ────────────────────────────────────────────────────────────────
+
+TEST(AccessPolicyParse, VersionTwoGrantsMethodsPerCaller) {
+    auto policy = parseAccessPolicy(R"({"version":2,"mode":"explicit","restrictions":{
+        "keystore_module":{"allowedCallers":{
+            "evm_signer_ui":["pending","approve"],
+            "evm_keystore_ui":"*",
+            "*":["list_accounts"],
+            "@op:*":["list_accounts"],
+            "@op:alice.cli":[]}},
+        "listed":{"allowedCallers":["a","@op:bob"]},
+        "closed":{}}})");
+    ASSERT_TRUE(policy.has_value());
+    EXPECT_EQ(policy->version, 2);
+    EXPECT_TRUE(policy->explicitOnly());
+    EXPECT_TRUE(policy->active());
+    EXPECT_FALSE(policy->enforce());
+
+    const auto* keystore = findTarget(*policy, "keystore_module");
+    ASSERT_NE(keystore, nullptr);
+    ASSERT_TRUE(keystore->grants.has_value());
+    EXPECT_EQ((*keystore->grants)["evm_keystore_ui"], "*");
+    EXPECT_EQ((*keystore->grants)["evm_signer_ui"], nlohmann::json({"pending", "approve"}));
+    EXPECT_EQ((*keystore->grants)["@op:alice.cli"], nlohmann::json::array());
+    const auto* listed = findTarget(*policy, "listed");
+    ASSERT_NE(listed, nullptr);
+    EXPECT_FALSE(listed->grants.has_value());
+    EXPECT_EQ(listed->allowedCallers, (std::vector<std::string>{"a", "@op:bob"}));
+    const auto* closed = findTarget(*policy, "closed");
+    ASSERT_NE(closed, nullptr);
+    EXPECT_FALSE(closed->grants.has_value());
+    EXPECT_TRUE(closed->allowedCallers.empty());
+}
+
+// Anything but the grammar is refused, so a typo can never open a target.
+TEST(AccessPolicyParse, VersionTwoTakesExactlyItsGrammar) {
+    const std::string longName(257, 'm');
+    const std::vector<std::string> rejected = {
+        R"({"version":2,"mode":"enforce","restriction":{}})",
+        R"({"version":2,"restrictions":{"t":{"allowedCallers":["a"],"note":"x"}}})",
+        R"({"version":2,"restrictions":{"t":["a"]}})",
+        R"({"version":2,"restrictions":{"t":{"allowedCallers":"a"}}})",
+        R"({"version":2,"restrictions":{"t":{"allowedCallers":["a","a"]}}})",
+        R"({"version":2,"restrictions":{"t":{"allowedCallers":[5]}}})",
+        R"({"version":2,"restrictions":{"t":{"allowedCallers":{"a":"all"}}}})",
+        R"({"version":2,"restrictions":{"t":{"allowedCallers":{"a":["*"]}}}})",
+        R"({"version":2,"restrictions":{"t":{"allowedCallers":{"a":["m","m"]}}}})",
+        R"({"version":2,"restrictions":{"t":{"allowedCallers":{"a":[""]}}}})",
+        R"({"version":2,"restrictions":{"t":{"allowedCallers":{"a":[7]}}}})",
+        R"({"version":2,"restrictions":{"t":{"allowedCallers":{"a":["badname"]}}}})",
+        R"({"version":2,"restrictions":{"t":{"allowedCallers":{"a":[")" + longName + R"("]}}}})",
+        R"({"version":2,"restrictions":{"t":{"allowedCallers":{"bad name":"*"}}}})",
+        R"({"version":2,"restrictions":{"t":{"allowedCallers":{"@op:":"*"}}}})",
+        R"({"version":2,"restrictions":{"t":{"allowedCallers":{"@op:a/b":"*"}}}})",
+        R"({"version":2,"restrictions":{"bad target":{"allowedCallers":[]}}})",
+    };
+    for (const auto& text : rejected) {
+        std::string error;
+        EXPECT_FALSE(parseAccessPolicy(text, &error).has_value()) << text;
+        EXPECT_FALSE(error.empty()) << text;
+    }
+}
+
+// The runtime's own modules are never restricted, and core_service's entry on the
+// package modules is the runtime's to add.
+TEST(AccessPolicyParse, VersionTwoNeverNamesTheRuntimesOwnModules) {
+    for (const std::string name : {"core", "core_service", "capability_module"}) {
+        for (const std::string text : {
+                 R"({"version":2,"restrictions":{")" + name + R"(":{"allowedCallers":[]}}})",
+                 R"({"version":2,"restrictions":{"t":{"allowedCallers":[")" + name + R"("]}}})",
+                 R"({"version":2,"restrictions":{"t":{"allowedCallers":{")" + name + R"(":"*"}}}})"}) {
+            std::string error;
+            EXPECT_FALSE(parseAccessPolicy(text, &error).has_value()) << text;
+            EXPECT_NE(error.find(name), std::string::npos) << error;
+        }
+    }
+}
+
+TEST(AccessPolicyParse, ExplicitModeIsVersionOnesToo) {
+    auto policy = parseAccessPolicy(
+        R"({"version":1,"mode":"explicit","restrictions":{"t":{"allowedCallers":["a"]}}})");
+    ASSERT_TRUE(policy.has_value());
+    EXPECT_TRUE(policy->explicitOnly());
+    EXPECT_FALSE(policy->enforce());
+    const auto* t = findTarget(*policy, "t");
+    ASSERT_NE(t, nullptr);
+    EXPECT_FALSE(t->grants.has_value());
+}
+
 // ── Hard failures ────────────────────────────────────────────────────────────
 
 // Detector: a wrong-typed version or mode escaped the parser as an exception.
@@ -180,6 +272,7 @@ TEST(AccessPolicyParse, AFieldOfTheWrongTypeIsRefused) {
 
 TEST(AccessPolicyParse, AnUnknownVersionIsRefused) {
     EXPECT_FALSE(parseAccessPolicy(R"({"version":3,"mode":"enforce"})").has_value());
+    EXPECT_TRUE(parseAccessPolicy(R"({"version":2,"mode":"enforce"})").has_value());
     EXPECT_FALSE(parseAccessPolicy(R"({"version":-1,"mode":"enforce"})").has_value());
     EXPECT_TRUE(parseAccessPolicy(R"({"version":0,"mode":"enforce"})").has_value());
 }

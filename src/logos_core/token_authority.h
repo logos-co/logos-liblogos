@@ -37,6 +37,11 @@ std::string grantOperatorPair(const std::string& op, const std::string& target);
 
 // Replaces the access policy, {"<target>":["<caller>",...]}; false when refused.
 bool setRestrictions(const std::string& json);
+// Version 2: replaces the rules, {"<target>": [callers] | {"<caller>": "*" | [methods]}}.
+bool setAccessRules(const std::string& json);
+// Version 2: the grant `caller` has at `target`, "*", a JSON list, or "[]"; nullopt
+// without one. A version 1 engine leaves operators unbound, so it answers "*".
+std::optional<std::string> grantFor(const std::string& caller, const std::string& target);
 
 // For a provider's lp_provider_set_caller_resolver: callers capability knows.
 char* resolveCallerCallback(const char* token, const char* transport, void* userData);

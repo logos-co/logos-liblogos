@@ -115,7 +115,7 @@ TEST_F(TokenAuthorityTest, EachLoadAndUnloadSendsTheWholePolicy)
     auto documents = stand_in::restrictionDocuments();
     ASSERT_EQ(documents.size(), 1u);
     const json loaded = json::parse(documents[0]);
-    EXPECT_EQ(loaded.value("not_loaded", json()), json::array({"someone"})) << loaded.dump();
+    EXPECT_EQ(loaded.value("not_loaded", json()), json::array({"someone", "@op:*"})) << loaded.dump();
     EXPECT_TRUE(loaded.contains("healthy")) << loaded.dump();
 
     ASSERT_EQ(logos_core_unload_module("healthy", false), 1);
@@ -127,7 +127,7 @@ TEST_F(TokenAuthorityTest, EachLoadAndUnloadSendsTheWholePolicy)
 }
 
 // Detector: a rule with no callers was dropped from the document, and a target
-// absent from it is open to everyone.
+// absent from it is open to everyone. Version 1 leaves operators unrestricted.
 TEST_F(TokenAuthorityTest, ARuleWithNoCallersIsSentNotDropped)
 {
     ASSERT_EQ(logos_core_set_access_policy(
@@ -138,8 +138,8 @@ TEST_F(TokenAuthorityTest, ARuleWithNoCallersIsSentNotDropped)
     const auto documents = stand_in::restrictionDocuments();
     ASSERT_FALSE(documents.empty());
     const json document = json::parse(documents.back());
-    EXPECT_EQ(document.value("quiet", json()), json::array()) << document.dump();
-    EXPECT_EQ(document.value("hushed", json()), json::array()) << document.dump();
+    EXPECT_EQ(document.value("quiet", json()), json::array({"@op:*"})) << document.dump();
+    EXPECT_EQ(document.value("hushed", json()), json::array({"@op:*"})) << document.dump();
 }
 
 // Detector: a module that died left its routes in capability_module's rules
@@ -262,4 +262,68 @@ TEST_F(TokenAuthorityTest, TheAuthorityMayBeAVersionOneEngine)
     ASSERT_EQ(logos_core_load_module("old_engine_client", LOGOS_LOAD_MODULE_ONLY), 1);
     EXPECT_GE(indexOf("admit:old_engine_client"), 0);
     EXPECT_EQ(indexOf("admit_pending:old_engine_client"), -1);
+}
+
+// Version 2 rules reach capability as written: the shell gets only what a rule
+// gives it, and operators only their "@op:" entries. The runtime adds only
+// core_service on the package modules. Derived rules keep admitting operators.
+TEST_F(TokenAuthorityTest, VersionTwoRulesGoAsWritten)
+{
+    ASSERT_EQ(logos_core_set_shell_identity("basecamp"), 0);
+    ASSERT_EQ(logos_core_set_access_policy(R"({"version":2,"mode":"enforce","restrictions":{
+        "keyed":{"allowedCallers":{"ui":["m1"],"@op:alice":"*"}},
+        "listed":{"allowedCallers":["x"]},
+        "closed":{},
+        "package_manager":{"allowedCallers":{"package_manager_ui":"*"}},
+        "package_downloader":{"allowedCallers":[]}}})"), 0);
+    plantModule("healthy", "report-ok");
+    ASSERT_EQ(logos_core_load_module("healthy", LOGOS_LOAD_MODULE_ONLY), 1);
+
+    EXPECT_EQ(indexOf("set_restrictions"), -1);
+    const json document = json::parse(stand_in::restrictionDocuments().back());
+    EXPECT_EQ(document.value("keyed", json()), json::parse(R"({"ui":["m1"],"@op:alice":"*"})"));
+    EXPECT_EQ(document.value("listed", json()), json::array({"x"}));
+    EXPECT_EQ(document.value("closed", json()), json::array());
+    EXPECT_EQ(document.value("package_manager", json()),
+              json::parse(R"({"package_manager_ui":"*","core_service":"*"})"));
+    EXPECT_EQ(document.value("package_downloader", json()), json::array({"core_service"}));
+    const json derived = document.value("healthy", json::array());
+    for (const char* caller : {"core", "core_service", "basecamp", "@op:*"})
+        EXPECT_NE(std::find(derived.begin(), derived.end(), caller), derived.end())
+            << caller << " missing from " << derived.dump();
+}
+
+TEST_F(TokenAuthorityTest, ExplicitModeSendsOnlyTheRulesWritten)
+{
+    ASSERT_EQ(logos_core_set_access_policy(
+        R"({"version":1,"mode":"explicit","restrictions":{"listed":{"allowedCallers":["x"]}}})"), 0);
+    plantModule("healthy", "report-ok");
+    ASSERT_EQ(logos_core_load_module("healthy", LOGOS_LOAD_MODULE_ONLY), 1);
+
+    EXPECT_EQ(json::parse(stand_in::restrictionDocuments().back()),
+              json::parse(R"({"listed":["x","@op:*"]})"));
+}
+
+// Detector for the fallback: an older capability_module cannot bind operators or
+// grant methods, so it gets version 1 rules as before, and a version 2 policy
+// is refused rather than half-enforced.
+TEST_F(TokenAuthorityTest, AVersionOneEngineTakesOnlyVersionOnePolicies)
+{
+    logos::authority::detach();
+    ASSERT_TRUE(logos::authority::attach(&stand_in::engineVersion1(), nullptr));
+    ASSERT_EQ(logos_core_set_access_policy(
+        R"({"version":1,"mode":"enforce","restrictions":{"listed":{"allowedCallers":["x"]}}})"), 0);
+    plantModule("healthy", "report-ok");
+    ASSERT_EQ(logos_core_load_module("healthy", LOGOS_LOAD_MODULE_ONLY), 1);
+    EXPECT_GE(indexOf("set_restrictions"), 0);
+    EXPECT_EQ(indexOf("set_access_rules"), -1);
+    EXPECT_EQ(json::parse(stand_in::restrictionDocuments().back()).value("listed", json()),
+              json::array({"x"}));
+
+    ASSERT_EQ(logos_core_set_access_policy(
+        R"({"version":2,"mode":"explicit","restrictions":{"listed":{"allowedCallers":["x"]}}})"), 0);
+    plantModule("second", "report-ok");
+    EXPECT_EQ(logos_core_load_module("second", LOGOS_LOAD_MODULE_ONLY), 0);
+    EXPECT_NE(reasonFor("second", logos::module_state::kError).find("access policy"),
+              std::string::npos);
 }

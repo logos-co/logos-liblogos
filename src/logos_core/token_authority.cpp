@@ -148,6 +148,22 @@ bool setRestrictions(const std::string& json)
     return engine && engine->set_restrictions(json.c_str()) == 0;
 }
 
+bool setAccessRules(const std::string& json)
+{
+    const logos_capability_engine_v1* engine = current2();
+    return engine && engine->set_access_rules(json.c_str()) == 0;
+}
+
+std::optional<std::string> grantFor(const std::string& caller, const std::string& target)
+{
+    const logos_capability_engine_v1* engine = current();
+    if (!engine) return std::nullopt;
+    if (!hasVersion2Entries(engine)) return std::string("\"*\"");
+    const std::string grant = take(engine, engine->grant_for(caller.c_str(), target.c_str()));
+    if (grant.empty()) return std::nullopt;
+    return grant;
+}
+
 char* resolveCallerCallback(const char* token, const char* transport, void*)
 {
     const auto document = resolveCaller(token, transport);

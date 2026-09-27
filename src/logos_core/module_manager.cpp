@@ -295,15 +295,21 @@ namespace {
         expectedExits().clear();
     }
 
-    // Both guarded by configMutex(). parsedEnforcePolicy is set only in enforce mode.
+    // All guarded by configMutex(). activePolicy is set only in enforce or explicit
+    // mode; policyVersion is the version of the policy taken, whatever its mode.
     std::string& accessPolicyJson() {
         static std::string s;
         return s;
     }
 
-    std::optional<LogosCore::AccessPolicy>& parsedEnforcePolicy() {
+    std::optional<LogosCore::AccessPolicy>& activePolicy() {
         static std::optional<LogosCore::AccessPolicy> p;
         return p;
+    }
+
+    int& policyVersion() {
+        static int version = 0;
+        return version;
     }
 
     // Set when the embedder's last policy was refused: the runtime then does not start.
@@ -584,22 +590,26 @@ namespace {
     }
 
     // A module may only call modules it declared as a dependency, so `target`'s
-    // allowed callers are its loaded dependents plus the trusted set. nullopt when
-    // exempt or no enforce policy: no rule, so the target is open. An explicit
-    // rule overrides verbatim, and one with no callers admits only the shell.
+    // allowed callers are its loaded dependents plus the trusted set. A version 1
+    // rule overrides that verbatim, and one with no callers admits only the shell.
+    // nullopt for no list rule: exempt, no policy, a version 2 rule (sent as
+    // written), or not derived in explicit mode.
     std::optional<std::vector<std::string>> listRuleFor(const std::string& target) {
         if (logos::bootstrap::isExemptTarget(target))
             return std::nullopt;
 
         {
             std::shared_lock<std::shared_mutex> g(configMutex());
-            const auto& policy = parsedEnforcePolicy();
+            const auto& policy = activePolicy();
             if (!policy)
                 return std::nullopt;
 
             for (const auto& r : policy->restrictions)
                 if (r.target == target)
-                    return withShell(r.allowedCallers);
+                    return policy->version == 2 ? std::nullopt
+                                                : std::optional(withShell(r.allowedCallers));
+            if (!policy->enforce())
+                return std::nullopt;
         }
 
         // Deduped; no dependents => trusted only (deny-by-default for peers).
@@ -630,18 +640,40 @@ namespace {
         return listRuleFor(target).value_or(std::vector<std::string>{});
     }
 
+    bool isPackageModule(const std::string& name) {
+        return name == "package_manager" || name == "package_downloader";
+    }
+
+    // A version 2 rule as written. The package modules also admit core_service,
+    // which forwards operators to them once it has checked the operator's grant.
+    nlohmann::json version2Rule(const LogosCore::AccessRestriction& rule) {
+        if (rule.grants) {
+            nlohmann::json grants = *rule.grants;
+            if (isPackageModule(rule.target)) grants["core_service"] = "*";
+            return grants;
+        }
+        nlohmann::json callers = rule.allowedCallers;
+        if (isPackageModule(rule.target)) callers.push_back("core_service");
+        return callers;
+    }
+
     // The whole access policy capability_module enforces, as one document: the
-    // explicit rules, and the derived ones of every loaded or loading module. A
-    // target absent is unrestricted; without an enforce policy the document is empty.
-    nlohmann::json restrictionsDocument() {
+    // explicit rules, and in enforce mode the derived ones of every loaded or
+    // loading module. A target absent is unrestricted; without a policy the
+    // document is empty. Where the engine binds operators, list rules name
+    // "@op:*", since versions 1 and derived rules leave operators unrestricted.
+    nlohmann::json restrictionsDocument(bool operatorsBound) {
         std::vector<std::string> targets;
+        nlohmann::json document = nlohmann::json::object();
         {
             std::shared_lock<std::shared_mutex> g(configMutex());
-            const auto& policy = parsedEnforcePolicy();
+            const auto& policy = activePolicy();
             if (!policy)
-                return nlohmann::json::object();
-            for (const auto& r : policy->restrictions)
-                targets.push_back(r.target);
+                return document;
+            for (const auto& r : policy->restrictions) {
+                if (policy->version == 2) document[r.target] = version2Rule(r);
+                else targets.push_back(r.target);
+            }
         }
         for (const auto& loaded : registryInstance().loadedModuleNames())
             targets.push_back(loaded);
@@ -649,12 +681,14 @@ namespace {
             std::lock_guard<std::mutex> g(loadingMutex());
             targets.insert(targets.end(), loadingModules().begin(), loadingModules().end());
         }
-        nlohmann::json document = nlohmann::json::object();
         for (const auto& target : targets) {
             if (document.contains(target))
                 continue;
-            if (const auto callers = listRuleFor(target))
-                document[target] = *callers;
+            auto callers = listRuleFor(target);
+            if (!callers)
+                continue;
+            if (operatorsBound) callers->push_back("@op:*");
+            document[target] = *callers;
         }
         return document;
     }
@@ -664,12 +698,25 @@ namespace {
     // Each push reads the loaded set, so the pushes have to be ordered against
     // each other or the last word can come from a reader that ran before the
     // other module committed. runOnOwner runs them one at a time.
+    // A version 1 engine takes version 1 rules only: it cannot bind operators or
+    // grant methods, so a version 2 policy is refused rather than half-enforced.
     bool pushRestrictions() {
         if (!logos::authority::attached())
             return true;
+        const bool rules = logos::authority::isVersion2();
+        if (!rules) {
+            std::shared_lock<std::shared_mutex> g(configMutex());
+            if (policyVersion() == 2) {
+                spdlog::critical("capability_module's engine is version 1, which cannot "
+                                 "enforce a version 2 access policy");
+                return false;
+            }
+        }
         bool taken = false;
-        runOnOwner([&taken]() {
-            taken = logos::authority::setRestrictions(restrictionsDocument().dump());
+        runOnOwner([&taken, rules]() {
+            const std::string document = restrictionsDocument(rules).dump();
+            taken = rules ? logos::authority::setAccessRules(document)
+                          : logos::authority::setRestrictions(document);
             if (!taken)
                 spdlog::error("capability_module refused the access policy");
         });
@@ -1482,7 +1529,8 @@ namespace ModuleManager {
     bool setAccessPolicy(const std::string& policyJson, std::string* error) {
         std::unique_lock<std::shared_mutex> g(configMutex());  // guards the read at push time
         accessPolicyJson().clear();
-        parsedEnforcePolicy().reset();
+        activePolicy().reset();
+        policyVersion() = 0;
 
         if (policyJson.empty()) {
             accessPolicyRefusedFlag() = false;
@@ -1502,18 +1550,24 @@ namespace ModuleManager {
         }
         accessPolicyRefusedFlag() = false;
         accessPolicyJson() = policyJson;
-        if (!parsed->enforce()) {
+        policyVersion() = parsed->version;
+        if (!parsed->active()) {
             spdlog::warn("logos_core_set_access_policy: mode is \"off\" — "
                          "inter-module access enforcement is OFF ({} restriction(s) "
                          "parsed but not registered)", parsed->restrictions.size());
             return true;
         }
 
-        spdlog::info("Inter-module access enforcement is ON (mode=enforce): deny-by-default — "
-                     "a module may only call the modules it declares as dependencies; "
-                     "{} explicit restriction(s) override the derived allow-list",
-                     parsed->restrictions.size());
-        parsedEnforcePolicy() = std::move(parsed);
+        if (parsed->enforce())
+            spdlog::info("Inter-module access enforcement is ON (mode=enforce, version {}): "
+                         "deny-by-default — a module may only call the modules it declares "
+                         "as dependencies; {} explicit restriction(s) override the derived "
+                         "allow-list", parsed->version, parsed->restrictions.size());
+        else
+            spdlog::info("Inter-module access enforcement is ON (mode=explicit, version {}): "
+                         "{} restricted target(s); every other module is open",
+                         parsed->version, parsed->restrictions.size());
+        activePolicy() = std::move(parsed);
         return true;
     }
 
@@ -1840,7 +1894,8 @@ namespace ModuleManager {
             std::unique_lock<std::shared_mutex> cfg(configMutex());
             moduleTransportsMap().clear();
             accessPolicyJson().clear();  // same rationale — don't leak across restarts
-            parsedEnforcePolicy().reset();
+            activePolicy().reset();
+            policyVersion() = 0;
             accessPolicyRefusedFlag() = false;
         }
         {

@@ -103,6 +103,33 @@ json callWithToken(const std::string& identity, const std::string& token, const 
     return value;
 }
 
+// A call as `identity`, holding `credential`, pairing through capability_module.
+// Returns the result, or {"failed": <error>}.
+json callAsConsumer(const std::string& identity, const std::string& credential,
+                    const char* target, const char* method, const json& args = json::array())
+{
+    lp_token_isolate_identity(identity.c_str());
+    lp_token_adopt_credential(identity.c_str(), credential.c_str());
+    lp_token_save_for(identity.c_str(), "capability_module", credential.c_str());
+    lp_client* client = lp_client_create(target, identity.c_str(), nullptr, nullptr);
+    if (!client) return nullptr;
+    char* result = nullptr;
+    char* error = nullptr;
+    const int status = lp_invoke(client, method, args.dump().c_str(), 15000, &result, &error);
+    json value = status == LP_OK ? json::parse(result ? result : "null", nullptr, false)
+                                 : json{{"failed", error ? error : ""}};
+    lp_string_free(result);
+    lp_string_free(error);
+    lp_client_destroy(client);
+    return value;
+}
+
+bool refusedAs(const json& reply, const char* code)
+{
+    return reply.is_object() && reply.contains("failed")
+        && reply["failed"].get<std::string>().find(code) != std::string::npos;
+}
+
 std::int64_t pidOf(const json& stats, const std::string& module)
 {
     if (!stats.is_array()) return 0;
@@ -156,7 +183,10 @@ std::atomic<int> g_shutdowns{0};
 
 char* testOperators(const char* token, const char*, void*)
 {
-    return token && std::string(token) == "alice-token" ? lp_string_copy("alice") : nullptr;
+    const std::string presented = token ? token : "";
+    if (presented == "alice-token") return lp_string_copy("alice");
+    if (presented == "bob-token") return lp_string_copy("bob");
+    return nullptr;
 }
 
 void testShutdown(void*)
@@ -399,6 +429,64 @@ TEST_F(RuntimeProcessTest, ARefusedAccessPolicyFailsTheSpawn)
     EXPECT_NE(std::string(error ? error : "").find("access_policy"), std::string::npos)
         << (error ? error : "(no error)");
     logos_consumer_string_free(error);
+}
+
+// A version 2 rule grants methods with the real capability_module: the pair is
+// pushed scoped, and the target refuses a method outside it before its code
+// runs. Operators need an "@op:" entry, and the shell gets only what the rule
+// gives it. Run with modules_state in the runtime's process and in a host.
+static void checkVersionTwoRule(const json& config)
+{
+    ASSERT_EQ(logos_core_set_operator_resolver(&testOperators, nullptr), 0);
+    char* error = nullptr;
+    Spawned spawned;
+    spawned.runtime = logos_runtime_spawn(config.dump().c_str(), &error);
+    ASSERT_NE(spawned.runtime, nullptr) << (error ? error : "");
+    logos_consumer* shell = logos_runtime_binding(spawned.runtime);
+    ASSERT_NE(shell, nullptr);
+
+    char* out = nullptr;
+    char* err = nullptr;
+    EXPECT_NE(logos_consumer_call(shell, "modules_state", "list_modules", "[]", 15000, &out, &err),
+              LP_OK) << "the shell reached a target its rule does not name";
+    logos_consumer_string_free(out);
+    logos_consumer_string_free(err);
+
+    const json admitted = callAs(shell, "admitConsumer", {"runtime_test_view", "presentation"});
+    const std::string credential = admitted.value("credential", std::string{});
+    ASSERT_FALSE(credential.empty()) << admitted.dump();
+    const json listed = callAsConsumer("runtime_test_view", credential, "modules_state", "list_modules");
+    EXPECT_FALSE(listed.is_object() && listed.contains("failed")) << listed.dump();
+    EXPECT_TRUE(refusedAs(callAsConsumer("runtime_test_view", credential, "modules_state",
+                                         "module_record", {"capability_module"}),
+                          "not_authorised"));
+
+    const json inScope = callWithToken("@test-alice", "alice-token", "callModuleMethod",
+                                       {"modules_state", "module_record", {"capability_module"}});
+    EXPECT_EQ(inScope.value("status", std::string{}), "ok") << inScope.dump();
+    const json outOfScope = callWithToken("@test-alice", "alice-token", "callModuleMethod",
+                                          {"modules_state", "list_modules", json::array()});
+    EXPECT_EQ(outOfScope.value("code", std::string{}), "METHOD_FAILED") << outOfScope.dump();
+    EXPECT_EQ(outOfScope.value("error", json::object()).value("code", std::string{}),
+              "not_authorised") << outOfScope.dump();
+    const json unlisted = callWithToken("@test-bob", "bob-token", "callModuleMethod",
+                                        {"modules_state", "list_modules", json::array()});
+    EXPECT_EQ(unlisted.value("code", std::string{}), "FORBIDDEN") << unlisted.dump();
+}
+
+static const json kVersionTwoPolicy = json::parse(R"({"version":2,"mode":"explicit","restrictions":{
+    "modules_state":{"allowedCallers":{"runtime_test_view":["list_modules"],
+                                       "@op:alice":["module_record"]}}}})");
+
+TEST_F(RuntimeProcessTest, AVersionTwoRuleGrantsMethodsInTheRuntimesProcess)
+{
+    checkVersionTwoRule(config({{"access_policy", kVersionTwoPolicy}}));
+}
+
+TEST_F(RuntimeProcessTest, AVersionTwoRuleGrantsMethodsInAHost)
+{
+    const json placement = {{"modules", {{"modules_state", "subprocess"}}}};
+    checkVersionTwoRule(config({{"access_policy", kVersionTwoPolicy}, {"placement_policy", placement}}));
 }
 
 TEST_F(RuntimeProcessTest, OneRuntimePerProcess)

@@ -280,7 +280,8 @@ process, and a process that spawned one cannot also start one itself.
 ### Inter-module access enforcement (off by default)
 
 By default a loaded module may call any other loaded module. Enforcement is
-opt-in, and `mode` in the access policy is the switch:
+opt-in, and `mode` in the access policy is the switch (`enforce`, `explicit` or
+`off`):
 
 ```jsonc
 {"version": 1, "mode": "enforce"}
@@ -311,7 +312,7 @@ the runtime, so a mistyped mode never leaves it silently open. Core says which
 side it landed on:
 
 ```
-Inter-module access enforcement is ON (mode=enforce): deny-by-default — ...
+Inter-module access enforcement is ON (mode=enforce, version 1): deny-by-default — ...
 Inter-module access enforcement is OFF (no access policy set): ...
 ```
 
@@ -327,7 +328,47 @@ need an explicit entry):
 
 `capability_module`, `core` and `core_service` are never restricted as targets,
 and the shell stays among the allowed callers of an explicit entry too. An
-entry with no callers admits only the shell.
+entry with no callers admits only the shell. Under version 1, operators
+(logosctl's tokens, reaching modules through core_service) are never restricted.
+
+`mode: "explicit"` sends only the entries written: unlisted modules stay open,
+so a deployer can protect one module without enforcing dependencies everywhere.
+
+#### Version 2: methods
+
+A version 2 policy can grant methods, per caller:
+
+```jsonc
+{"version": 2, "mode": "explicit",
+ "restrictions": {
+   "keystore_module": {"allowedCallers": {
+     "evm_signer_ui":   ["pending", "acknowledge", "approve", "reject"],
+     "evm_keystore_ui": "*",
+     "*":     ["request_approval", "approval_status", "list_accounts"],
+     "@op:*": ["list_accounts"]
+   }}}}
+```
+
+- **Callers**: a module, UI plugin or shell name; `@op:<name>` for one operator
+  token and `@op:*` for any; `*` for any other caller, never an operator.
+- **Grants**: a list is only those methods, `"*"` every method, `[]` none. The
+  list form (`"allowedCallers": ["a", "b"]`) grants each caller every method,
+  and a rule without callers admits nobody.
+- **Resolution**: an exact caller wins, then `@op:*` for operators and `*` for
+  everyone else; otherwise the caller is denied. Entries never merge.
+- **As written**: the shell gets only what a rule gives it, and operators only
+  their `@op:` entries. The runtime adds one entry of its own, `core_service`
+  on `package_manager` and `package_downloader`: operators' calls reach those
+  two through it, and it checks the operator's own grant first.
+- **Strict**: anything outside this grammar refuses the policy, and so does a
+  rule naming `core`, `core_service` or `capability_module`.
+
+capability_module pushes a pair whose grant is a method list to its target as
+a scoped token, and the target refuses any other method with `not_authorised`
+before module code runs. A target whose runtime cannot take a scoped token (a
+Qt-plugin module built before logos-plugin-qt carried it) is refused the pair.
+A version 2 policy needs capability_module's engine version 2; an older one
+fails the runtime's start.
 
 Hosts expose this as `--access-policy` — see the logoscore CLI and Basecamp
 READMEs.

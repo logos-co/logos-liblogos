@@ -1918,6 +1918,21 @@ TEST_F(DerivedRestrictionsManagerTest, ExplicitPolicyOverridesDerived) {
     EXPECT_EQ(derived("b"), (std::set<std::string>{"x"}));
 }
 
+TEST_F(DerivedRestrictionsManagerTest, ExplicitModeDerivesNothing) {
+    reg("b", {});
+    reg("c", {});
+    reg("a", {"c"});
+    logos_core_mark_module_loaded("b");
+    logos_core_mark_module_loaded("c");
+    logos_core_mark_module_loaded("a");
+    ASSERT_TRUE(ModuleManager::setAccessPolicy(
+        "{\"version\":1,\"mode\":\"explicit\",\"restrictions\":{"
+        "\"b\":{\"allowedCallers\":[\"x\"]}}}"));
+
+    EXPECT_EQ(derived("b"), (std::set<std::string>{"x"}));
+    EXPECT_TRUE(derived("c").empty()) << "an unlisted module stays open";
+}
+
 TEST_F(DerivedRestrictionsManagerTest, ExemptTargetsNeverDerived) {
     reg("capability_module", {});
     logos_core_mark_module_loaded("capability_module");
