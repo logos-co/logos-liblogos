@@ -2,6 +2,9 @@
 #include "bootstrap_policy.h"
 #include "module_manager.h"
 #include "module_registry.h"
+#ifdef LOGOS_CORE_INPROC_FACADES
+#include "inproc_facade_loader.h"
+#endif
 
 #include <native_module_host.h>
 #include <logos_protocol.h>
@@ -34,9 +37,9 @@ bool placementValue(const json& value, bool& inProcess)
     return true;
 }
 
-// The provider serves inproc, plus what it was configured with (the local socket
-// when nothing), so processes outside this one reach it as before.
-std::string transportSetFor(const std::string& configured)
+} // namespace
+
+std::string inprocTransportSet(const std::string& configured)
 {
     json set = configured.empty() ? json::array() : json::parse(configured, nullptr, false);
     if (set.is_object()) set = json::array({set});
@@ -48,6 +51,26 @@ std::string transportSetFor(const std::string& configured)
     if (!served) set.insert(set.begin(), json{{"protocol", "inproc"}});
     return set.dump();
 }
+
+bool facadesRunInProcess()
+{
+#ifdef LOGOS_CORE_INPROC_FACADES
+    return true;
+#else
+    return false;
+#endif
+}
+
+std::shared_ptr<ModuleLoader> makeInprocFacadeLoader()
+{
+#ifdef LOGOS_CORE_INPROC_FACADES
+    return std::make_shared<InprocFacadeLoader>();
+#else
+    return nullptr;
+#endif
+}
+
+namespace {
 
 unsigned maxCallsFor(const json& metadata)
 {
@@ -164,9 +187,18 @@ PlacementDecision decidePlacement(const std::string& name, const json& sidecar,
                                   const PlacementPolicy& policy)
 {
     using logos::bootstrap::Placement;
+    // The runtime's own code, but it faces the network: here only when nothing runs apart.
+    if (format == kFacadeFormat) {
+        if (!policy.singleProcess) return {};
+        if (!facadesRunInProcess())
+            return {false, true, "single_process, and this runtime was built without in-process facades"};
+        return {true, false, {}};
+    }
     const logos::bootstrap::Row* row = logos::bootstrap::rowFor(name);
     bool wanted = policy.defaultInProcess;
-    if (row && row->pinned) wanted = row->placement == Placement::InProcess;
+    if (row && row->pinned)
+        wanted = row->placement == Placement::InProcess
+            || (policy.singleProcess && row->joinsSingleProcess);
     else if (auto it = policy.modules.find(name); it != policy.modules.end()) wanted = it->second;
     else if (policy.singleProcess) wanted = true;
     else if (row && row->placement != Placement::Default)
@@ -203,6 +235,8 @@ InprocModuleLoader::~InprocModuleLoader()
 bool InprocModuleLoader::canHandle(const ModuleDescriptor& desc) const
 {
     const PlacementDecision decision = decisionFor(desc);
+    // A facade placed here is InprocFacadeLoader's; this one only refuses them.
+    if (desc.format == kFacadeFormat) return decision.refused;
     if (!decision.inProcess && !decision.refused && !decision.reason.empty())
         spdlog::info("{} runs in a subprocess: {}", desc.name, decision.reason);
     return decision.inProcess || decision.refused;
@@ -235,7 +269,7 @@ bool InprocModuleLoader::load(const ModuleDescriptor& desc,
     logos::native_host::Options options;
     options.name = desc.name;
     options.path = desc.path;
-    options.transportSet = transportSetFor(desc.transportSetJson);
+    options.transportSet = inprocTransportSet(desc.transportSetJson);
     options.maxCalls = maxCallsFor(desc.rawMetadata);
     options.instancePersistencePath = desc.instancePersistencePath;
     const std::vector<std::string> grants = logos::bootstrap::hostServicesFor(desc.name, true);

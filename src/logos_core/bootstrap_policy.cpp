@@ -27,8 +27,9 @@ const std::vector<Row>& rows()
         {"package_downloader", {}, false, false, Placement::Subprocess, true, 1},
         // Links with other runtimes. peering_module faces the network and gates
         // its callers itself; peering_identity holds the root key, apart from it.
-        {"peering_module", {}, true, false, Placement::Subprocess, true, 1},
-        {"peering_identity", {}, false, false, Placement::Subprocess, true, 2},
+        // A single-process runtime has no other process to keep them in.
+        {"peering_module", {}, true, false, Placement::Subprocess, true, 1, true},
+        {"peering_identity", {}, false, false, Placement::Subprocess, true, 2, true},
     };
     return table;
 }

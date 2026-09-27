@@ -114,6 +114,8 @@ protected:
         SubprocessManager::clearAll();
         // Restore the default loaders so other test suites aren't affected.
         ModuleManager::loaders().clearForTests();
+        if (auto facades = LogosCore::makeInprocFacadeLoader())
+            ModuleManager::loaders().registerLoader(facades);
         ModuleManager::loaders().registerLoader(
             std::make_shared<LogosCore::InprocModuleLoader>());
         ModuleManager::loaders().registerLoader(

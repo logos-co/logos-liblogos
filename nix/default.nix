@@ -14,6 +14,7 @@
 , containerImpl       # package providing makeContainer() (+ LogosContainerImpl config)
 , formatLoaderImpl    # package providing makeFormatLoader() (+ LogosFormatLoaderImpl config)
 
+, peeringLib ? null   # libpeering: facades then run in-process under single_process
 , portableBuild ? false }:
 
 {
@@ -40,7 +41,7 @@
     logosModuleLoader
     formatLoaderImpl
     logosPackageManager
-  ];
+  ] ++ pkgs.lib.optional (peeringLib != null) peeringLib;
 
   cmakeFlags = [
     "-GNinja"

@@ -227,6 +227,8 @@ protected:
         logos_core_terminate_all();
         logos_core_clear();
         ModuleManager::loaders().clearForTests();
+        if (auto facades = LogosCore::makeInprocFacadeLoader())
+            ModuleManager::loaders().registerLoader(facades);
         ModuleManager::loaders().registerLoader(std::make_shared<LogosCore::InprocModuleLoader>());
         ModuleManager::loaders().registerLoader(std::make_shared<SubprocessManager>());
     }

@@ -323,6 +323,8 @@ namespace {
         static LogosCore::ModuleLoaderRegistry reg;
         static std::once_flag initFlag;
         std::call_once(initFlag, []() {
+            // Before InprocModuleLoader, which only refuses a facade.
+            if (auto facades = LogosCore::makeInprocFacadeLoader()) reg.registerLoader(facades);
             // First, so a module placed in-process never reaches a subprocess.
             reg.registerLoader(std::make_shared<LogosCore::InprocModuleLoader>());
             auto container = LogosCore::makeContainer();
@@ -1322,6 +1324,9 @@ namespace {
 
         registryInstance().markUnloaded(name);
         logos::authority::retire(name);
+        // A container sends no onTerminated for a teardown it was asked for, and an
+        // in-process loader none at all.
+        logos::peering_link::exited(name);
 
         pushRestrictions();
 

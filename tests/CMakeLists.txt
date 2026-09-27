@@ -24,6 +24,7 @@ add_executable(logos_core_tests
     test_package_config.cpp
     test_peering_link.cpp
     test_inproc_loader.cpp
+    test_inproc_facade.cpp
     test_call_envelope.cpp
     test_token_authority.cpp
     test_runtime_process.cpp

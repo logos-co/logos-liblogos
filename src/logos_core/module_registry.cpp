@@ -724,9 +724,10 @@ nlohmann::json ModuleRegistry::allModulesInfo() const {
         // Callers compute uptime as now - loaded_at while loaded.
         entry["loaded_at"]    = info.loadedAt;
         // Where it runs while loaded: in this process, or a host process of its own.
+        const bool here = info.loader
+            && (info.loader->id() == "inproc" || info.loader->id() == "inproc-facade");
         entry["placement"]    = !info.loaded || !info.loader ? nlohmann::json(nullptr)
-                                : nlohmann::json(info.loader->id() == "inproc" ? "inproc"
-                                                                               : "subprocess");
+                                : nlohmann::json(here ? "inproc" : "subprocess");
         // Readiness. null (not false) when no watch is armed -- "nobody looked"
         // and "not ready" are different answers.
         entry["published"]    = info.published.has_value()

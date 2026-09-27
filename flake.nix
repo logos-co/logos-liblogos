@@ -37,9 +37,12 @@
     default-module-loader.inputs.logos-cpp-sdk.follows = "logos-cpp-sdk";
     default-module-loader.inputs.logos-qt-sdk.follows = "logos-qt-sdk";
     logos-package-manager.url = "github:logos-co/logos-package-manager";
+    # libpeering's source, built here against our logos-protocol (in-process facades).
+    # Not a flake input: its builder chain pins liblogos, a cycle in every lock below us.
+    logos-peering = { url = "github:logos-co/logos-peering"; flake = false; };
   };
 
-  outputs = { self, nixpkgs, logos-nix, logos-cpp-sdk, logos-protocol, logos-qt-sdk, logos-plugin-qt, logos-capability-module, logos-modules-state-module, logos-module, logos-package-manager, process-stats, logos-container, default-container, logos-module-loader, default-module-loader }:
+  outputs = { self, nixpkgs, logos-nix, logos-cpp-sdk, logos-protocol, logos-qt-sdk, logos-plugin-qt, logos-capability-module, logos-modules-state-module, logos-module, logos-package-manager, process-stats, logos-container, default-container, logos-module-loader, default-module-loader, logos-peering }:
 
     let
       systems = [ "aarch64-darwin" "x86_64-darwin" "aarch64-linux" "x86_64-linux" ];
@@ -75,12 +78,13 @@
       # what it produces.
       windowsBuildSystem = "x86_64-linux";
       forAllTargets = f:
-        nixpkgs.lib.genAttrs (systems ++ [ "x86_64-windows" ]) (system: f {
-          inherit system;
+        nixpkgs.lib.genAttrs (systems ++ [ "x86_64-windows" ]) (system: let
           pkgs =
             if system == "x86_64-windows"
             then logos-nix.lib.mkWindowsPkgs { buildSystem = windowsBuildSystem; }
             else import nixpkgs { inherit system; };
+        in f {
+          inherit system pkgs;
           logosProtocolPkg = logos-protocol.packages.${system}.logos-protocol-plain;
           capabilityModule = logos-capability-module.packages.${system}.default;
           modulesStateModule = logos-modules-state-module.packages.${system}.default;
@@ -92,10 +96,18 @@
           defaultModuleHosts = default-module-loader.packages.${system}.logos-module-loader-qt-bin;
           logosPackageManager = logos-package-manager.packages.${system}.lib;
           logosPackageManagerPortable = logos-package-manager.packages.${system}.lib-portable;
+          # Not on Windows yet: nothing runs single-process there.
+          peeringLib =
+            if system == "x86_64-windows" then null
+            else import "${logos-peering}/nix/libpeering.nix" {
+              inherit pkgs;
+              logosProtocol = logos-protocol.packages.${system}.logos-protocol-plain;
+              withTests = false;
+            };
         });
     in
     {
-      packages = forAllTargets ({ pkgs, system, logosProtocolPkg, capabilityModule, modulesStateModule, processStats, logosContainer, logosModuleLoader, defaultContainer, defaultModuleLoader, defaultModuleHosts, logosPackageManager, logosPackageManagerPortable }:
+      packages = forAllTargets ({ pkgs, system, logosProtocolPkg, capabilityModule, modulesStateModule, processStats, logosContainer, logosModuleLoader, defaultContainer, defaultModuleLoader, defaultModuleHosts, logosPackageManager, logosPackageManagerPortable, peeringLib }:
         let
           # The built-in default container + format-loader implementations — the
           # single place the default is chosen. Each is just the package; it
@@ -108,12 +120,12 @@
           # Common configuration (dev, default)
           common = import ./nix/default.nix {
             capabilityEngineInclude = "${logos-capability-module}/src";
-            inherit pkgs logosProtocolPkg processStats logosContainer logosModuleLoader logosPackageManager containerImpl formatLoaderImpl;
+            inherit pkgs logosProtocolPkg processStats logosContainer logosModuleLoader logosPackageManager containerImpl formatLoaderImpl peeringLib;
           };
           # Common configuration (portable)
           commonPortable = import ./nix/default.nix {
             capabilityEngineInclude = "${logos-capability-module}/src";
-            inherit pkgs logosProtocolPkg processStats logosContainer logosModuleLoader containerImpl formatLoaderImpl;
+            inherit pkgs logosProtocolPkg processStats logosContainer logosModuleLoader containerImpl formatLoaderImpl peeringLib;
             logosPackageManager = logosPackageManagerPortable;
             portableBuild = true;
           };
