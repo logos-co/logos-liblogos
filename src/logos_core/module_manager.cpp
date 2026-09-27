@@ -227,11 +227,6 @@ namespace {
         inFlightLoads().erase(name);
     }
 
-    bool isLoadInFlight(const std::string& name) {
-        std::lock_guard<std::mutex> g(inFlightMutex());
-        return inFlightLoads().count(name) > 0;
-    }
-
     // Called from the container's asio thread. Returns true when the load path
     // owns this termination and onTerminated should stay quiet about it.
     bool recordTerminationDuringLoad(const std::string& name) {
@@ -315,6 +310,24 @@ namespace {
     std::atomic<bool>& accessPolicyRefusedFlag() {
         static std::atomic<bool> refused{false};
         return refused;
+    }
+
+    // Modules between their first rules push and their commit or failure. The
+    // rules treat them as loaded, so two concurrent loads keep each other.
+    std::mutex& loadingMutex() {
+        static std::mutex m;
+        return m;
+    }
+
+    std::unordered_set<std::string>& loadingModules() {
+        static std::unordered_set<std::string> names;
+        return names;
+    }
+
+    bool isLoadedOrLoading(const std::string& name) {
+        if (registryInstance().isLoaded(name)) return true;
+        std::lock_guard<std::mutex> g(loadingMutex());
+        return loadingModules().count(name) > 0;
     }
 
     // Trusted callers and exempt targets come from the bootstrap policy table.
@@ -599,14 +612,14 @@ namespace {
         // In flight counts: a module holds its token, and may call out from its
         // own init, before it is committed as loaded.
         for (const auto& d : registryInstance().moduleDependents(target, /*recursive=*/false))
-            if (registryInstance().isLoaded(d) || isLoadInFlight(d))
+            if (isLoadedOrLoading(d))
                 add(d);
         // Optional dependents are callers too. The DECLARATION is what grants
         // the right to call; whether the loader had to supply the target is a
         // separate question. Omitting them denies a declared call between two
         // loaded modules, and the caller sees a default value, not an error.
         for (const auto& d : registryInstance().moduleOptionalDependents(target))
-            if (registryInstance().isLoaded(d) || isLoadInFlight(d))
+            if (isLoadedOrLoading(d))
                 add(d);
         for (const auto& t : logos::bootstrap::trustedCallers())
             add(t);
@@ -618,8 +631,8 @@ namespace {
     }
 
     // The whole access policy capability_module enforces, as one document: the
-    // explicit rules, and the derived ones of every loaded module. A target
-    // absent is unrestricted; without an enforce policy the document is empty.
+    // explicit rules, and the derived ones of every loaded or loading module. A
+    // target absent is unrestricted; without an enforce policy the document is empty.
     nlohmann::json restrictionsDocument() {
         std::vector<std::string> targets;
         {
@@ -632,6 +645,10 @@ namespace {
         }
         for (const auto& loaded : registryInstance().loadedModuleNames())
             targets.push_back(loaded);
+        {
+            std::lock_guard<std::mutex> g(loadingMutex());
+            targets.insert(targets.end(), loadingModules().begin(), loadingModules().end());
+        }
         nlohmann::json document = nlohmann::json::object();
         for (const auto& target : targets) {
             if (document.contains(target))
@@ -710,6 +727,29 @@ namespace {
         std::string name;
         bool active = false;
         ~AdmissionGuard() { if (active) logos::authority::retire(name); }
+    };
+
+    // A module in the loading set from before its admission to its commit. A load
+    // that fails takes it out and sends the rules again.
+    struct LoadingEntry {
+        std::string name;
+        bool active = false;
+
+        void begin() {
+            std::lock_guard<std::mutex> g(loadingMutex());
+            loadingModules().insert(name);
+            active = true;
+        }
+        void end() {
+            std::lock_guard<std::mutex> g(loadingMutex());
+            loadingModules().erase(name);
+            active = false;
+        }
+        ~LoadingEntry() {
+            if (!active) return;
+            end();
+            pushRestrictions();
+        }
     };
 
     // ── THE modules_state FEED ───────────────────────────────────────────────
@@ -1123,14 +1163,31 @@ namespace {
         const std::optional<int64_t> pid =
             handle.pid >= 0 ? std::optional<int64_t>(handle.pid) : std::nullopt;
 
+        // Its rules first, so capability never admits a module no rule covers; a
+        // refused push fails the load rather than leaving the module unchecked.
+        LoadingEntry loading{name};
+        if (!isAuthority) {
+            loading.begin();
+            if (!pushRestrictions()) {
+                markExitExpected(name);
+                loader->terminate(name);
+                consumeExpectedExit(name);
+                abandonLoadAttempt(name);
+                logos::ModuleStateObserver::instance().record(
+                    name, logos::module_state::kLoading, logos::module_state::kError,
+                    instanceId, pid, "capability_module refused the access policy");
+                return false;
+            }
+        }
+
         // OUTBOUND half of load-time identity: the module's credential, sent into
         // the child and kept in core's store. capability_module mints every one
         // but its own, which is the trust root: its engine exists only once its
-        // image has loaded.
+        // image has loaded. Nothing can pair with the module until it commits.
         AdmissionGuard admission{name, !isAuthority};
         std::string authToken = isAuthority
             ? boost::uuids::to_string(boost::uuids::random_generator()())
-            : logos::authority::admit(name, "module");
+            : logos::authority::admit(name, "module", /*pending=*/true);
         if (authToken.empty()) {
             admission.active = false;
             markExitExpected(name);
@@ -1142,13 +1199,6 @@ namespace {
                 instanceId, pid, "capability_module refused to admit it");
             return false;
         }
-
-        // Its calling rights reach capability_module BEFORE the child holds the
-        // token (admit() already registered the token): it can call out from its
-        // own init, before it reports loaded. In-flight loads count as callers.
-        pushRestrictions();
-        // A failed load takes back the calling rights granted above.
-        auto retractCallerRights = []() { pushRestrictions(); };
 
         if (!loader->sendToken(name, authToken)) {
             // We are about to terminate it deliberately, so announce the intent
@@ -1163,7 +1213,6 @@ namespace {
             // this load stays the only thing that reports.
             consumeExpectedExit(name);
             abandonLoadAttempt(name);
-            retractCallerRights();
             logos::ModuleStateObserver::instance().record(
                 name, logos::module_state::kLoading, logos::module_state::kError,
                 instanceId, pid, "failed to deliver the module's auth token");
@@ -1181,7 +1230,6 @@ namespace {
             spdlog::error("Failed to load module {}: {}", name, outcome.reason);
             loader->terminate(name);   // no-op when the child is already gone
             abandonLoadAttempt(name);
-            retractCallerRights();
             logos::ModuleStateObserver::instance().record(
                 name, logos::module_state::kLoading, logos::module_state::kError,
                 instanceId, pid, outcome.reason);
@@ -1196,9 +1244,13 @@ namespace {
                          "detectable if the process dies.", name);
         }
 
-        // The authority takes over before anything can be admitted through it.
-        if (isAuthority && !attachTokenAuthority(loader)) {
-            const char* reason = "capability_module offers no usable engine interface";
+        // The authority takes over, with its rules, before anything can be
+        // admitted through it.
+        if (isAuthority && (!attachTokenAuthority(loader) || !pushRestrictions())) {
+            const char* reason = logos::authority::attached()
+                ? "capability_module refused the access policy"
+                : "capability_module offers no usable engine interface";
+            logos::authority::detach();
             markExitExpected(name);
             loader->terminate(name);
             consumeExpectedExit(name);
@@ -1217,7 +1269,6 @@ namespace {
             loader->terminate(name);
             consumeExpectedExit(name);
             abandonLoadAttempt(name);
-            retractCallerRights();
             logos::ModuleStateObserver::instance().record(
                 name, logos::module_state::kLoading, logos::module_state::kError,
                 instanceId, pid, configError);
@@ -1228,7 +1279,6 @@ namespace {
         // registry write — see commitLoad.
         if (!commitLoad(name, loader, std::move(handle))) {
             if (isAuthority) logos::authority::detach();
-            retractCallerRights();
             const char* reason = "the module process exited while it was loading";
             spdlog::error("Failed to load module {}: {}", name, reason);
             logos::ModuleStateObserver::instance().record(
@@ -1242,8 +1292,10 @@ namespace {
             return false;
         }
         admission.active = false;
-
-        pushRestrictions();
+        // Committed: now callers may pair with it. Its rules did not change.
+        if (!isAuthority && !logos::authority::openTarget(name))
+            spdlog::warn("capability_module no longer admits {}: it left while loading", name);
+        if (loading.active) loading.end();
 
         spdlog::info("Module loaded: {}", name);
         logos::ModuleStateObserver::instance().record(
@@ -1322,7 +1374,8 @@ namespace {
         registryInstance().markUnloaded(name);
         logos::authority::retire(name);
 
-        pushRestrictions();
+        if (!pushRestrictions())
+            spdlog::error("capability_module kept the rules {} was part of", name);
 
         spdlog::info("Module unloaded: {}", name);
 
@@ -1789,6 +1842,10 @@ namespace ModuleManager {
             accessPolicyJson().clear();  // same rationale — don't leak across restarts
             parsedEnforcePolicy().reset();
             accessPolicyRefusedFlag() = false;
+        }
+        {
+            std::lock_guard<std::mutex> g(loadingMutex());
+            loadingModules().clear();
         }
         // Same rationale again: the next run may have a host that does report.
         hostStaysSilent().store(false);

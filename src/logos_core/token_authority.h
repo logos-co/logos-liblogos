@@ -14,14 +14,19 @@ struct lp_provider;
 
 namespace logos::authority {
 
-// Attaches `engine` and lets capability's own provider name callers through it.
+// Attaches `engine`, version 1 or later, and lets capability's own provider name
+// callers through it.
 bool attach(const logos_capability_engine_v1* engine, lp_provider* capabilityProvider);
 void detach();
 bool attached();
+// Whether the engine has version 2's entries: access rules, grants, pending admissions.
+bool isVersion2();
 
 // The credential of a new admission of `name` ("module", "shell", "presentation"),
-// or "" when refused; retire() ends the latest one.
-std::string admit(const std::string& name, const std::string& kind);
+// or "" when refused; retire() ends the latest one. A pending admission is no
+// target until openTarget(); a version 1 engine admits it open.
+std::string admit(const std::string& name, const std::string& kind, bool pending = false);
+bool openTarget(const std::string& name);
 void retire(const std::string& name);
 
 // The caller document for a credential, as a provider's caller resolver answers.

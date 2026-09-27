@@ -200,12 +200,12 @@ boundary: during processing (`ModuleRegistry::processModuleInternal`) a module w
 6. The selected loader's `load()` is called:
    a. The `ModuleFormatLoader` resolves the host binary (e.g. `logos_host_qt`) and builds CLI arguments (including `--transport-set` if configured)
    b. The `ModuleContainer` launches the process with the resolved binary and arguments, appending its own `--token-source` so the child knows where to read its token (the subprocess container appends `--token-source stdin`)
-7. Core has capability_module admit the module, which mints its UUID credential (for capability_module itself, the core mints it: the authority's engine exists only once its image has loaded)
+7. Core adds the module to its loading set and sends capability_module the access rules with it, so a rule covers the module before it exists; a rules push capability refuses fails the load. Core then has capability_module admit the module *pending*: capability mints its UUID credential, but nothing can pair with it yet (for capability_module itself, the core mints it: the authority's engine exists only once its image has loaded, and its first rules go right after it attaches)
 8. Core sends the token to the module via the loader's `sendToken()` (delegates to the container; the subprocess container writes it to the child's stdin pipe — see Token-Based Authentication)
 9. Host process reads the token from the designated channel (`TokenSource`, default stdin — a container concern, but resolved generically with no container dependency), then loads the module plugin and calls `initLogos(LogosAPI*)` (loader concern). As a defense-in-depth identity check, the host **refuses to initialize** the plugin if its `name()` does not match the name it was loaded as (the trusted registry key passed by the core) — a binary cannot run, or receive tokens, under a name it does not implement
 10. The `LogosAPI` instance exposes `modulePath`, `instanceId`, and `instancePersistencePath` as properties
 11. Host process registers the module with the remote object registry
-12. Core waits for registration and records the module as loaded (along with the loader and handle)
+12. Core waits for registration and records the module as loaded (along with the loader and handle), then *opens* it to pairing. A load that fails instead retires the admission, leaves the loading set and sends the rules again
 
 #### Unloading
 

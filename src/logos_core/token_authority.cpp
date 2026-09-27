@@ -13,6 +13,7 @@ namespace {
 struct State {
     std::mutex mutex;
     const logos_capability_engine_v1* engine = nullptr;
+    bool version2 = false;
     std::unordered_map<std::string, unsigned long long> generations;
 };
 
@@ -28,6 +29,20 @@ const logos_capability_engine_v1* current()
     return state().engine;
 }
 
+// The engine, when it has version 2's entries.
+const logos_capability_engine_v1* current2()
+{
+    std::lock_guard<std::mutex> lock(state().mutex);
+    return state().version2 ? state().engine : nullptr;
+}
+
+bool hasVersion2Entries(const logos_capability_engine_v1* engine)
+{
+    return engine->version >= 2 && engine->size >= sizeof(logos_capability_engine_v1)
+        && engine->set_access_rules && engine->grant_for && engine->admit_pending
+        && engine->open_target;
+}
+
 std::string take(const logos_capability_engine_v1* engine, char* value)
 {
     std::string text = value ? value : "";
@@ -39,15 +54,14 @@ std::string take(const logos_capability_engine_v1* engine, char* value)
 
 bool attach(const logos_capability_engine_v1* engine, lp_provider* capabilityProvider)
 {
-    if (!engine || engine->size < sizeof(logos_capability_engine_v1)
-        || engine->version < LOGOS_CAPABILITY_ENGINE_VERSION) {
-        spdlog::critical("capability_module's engine interface is missing or older than "
-                         "version {}", LOGOS_CAPABILITY_ENGINE_VERSION);
+    if (!engine || engine->size < LOGOS_CAPABILITY_ENGINE_V1_SIZE || engine->version < 1) {
+        spdlog::critical("capability_module's engine interface is missing or malformed");
         return false;
     }
     {
         std::lock_guard<std::mutex> lock(state().mutex);
         state().engine = engine;
+        state().version2 = hasVersion2Entries(engine);
     }
     if (capabilityProvider
         && lp_provider_set_caller_resolver(capabilityProvider, &resolveCallerCallback, nullptr)
@@ -61,6 +75,7 @@ void detach()
 {
     std::lock_guard<std::mutex> lock(state().mutex);
     state().engine = nullptr;
+    state().version2 = false;
     state().generations.clear();
 }
 
@@ -69,17 +84,31 @@ bool attached()
     return current() != nullptr;
 }
 
-std::string admit(const std::string& name, const std::string& kind)
+bool isVersion2()
+{
+    return current2() != nullptr;
+}
+
+std::string admit(const std::string& name, const std::string& kind, bool pending)
 {
     const logos_capability_engine_v1* engine = current();
     if (!engine) return {};
+    const auto admitFn = pending && hasVersion2Entries(engine) ? engine->admit_pending : engine->admit;
     unsigned long long generation = 0;
     const std::string credential =
-        take(engine, engine->admit(name.c_str(), kind.c_str(), &generation));
+        take(engine, admitFn(name.c_str(), kind.c_str(), &generation));
     if (credential.empty()) return {};
     std::lock_guard<std::mutex> lock(state().mutex);
     state().generations[name] = generation;
     return credential;
+}
+
+bool openTarget(const std::string& name)
+{
+    const logos_capability_engine_v1* engine = current();
+    if (!engine) return false;
+    if (!hasVersion2Entries(engine)) return true;
+    return engine->open_target(name.c_str()) == 0;
 }
 
 void retire(const std::string& name)

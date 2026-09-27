@@ -298,6 +298,11 @@ capability_module logs the refusal with both names:
 [capability_module] access policy denies 'caller_module' -> 'target_module'
 ```
 
+The rules go to capability_module before each module is admitted, with the
+modules still loading counted as loaded, and the module is admitted pending:
+nothing can pair with it until its load commits. A load whose rules
+capability_module refuses fails.
+
 No policy, `NULL`, `""` or `mode: "off"` leaves enforcement **off**, which is
 the pre-existing behaviour. A policy the runtime cannot use (unparseable JSON, a
 field of the wrong type, an unknown version or mode) is refused: the setter
