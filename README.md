@@ -270,7 +270,8 @@ which the app answers on a thread of this library's. The runtime's log reaches
 the app's at each line's level.
 
 The runtime stops, unloading its modules in order, when its stdin closes:
-`logos_runtime_stop()` closes it and waits, and so does the app's death. It also
+`logos_runtime_stop()` closes it and waits, and so does the app's death, an
+`exit()` with the runtime live included. It also
 watches its parent, and on Windows the app's job object ends it.
 `logos_runtime_on_exit()` reports an exit nobody asked for. One runtime per
 process, and a process that spawned one cannot also start one itself.
