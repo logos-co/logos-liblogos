@@ -212,6 +212,11 @@ namespace {
         inFlightLoads().erase(name);
     }
 
+    bool isLoadInFlight(const std::string& name) {
+        std::lock_guard<std::mutex> g(inFlightMutex());
+        return inFlightLoads().count(name) > 0;
+    }
+
     // Called from the container's asio thread. Returns true when the load path
     // owns this termination and onTerminated should stay quiet about it.
     bool recordTerminationDuringLoad(const std::string& name) {
@@ -391,9 +396,28 @@ namespace {
         return moduleClient("capability_module");
     }
 
+    // Test seam: stands in for capability_module's informModuleToken and
+    // registerRestriction, so their order against the load can be observed.
+    std::function<void(const std::string&, const std::vector<std::string>&)>&
+    capabilityRpcSinkForTests() {
+        static auto* sink =
+            new std::function<void(const std::string&, const std::vector<std::string>&)>();
+        return *sink;
+    }
+
+    bool capabilityReachable() {
+        return capabilityRpcSinkForTests() || registryInstance().isLoaded("capability_module");
+    }
+
     // Token authenticates the call. Best-effort; assumes capability_module loaded.
     void registerRestrictionRpc(const std::string& target,
                                 const std::vector<std::string>& callers) {
+        if (auto& sink = capabilityRpcSinkForTests()) {
+            std::vector<std::string> args{target};
+            args.insert(args.end(), callers.begin(), callers.end());
+            sink("registerRestriction", args);
+            return;
+        }
         nlohmann::json args = nlohmann::json::array();
         args.push_back(TokenManager::instance().getToken(std::string("capability_module")));
         args.push_back(target);
@@ -462,15 +486,17 @@ namespace {
             if (seen.insert(c).second)
                 callers.push_back(c);
         };
+        // In flight counts: a module holds its token, and may call out from its
+        // own init, before it is committed as loaded.
         for (const auto& d : registryInstance().moduleDependents(target, /*recursive=*/false))
-            if (registryInstance().isLoaded(d))
+            if (registryInstance().isLoaded(d) || isLoadInFlight(d))
                 add(d);
         // Optional dependents are callers too. The DECLARATION is what grants
         // the right to call; whether the loader had to supply the target is a
         // separate question. Omitting them denies a declared call between two
         // loaded modules, and the caller sees a default value, not an error.
         for (const auto& d : registryInstance().moduleOptionalDependents(target))
-            if (registryInstance().isLoaded(d))
+            if (registryInstance().isLoaded(d) || isLoadInFlight(d))
                 add(d);
         for (const auto& t : kTrustedCallers)
             add(t);
@@ -478,7 +504,7 @@ namespace {
     }
 
     void pushDerivedRestrictionForTarget(const std::string& target) {
-        if (!registryInstance().isLoaded("capability_module"))
+        if (!capabilityReachable())
             return;
         auto callers = derivedAllowedCallersFor(target);
         if (!callers.empty())
@@ -494,7 +520,7 @@ namespace {
     // mutex here would be held across the dial, which is the edge runOnOwner
     // exists to remove.
     void refreshDerivedRestrictionsForDependenciesOf(const std::string& name) {
-        if (!registryInstance().isLoaded("capability_module"))
+        if (!capabilityReachable())
             return;
         runOnOwner([name]() {
             for (const auto& dep : registryInstance().moduleDependencies(name, /*recursive=*/false))
@@ -506,13 +532,17 @@ namespace {
     }
 
     void notifyCapabilityModule(const std::string& name, const std::string& token) {
-        if (!registryInstance().isLoaded("capability_module"))
+        if (!capabilityReachable())
             return;
 
         // On the owner thread, which the 3-arg informModuleToken needs for a
         // second reason: it has no marshal of its own at the pinned protocol,
         // and a QtRO replica is thread-AFFINE, not merely non-reentrant.
         runOnOwner([name, token]() {
+            if (auto& sink = capabilityRpcSinkForTests()) {
+                sink("informModuleToken", {name, token});
+                return;
+            }
             const std::string capabilityModuleToken =
                 TokenManager::instance().getToken(std::string("capability_module"));
 
@@ -928,6 +958,14 @@ namespace {
         // the child, and register it locally under the module's name.
         std::string authToken = boost::uuids::to_string(boost::uuids::random_generator()());
 
+        // Registered BEFORE the child holds the token: it can call out from its
+        // own init, before it reports loaded. Registering after left that window
+        // open, so such a call was refused until the SDK's re-exchange won a race.
+        notifyCapabilityModule(name, authToken);
+        refreshDerivedRestrictionsForDependenciesOf(name);
+        // A failed load takes back the calling rights granted above.
+        auto retractCallerRights = [&name]() { refreshDerivedRestrictionsForDependenciesOf(name); };
+
         if (!loader->sendToken(name, authToken)) {
             // We are about to terminate it deliberately, so announce the intent
             // BEFORE calling terminate() — otherwise onTerminated, which may
@@ -941,6 +979,7 @@ namespace {
             // this load stays the only thing that reports.
             consumeExpectedExit(name);
             abandonLoadAttempt(name);
+            retractCallerRights();
             logos::ModuleStateObserver::instance().record(
                 name, logos::module_state::kLoading, logos::module_state::kError,
                 instanceId, pid, "failed to deliver the module's auth token");
@@ -958,6 +997,7 @@ namespace {
             spdlog::error("Failed to load module {}: {}", name, outcome.reason);
             loader->terminate(name);   // no-op when the child is already gone
             abandonLoadAttempt(name);
+            retractCallerRights();
             logos::ModuleStateObserver::instance().record(
                 name, logos::module_state::kLoading, logos::module_state::kError,
                 instanceId, pid, outcome.reason);
@@ -975,6 +1015,7 @@ namespace {
         // Settles a death that arrived while we waited together with the
         // registry write — see commitLoad.
         if (!commitLoad(name, loader, std::move(handle))) {
+            retractCallerRights();
             const char* reason = "the module process exited while it was loading";
             spdlog::error("Failed to load module {}: {}", name, reason);
             logos::ModuleStateObserver::instance().record(
@@ -984,10 +1025,6 @@ namespace {
         }
 
         TokenManager::instance().saveToken(name, authToken);
-
-        notifyCapabilityModule(name, authToken);
-
-        refreshDerivedRestrictionsForDependenciesOf(name);
 
         spdlog::info("Module loaded: {}", name);
         logos::ModuleStateObserver::instance().record(
@@ -1584,6 +1621,11 @@ namespace ModuleManager {
 
     std::vector<std::string> computeDerivedAllowedCallers(const std::string& target) {
         return derivedAllowedCallersFor(target);
+    }
+
+    void setCapabilityRpcSinkForTests(
+        std::function<void(const std::string&, const std::vector<std::string>&)> sink) {
+        capabilityRpcSinkForTests() = std::move(sink);
     }
 
     // No fleet lock: the real caller (pushSnapshot, from whenObjectAvailable)

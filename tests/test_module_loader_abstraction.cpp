@@ -22,6 +22,8 @@
 #include <unordered_map>
 #include <unordered_set>
 #include <memory>
+#include <algorithm>
+#include <functional>
 
 using namespace LogosCore;
 
@@ -51,7 +53,8 @@ struct FakeModuleLoader : public ModuleLoader {
 
     bool sendToken(const std::string& name, const std::string& token) override {
         sendTokenCalls.push_back({name, token});
-        return true;
+        if (onSendToken) onSendToken(name, token);
+        return failSendToken.count(name) == 0;
     }
 
     void terminate(const std::string& name) override {
@@ -76,6 +79,10 @@ struct FakeModuleLoader : public ModuleLoader {
 
     // Modules to fail on load
     std::unordered_set<std::string>                  failOn;
+    // Modules whose token cannot be delivered
+    std::unordered_set<std::string>                  failSendToken;
+    // Runs inside sendToken: what the child could see the moment it holds a token
+    std::function<void(const std::string&, const std::string&)> onSendToken;
     // Modules currently "running"
     std::unordered_set<std::string>                  activeModules;
 };
@@ -296,4 +303,94 @@ TEST_F(ModuleLoaderAbstractionTest, LoadModule_ReturnsFalseForUnknownModule) {
     int result = logos_core_load_module("not_registered", LOGOS_LOAD_MODULE_ONLY);
     EXPECT_EQ(result, 0);
     EXPECT_TRUE(fake->loadCalls.empty());
+}
+
+// =============================================================================
+// Load-time identity: registered with capability_module BEFORE the child holds
+// its token. A module can call out from its own init, before it reports loaded;
+// registering after left those calls refused (host-services gate 2 flake).
+// =============================================================================
+
+class CapabilityOrderTest : public ModuleLoaderAbstractionTest {
+protected:
+    std::vector<std::pair<std::string, std::vector<std::string>>> rpcs;
+
+    void SetUp() override {
+        ModuleLoaderAbstractionTest::SetUp();
+        ModuleManager::setCapabilityRpcSinkForTests(
+            [this](const std::string& method, const std::vector<std::string>& args) {
+                rpcs.push_back({method, args});
+            });
+    }
+
+    void TearDown() override {
+        ModuleManager::setCapabilityRpcSinkForTests({});
+        ModuleManager::setAccessPolicy("");
+        ModuleLoaderAbstractionTest::TearDown();
+    }
+
+    bool informed(const std::string& name, const std::string& token) const {
+        for (const auto& [method, args] : rpcs)
+            if (method == "informModuleToken" && args == std::vector<std::string>{name, token})
+                return true;
+        return false;
+    }
+
+    // The callers in the latest registerRestriction for `target`.
+    std::vector<std::string> lastCallersOf(const std::string& target) const {
+        for (auto it = rpcs.rbegin(); it != rpcs.rend(); ++it)
+            if (it->first == "registerRestriction" && it->second.at(0) == target)
+                return {it->second.begin() + 1, it->second.end()};
+        return {};
+    }
+
+    static bool contains(const std::vector<std::string>& v, const std::string& x) {
+        return std::find(v.begin(), v.end(), x) != v.end();
+    }
+
+    static const char* enforceEnvelope() {
+        return "{\"version\":1,\"mode\":\"enforce\",\"restrictions\":{}}";
+    }
+};
+
+TEST_F(CapabilityOrderTest, TokenIsRegisteredBeforeTheChildHoldsIt) {
+    registerModule("foo");
+    bool informedFirst = false;
+    fake->onSendToken = [&](const std::string& name, const std::string& token) {
+        informedFirst = informed(name, token);
+    };
+
+    ASSERT_EQ(logos_core_load_module("foo", LOGOS_LOAD_MODULE_ONLY), 1);
+
+    ASSERT_EQ(fake->sendTokenCalls.size(), 1u);
+    EXPECT_TRUE(informedFirst) << "the child could present a token capability_module did not know";
+}
+
+TEST_F(CapabilityOrderTest, DependencyAcceptsTheModuleBeforeTheChildHoldsItsToken) {
+    registerModule("b");
+    registerModule("a", {"b"});
+    logos_core_mark_module_loaded("b");
+    ModuleManager::setAccessPolicy(enforceEnvelope());
+    bool allowedFirst = false;
+    fake->onSendToken = [&](const std::string&, const std::string&) {
+        allowedFirst = contains(lastCallersOf("b"), "a");
+    };
+
+    ASSERT_EQ(logos_core_load_module("a", LOGOS_LOAD_MODULE_ONLY), 1);
+
+    EXPECT_TRUE(allowedFirst) << "a's init could call b before b listed a as a caller";
+    EXPECT_TRUE(contains(lastCallersOf("b"), "a"));
+}
+
+TEST_F(CapabilityOrderTest, FailedLoadTakesBackTheCallingRights) {
+    registerModule("b");
+    registerModule("a", {"b"});
+    logos_core_mark_module_loaded("b");
+    ModuleManager::setAccessPolicy(enforceEnvelope());
+    fake->failSendToken.insert("a");
+
+    EXPECT_EQ(logos_core_load_module("a", LOGOS_LOAD_MODULE_ONLY), 0);
+
+    EXPECT_FALSE(contains(lastCallersOf("b"), "a"));
+    EXPECT_FALSE(contains(ModuleManager::computeDerivedAllowedCallers("b"), "a"));
 }

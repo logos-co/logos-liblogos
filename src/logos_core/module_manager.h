@@ -4,6 +4,7 @@
 #include "dependency_resolver.h"
 #include "dependency_gate.h"
 #include "module_loader_registry.h"
+#include <functional>
 #include <string>
 #include <vector>
 #include <unordered_map>
@@ -57,6 +58,10 @@ namespace ModuleManager {
     // Allowed callers core would register for `target` (see the .cpp).
     // A pure read with no RPC — exposed so tests can observe the derivation.
     std::vector<std::string> computeDerivedAllowedCallers(const std::string& target);
+    // Tests only: receives capability_module's informModuleToken(name, token) and
+    // registerRestriction(target, callers...) in place of the RPCs. Empty = off.
+    void setCapabilityRpcSinkForTests(
+        std::function<void(const std::string& method, const std::vector<std::string>& args)> sink);
 
     void discoverInstalledModules();
 
