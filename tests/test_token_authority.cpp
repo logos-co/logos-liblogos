@@ -93,15 +93,18 @@ TEST_F(TokenAuthorityTest, EachLoadAndUnloadSendsTheWholePolicy)
 
     ASSERT_EQ(logos_core_load_module("healthy", LOGOS_LOAD_MODULE_ONLY), 1);
     auto documents = stand_in::restrictionDocuments();
-    ASSERT_EQ(documents.size(), 1u);
-    const json loaded = json::parse(documents[0]);
+    // Once before the module holds its token, and again as its load commits.
+    ASSERT_EQ(documents.size(), 2u);
+    const json early = json::parse(documents[0]);
+    EXPECT_EQ(early.value("not_loaded", json()), json::array({"someone"})) << early.dump();
+    const json loaded = json::parse(documents[1]);
     EXPECT_EQ(loaded.value("not_loaded", json()), json::array({"someone"})) << loaded.dump();
     EXPECT_TRUE(loaded.contains("healthy")) << loaded.dump();
 
     ASSERT_EQ(logos_core_unload_module("healthy", false), 1);
     documents = stand_in::restrictionDocuments();
-    ASSERT_EQ(documents.size(), 2u);
-    const json unloaded = json::parse(documents[1]);
+    ASSERT_EQ(documents.size(), 3u);
+    const json unloaded = json::parse(documents[2]);
     EXPECT_FALSE(unloaded.contains("healthy")) << unloaded.dump();
     EXPECT_TRUE(unloaded.contains("not_loaded")) << unloaded.dump();
 }
