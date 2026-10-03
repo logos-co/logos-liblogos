@@ -372,4 +372,18 @@ bool InprocModuleLoader::hasModule(const std::string& name) const
     return m_entries.count(name) > 0;
 }
 
+void* InprocModuleLoader::symbolOf(const std::string& name, const char* symbol) const
+{
+    std::lock_guard<std::mutex> lock(m_mutex);
+    auto it = m_entries.find(name);
+    return it == m_entries.end() ? nullptr : it->second->module.symbol(symbol);
+}
+
+lp_provider* InprocModuleLoader::providerOf(const std::string& name) const
+{
+    std::lock_guard<std::mutex> lock(m_mutex);
+    auto it = m_entries.find(name);
+    return it == m_entries.end() ? nullptr : it->second->module.provider();
+}
+
 } // namespace LogosCore
