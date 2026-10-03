@@ -22,6 +22,7 @@
 #include "module_loader_registry.h"
 #include "module_manager.h"
 #include "subprocess_manager.h"
+#include "inproc_module_loader.h"
 
 #include <atomic>
 #include <chrono>
@@ -226,6 +227,7 @@ protected:
         logos_core_terminate_all();
         logos_core_clear();
         ModuleManager::loaders().clearForTests();
+        ModuleManager::loaders().registerLoader(std::make_shared<LogosCore::InprocModuleLoader>());
         ModuleManager::loaders().registerLoader(std::make_shared<SubprocessManager>());
     }
 

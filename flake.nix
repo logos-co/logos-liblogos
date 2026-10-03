@@ -4,9 +4,10 @@
   inputs = {
     logos-nix.url = "github:logos-co/logos-nix";
     nixpkgs.follows = "logos-nix/nixpkgs";
-    logos-cpp-sdk.url = "github:logos-co/logos-cpp-sdk";
+    logos-cpp-sdk.url = "github:logos-co/logos-cpp-sdk/feat/runtime-delegate-export";
     logos-cpp-sdk.inputs.logos-protocol.follows = "logos-protocol";
-    logos-protocol.url = "github:logos-co/logos-protocol/codex/qt-remote-plain";
+    # On protocol 0.13 (logos-protocol#97) and the branches stacked on it until they merge.
+    logos-protocol.url = "github:logos-co/logos-protocol/feat/plain-local-inproc";
     # ONE logos-protocol, and ONE logos-qt-host, in the closure. qt-host bakes
     # sizeof(LogosAPIClient) into its own `operator new` while logos-protocol
     # defines the constructor, so a second protocol here is an 8-byte heap
@@ -16,10 +17,10 @@
     logos-qt-sdk.url = "github:logos-co/logos-qt-sdk";
     logos-qt-sdk.inputs.logos-protocol.follows = "logos-protocol";
     logos-qt-sdk.inputs.logos-plugin-qt.follows = "logos-plugin-qt";
-    logos-plugin-qt.url = "github:logos-co/logos-plugin-qt/codex/qt-remote-plain-plugin";
+    logos-plugin-qt.url = "github:logos-co/logos-plugin-qt/chore/relock-protocol-0.13";
     logos-plugin-qt.inputs.logos-protocol.follows = "logos-protocol";
-    logos-capability-module.url = "github:logos-co/logos-capability-module";
-    logos-modules-state-module.url = "github:logos-co/logos-modules-state-module";
+    logos-capability-module.url = "github:logos-co/logos-capability-module/feat/token-authority";
+    logos-modules-state-module.url = "github:logos-co/logos-modules-state-module/chore/qt-remote-plain";
     logos-module.url = "github:logos-co/logos-module";
     process-stats.url = "github:logos-co/process-stats";
     logos-container.url = "github:logos-co/logos-container";
@@ -29,7 +30,7 @@
     # revision of its own means two of every function-local static in there.
     # Only the protocol-carrying chain follows: the rest of its inputs are lock
     # size, not correctness, and deep follows have broken this repo before.
-    default-module-loader.url = "github:logos-co/logos-module-loader-qt/codex/qt-remote-plain-loader-qt";
+    default-module-loader.url = "github:logos-co/logos-module-loader-qt/feat/native-module-host-lib";
     default-module-loader.inputs.logos-protocol.follows = "logos-protocol";
     default-module-loader.inputs.logos-plugin-qt.follows = "logos-plugin-qt";
     default-module-loader.inputs.logos-cpp-sdk.follows = "logos-cpp-sdk";
@@ -141,7 +142,10 @@
           bin = import ./nix/bin.nix { inherit pkgs common build lib modules; moduleHosts = defaultModuleHosts; };
           include = import ./nix/include.nix { inherit pkgs common src logosProtocolPkg; };
           tests = if pkgs.stdenv.hostPlatform.isWindows
-            then import ./nix/tests-windows.nix { inherit pkgs common src bin; }
+            then import ./nix/tests-windows.nix {
+              inherit pkgs common src bin;
+              qtPlugin = logos-capability-module.packages.${system}.qt-lib;
+            }
             else import ./nix/tests.nix { inherit pkgs common build; };
 
           # Portable package components
@@ -198,9 +202,9 @@
         let
           testsPkg = self.packages.${system}.logos-liblogos-tests;
           bundledModules = self.packages.${system}.logos-liblogos-modules;
-          # Real Qt plugin used by RealPluginRegistryTest (TEST_PLUGIN env var).
-          # capability_module is already a flake input and builds a real plugin.
-          capabilityModulePkg = logos-capability-module.packages.${system}.default;
+          # Real Qt plugin used by RealPluginRegistryTest (TEST_PLUGIN env var):
+          # capability_module's Qt build, since the module itself is now plain.
+          capabilityModulePkg = logos-capability-module.packages.${system}.qt-lib;
           pluginExt = if pkgs.stdenv.isDarwin then "dylib" else "so";
         in {
           # A Basecamp-shaped process: the installed package with the Qt host
