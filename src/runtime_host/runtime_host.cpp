@@ -482,13 +482,13 @@ bool configure(const json& config, std::string& error)
         for (const auto& [name, set] : it->items())
             logos_core_set_module_transports(name.c_str(), documentText(set).c_str());
     }
-    if (const auto it = config.find("access_policy"); it != config.end())
-        logos_core_set_access_policy(documentText(*it).c_str());
     struct Setter {
         const char* key;
         int (*apply)(const char*);
     };
-    for (const Setter& setter : {Setter{"placement_policy", &logos_core_set_placement_policy},
+    for (const Setter& setter : {Setter{"access_policy", &logos_core_set_access_policy},
+                                 Setter{"module_config", &logos_core_set_module_config},
+                                 Setter{"placement_policy", &logos_core_set_placement_policy},
                                  Setter{"package_config", &logos_core_set_package_config},
                                  Setter{"core_service_transports",
                                         &logos_core_set_core_service_transports}}) {

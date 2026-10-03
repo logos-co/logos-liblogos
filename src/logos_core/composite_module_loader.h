@@ -5,6 +5,8 @@
 #include <logos_container/module_container.h>
 #include <logos_module_loader/module_format_loader.h>
 #include <memory>
+#include <mutex>
+#include <unordered_set>
 
 namespace LogosCore {
 
@@ -24,6 +26,10 @@ public:
               LoadedModuleHandle& out) override;
 
     bool sendToken(const std::string& name, const std::string& token) override;
+    // A configuration follows the credential as a second line on the host's
+    // stdin, which load() told the host to read.
+    bool sendStartupInput(const std::string& name, const std::string& token,
+                          const std::optional<std::string>& configuration) override;
     LoadOutcome awaitLoad(const std::string& name,
                           std::chrono::milliseconds timeout) override;
     void terminate(const std::string& name) override;
@@ -38,6 +44,8 @@ public:
 private:
     std::shared_ptr<ModuleContainer> container_;
     std::shared_ptr<ModuleFormatLoader> loader_;
+    std::mutex configuredMutex_;
+    std::unordered_set<std::string> configured_; // launched to read a configuration
 };
 
 } // namespace LogosCore

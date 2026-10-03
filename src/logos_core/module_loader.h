@@ -22,6 +22,16 @@
 
 namespace LogosCore {
 
+// Set in a descriptor's loaderConfig when the module is given a configuration with
+// its credential: a loader that launches a host must have it read one.
+inline constexpr const char* kTakesConfiguration = "takes_configuration";
+
+inline bool takesConfiguration(const ModuleDescriptor& desc) {
+    if (!desc.loaderConfig.is_object()) return false;
+    const auto it = desc.loaderConfig.find(kTakesConfiguration);
+    return it != desc.loaderConfig.end() && it->is_boolean() && it->get<bool>();
+}
+
 // Abstract base: one instance per loader kind, shared across all modules it manages.
 // All implementations must be Qt-free at the interface level.
 class ModuleLoader {
@@ -42,6 +52,15 @@ public:
 
     // Deliver the auth token to the named module. Called immediately after a successful load().
     virtual bool sendToken(const std::string& name, const std::string& token) = 0;
+
+    // The credential and, when the module has one, its configuration (one JSON
+    // document), before the module is reachable; what the runtime calls instead of
+    // sendToken. A loader that cannot deliver a configuration refuses it.
+    virtual bool sendStartupInput(const std::string& name, const std::string& token,
+                                  const std::optional<std::string>& configuration) {
+        if (configuration) return false;
+        return sendToken(name, token);
+    }
 
     // Wait, bounded, for what load() cannot know: whether the module's plugin
     // actually loaded. Unknown — the default — means the loader cannot tell,

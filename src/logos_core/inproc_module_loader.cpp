@@ -86,6 +86,7 @@ struct InprocModuleLoader::Entry {
     std::mutex mutex;
     std::condition_variable changed;
     std::string credential;
+    std::optional<std::string> configuration;
     bool credentialArrived = false;
     State state = State::Starting;
     std::string reason;
@@ -254,6 +255,7 @@ bool InprocModuleLoader::load(const ModuleDescriptor& desc,
                 return entry->finish(Entry::State::Failed, "no credential arrived");
             }
             credential = entry->credential;
+            options.configuration = entry->configuration;
         }
         const std::string& name = entry->name;
         // Its own store, so it never runs on the runtime's.
@@ -286,6 +288,12 @@ bool InprocModuleLoader::load(const ModuleDescriptor& desc,
 
 bool InprocModuleLoader::sendToken(const std::string& name, const std::string& token)
 {
+    return sendStartupInput(name, token, std::nullopt);
+}
+
+bool InprocModuleLoader::sendStartupInput(const std::string& name, const std::string& token,
+                                          const std::optional<std::string>& configuration)
+{
     std::shared_ptr<Entry> entry;
     {
         std::lock_guard<std::mutex> lock(m_mutex);
@@ -296,6 +304,7 @@ bool InprocModuleLoader::sendToken(const std::string& name, const std::string& t
     {
         std::lock_guard<std::mutex> lock(entry->mutex);
         entry->credential = token;
+        entry->configuration = configuration;
         entry->credentialArrived = true;
     }
     entry->changed.notify_all();

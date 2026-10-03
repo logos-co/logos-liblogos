@@ -152,6 +152,12 @@ namespace {
         return path;
     }
 
+    // Each module's configuration document, serialized. Guarded by configMutex().
+    std::unordered_map<std::string, std::string>& moduleConfigurations() {
+        static std::unordered_map<std::string, std::string> m;
+        return m;
+    }
+
     std::atomic<bool>& startedFlag() {
         static std::atomic<bool> value{false};
         return value;
@@ -227,11 +233,6 @@ namespace {
         inFlightLoads().erase(name);
     }
 
-    bool isLoadInFlight(const std::string& name) {
-        std::lock_guard<std::mutex> g(inFlightMutex());
-        return inFlightLoads().count(name) > 0;
-    }
-
     // Called from the container's asio thread. Returns true when the load path
     // owns this termination and onTerminated should stay quiet about it.
     bool recordTerminationDuringLoad(const std::string& name) {
@@ -300,15 +301,45 @@ namespace {
         expectedExits().clear();
     }
 
-    // Both guarded by configMutex(). parsedEnforcePolicy is set only in enforce mode.
+    // All guarded by configMutex(). activePolicy is set only in enforce or explicit
+    // mode; policyVersion is the version of the policy taken, whatever its mode.
     std::string& accessPolicyJson() {
         static std::string s;
         return s;
     }
 
-    std::optional<LogosCore::AccessPolicy>& parsedEnforcePolicy() {
+    std::optional<LogosCore::AccessPolicy>& activePolicy() {
         static std::optional<LogosCore::AccessPolicy> p;
         return p;
+    }
+
+    int& policyVersion() {
+        static int version = 0;
+        return version;
+    }
+
+    // Set when the embedder's last policy was refused: the runtime then does not start.
+    std::atomic<bool>& accessPolicyRefusedFlag() {
+        static std::atomic<bool> refused{false};
+        return refused;
+    }
+
+    // Modules between their first rules push and their commit or failure. The
+    // rules treat them as loaded, so two concurrent loads keep each other.
+    std::mutex& loadingMutex() {
+        static std::mutex m;
+        return m;
+    }
+
+    std::unordered_set<std::string>& loadingModules() {
+        static std::unordered_set<std::string> names;
+        return names;
+    }
+
+    bool isLoadedOrLoading(const std::string& name) {
+        if (registryInstance().isLoaded(name)) return true;
+        std::lock_guard<std::mutex> g(loadingMutex());
+        return loadingModules().count(name) > 0;
     }
 
     // Trusted callers and exempt targets come from the bootstrap policy table.
@@ -564,22 +595,42 @@ namespace {
         return callers;
     }
 
+    bool isPackageModule(const std::string& name) {
+        return name == "package_manager" || name == "package_downloader";
+    }
+
+    // A version 1 rule as written, plus the shell, and on the package modules
+    // core_service, which carries operators' package commands.
+    std::vector<std::string> versionOneRule(const LogosCore::AccessRestriction& rule) {
+        auto callers = withShell(rule.allowedCallers);
+        if (isPackageModule(rule.target)
+            && std::find(callers.begin(), callers.end(), "core_service") == callers.end())
+            callers.push_back("core_service");
+        return callers;
+    }
+
     // A module may only call modules it declared as a dependency, so `target`'s
-    // allowed callers are its loaded dependents plus the trusted set. Empty when
-    // exempt or no enforce policy (fail-open); explicit policy overrides verbatim.
-    std::vector<std::string> derivedAllowedCallersFor(const std::string& target) {
+    // allowed callers are its loaded dependents plus the trusted set. A version 1
+    // rule overrides that (versionOneRule), so one with no callers admits only the
+    // shell, and operators through core_service.
+    // nullopt for no list rule: exempt, no policy, a version 2 rule (sent as
+    // written), or not derived in explicit mode.
+    std::optional<std::vector<std::string>> listRuleFor(const std::string& target) {
         if (logos::bootstrap::isExemptTarget(target))
-            return {};
+            return std::nullopt;
 
         {
             std::shared_lock<std::shared_mutex> g(configMutex());
-            const auto& policy = parsedEnforcePolicy();
+            const auto& policy = activePolicy();
             if (!policy)
-                return {};
+                return std::nullopt;
 
             for (const auto& r : policy->restrictions)
                 if (r.target == target)
-                    return withShell(r.allowedCallers);
+                    return policy->version == 2 ? std::nullopt
+                                                : std::optional(versionOneRule(r));
+            if (!policy->enforce())
+                return std::nullopt;
         }
 
         // Deduped; no dependents => trusted only (deny-by-default for peers).
@@ -592,42 +643,69 @@ namespace {
         // In flight counts: a module holds its token, and may call out from its
         // own init, before it is committed as loaded.
         for (const auto& d : registryInstance().moduleDependents(target, /*recursive=*/false))
-            if (registryInstance().isLoaded(d) || isLoadInFlight(d))
+            if (isLoadedOrLoading(d))
                 add(d);
         // Optional dependents are callers too. The DECLARATION is what grants
         // the right to call; whether the loader had to supply the target is a
         // separate question. Omitting them denies a declared call between two
         // loaded modules, and the caller sees a default value, not an error.
         for (const auto& d : registryInstance().moduleOptionalDependents(target))
-            if (registryInstance().isLoaded(d) || isLoadInFlight(d))
+            if (isLoadedOrLoading(d))
                 add(d);
         for (const auto& t : logos::bootstrap::trustedCallers())
             add(t);
         return withShell(std::move(callers));
     }
 
+    std::vector<std::string> derivedAllowedCallersFor(const std::string& target) {
+        return listRuleFor(target).value_or(std::vector<std::string>{});
+    }
+
+    // A version 2 rule as written. The package modules also admit core_service,
+    // which forwards operators to them once it has checked the operator's grant.
+    nlohmann::json version2Rule(const LogosCore::AccessRestriction& rule) {
+        if (rule.grants) {
+            nlohmann::json grants = *rule.grants;
+            if (isPackageModule(rule.target)) grants["core_service"] = "*";
+            return grants;
+        }
+        nlohmann::json callers = rule.allowedCallers;
+        if (isPackageModule(rule.target)) callers.push_back("core_service");
+        return callers;
+    }
+
     // The whole access policy capability_module enforces, as one document: the
-    // explicit rules, and the derived ones of every loaded module. A target
-    // absent is unrestricted; without an enforce policy the document is empty.
-    nlohmann::json restrictionsDocument() {
+    // explicit rules, and in enforce mode the derived ones of every loaded or
+    // loading module. A target absent is unrestricted; without a policy the
+    // document is empty. Where the engine binds operators, list rules name
+    // "@op:*", since versions 1 and derived rules leave operators unrestricted.
+    nlohmann::json restrictionsDocument(bool operatorsBound) {
         std::vector<std::string> targets;
+        nlohmann::json document = nlohmann::json::object();
         {
             std::shared_lock<std::shared_mutex> g(configMutex());
-            const auto& policy = parsedEnforcePolicy();
+            const auto& policy = activePolicy();
             if (!policy)
-                return nlohmann::json::object();
-            for (const auto& r : policy->restrictions)
-                targets.push_back(r.target);
+                return document;
+            for (const auto& r : policy->restrictions) {
+                if (policy->version == 2) document[r.target] = version2Rule(r);
+                else targets.push_back(r.target);
+            }
         }
         for (const auto& loaded : registryInstance().loadedModuleNames())
             targets.push_back(loaded);
-        nlohmann::json document = nlohmann::json::object();
+        {
+            std::lock_guard<std::mutex> g(loadingMutex());
+            targets.insert(targets.end(), loadingModules().begin(), loadingModules().end());
+        }
         for (const auto& target : targets) {
             if (document.contains(target))
                 continue;
-            const auto callers = derivedAllowedCallersFor(target);
-            if (!callers.empty())
-                document[target] = callers;
+            auto callers = listRuleFor(target);
+            if (!callers)
+                continue;
+            if (operatorsBound) callers->push_back("@op:*");
+            document[target] = *callers;
         }
         return document;
     }
@@ -637,13 +715,29 @@ namespace {
     // Each push reads the loaded set, so the pushes have to be ordered against
     // each other or the last word can come from a reader that ran before the
     // other module committed. runOnOwner runs them one at a time.
-    void pushRestrictions() {
+    // A version 1 engine takes version 1 rules only: it cannot bind operators or
+    // grant methods, so a version 2 policy is refused rather than half-enforced.
+    bool pushRestrictions() {
         if (!logos::authority::attached())
-            return;
-        runOnOwner([]() {
-            if (!logos::authority::setRestrictions(restrictionsDocument().dump()))
+            return true;
+        const bool rules = logos::authority::isVersion2();
+        if (!rules) {
+            std::shared_lock<std::shared_mutex> g(configMutex());
+            if (policyVersion() == 2) {
+                spdlog::critical("capability_module's engine is version 1, which cannot "
+                                 "enforce a version 2 access policy");
+                return false;
+            }
+        }
+        bool taken = false;
+        runOnOwner([&taken, rules]() {
+            const std::string document = restrictionsDocument(rules).dump();
+            taken = rules ? logos::authority::setAccessRules(document)
+                          : logos::authority::setRestrictions(document);
+            if (!taken)
                 spdlog::error("capability_module refused the access policy");
         });
+        return taken;
     }
 
     // capability_module becomes the token authority through its engine
@@ -697,6 +791,29 @@ namespace {
         std::string name;
         bool active = false;
         ~AdmissionGuard() { if (active) logos::authority::retire(name); }
+    };
+
+    // A module in the loading set from before its admission to its commit. A load
+    // that fails takes it out and sends the rules again.
+    struct LoadingEntry {
+        std::string name;
+        bool active = false;
+
+        void begin() {
+            std::lock_guard<std::mutex> g(loadingMutex());
+            loadingModules().insert(name);
+            active = true;
+        }
+        void end() {
+            std::lock_guard<std::mutex> g(loadingMutex());
+            loadingModules().erase(name);
+            active = false;
+        }
+        ~LoadingEntry() {
+            if (!active) return;
+            end();
+            pushRestrictions();
+        }
     };
 
     // ── THE modules_state FEED ───────────────────────────────────────────────
@@ -964,13 +1081,20 @@ namespace {
         // calling load. The loader threads it through to the child via
         // a CLI argument so the child's LogosAPIProvider binds the right
         // listeners. Modules without an entry inherit the global default.
+        // Its configuration, if the embedder gave it one: delivered with its
+        // credential, before it is reachable, on every load.
+        std::optional<std::string> configuration;
         {
             std::shared_lock<std::shared_mutex> g(configMutex());
             if (auto it = moduleTransportsMap().find(name);
                 it != moduleTransportsMap().end()) {
                 desc.transportSetJson = it->second;
             }
+            if (auto it = moduleConfigurations().find(name); it != moduleConfigurations().end())
+                configuration = it->second;
         }
+        if (configuration)
+            desc.loaderConfig[LogosCore::kTakesConfiguration] = true;
 
         // ── Protocol-version load gate ─────────────────────────────────
         // Read the module's embedded metadata without loading it and apply
@@ -1074,6 +1198,8 @@ namespace {
                 return;
 
             logos::authority::retire(n);
+            // Its callers' routes to what it depended on go with it.
+            pushRestrictions();
             auto& observer = logos::ModuleStateObserver::instance();
             if (consumeExpectedExit(n)) {
                 observer.record(n, logos::module_state::kStopping,
@@ -1108,14 +1234,31 @@ namespace {
         const std::optional<int64_t> pid =
             handle.pid >= 0 ? std::optional<int64_t>(handle.pid) : std::nullopt;
 
+        // Its rules first, so capability never admits a module no rule covers; a
+        // refused push fails the load rather than leaving the module unchecked.
+        LoadingEntry loading{name};
+        if (!isAuthority) {
+            loading.begin();
+            if (!pushRestrictions()) {
+                markExitExpected(name);
+                loader->terminate(name);
+                consumeExpectedExit(name);
+                abandonLoadAttempt(name);
+                logos::ModuleStateObserver::instance().record(
+                    name, logos::module_state::kLoading, logos::module_state::kError,
+                    instanceId, pid, "capability_module refused the access policy");
+                return false;
+            }
+        }
+
         // OUTBOUND half of load-time identity: the module's credential, sent into
         // the child and kept in core's store. capability_module mints every one
         // but its own, which is the trust root: its engine exists only once its
-        // image has loaded.
+        // image has loaded. Nothing can pair with the module until it commits.
         AdmissionGuard admission{name, !isAuthority};
         std::string authToken = isAuthority
             ? boost::uuids::to_string(boost::uuids::random_generator()())
-            : logos::authority::admit(name, "module");
+            : logos::authority::admit(name, "module", /*pending=*/true);
         if (authToken.empty()) {
             admission.active = false;
             markExitExpected(name);
@@ -1128,14 +1271,7 @@ namespace {
             return false;
         }
 
-        // Its calling rights reach capability_module BEFORE the child holds the
-        // token (admit() already registered the token): it can call out from its
-        // own init, before it reports loaded. In-flight loads count as callers.
-        pushRestrictions();
-        // A failed load takes back the calling rights granted above.
-        auto retractCallerRights = []() { pushRestrictions(); };
-
-        if (!loader->sendToken(name, authToken)) {
+        if (!loader->sendStartupInput(name, authToken, configuration)) {
             // We are about to terminate it deliberately, so announce the intent
             // BEFORE calling terminate() — otherwise onTerminated, which may
             // already be running on the asio thread, reports this as a crash.
@@ -1148,10 +1284,11 @@ namespace {
             // this load stays the only thing that reports.
             consumeExpectedExit(name);
             abandonLoadAttempt(name);
-            retractCallerRights();
             logos::ModuleStateObserver::instance().record(
                 name, logos::module_state::kLoading, logos::module_state::kError,
-                instanceId, pid, "failed to deliver the module's auth token");
+                instanceId, pid, configuration
+                    ? "failed to deliver the module's credential and configuration"
+                    : "failed to deliver the module's auth token");
             return false;
         }
 
@@ -1166,7 +1303,6 @@ namespace {
             spdlog::error("Failed to load module {}: {}", name, outcome.reason);
             loader->terminate(name);   // no-op when the child is already gone
             abandonLoadAttempt(name);
-            retractCallerRights();
             logos::ModuleStateObserver::instance().record(
                 name, logos::module_state::kLoading, logos::module_state::kError,
                 instanceId, pid, outcome.reason);
@@ -1181,9 +1317,13 @@ namespace {
                          "detectable if the process dies.", name);
         }
 
-        // The authority takes over before anything can be admitted through it.
-        if (isAuthority && !attachTokenAuthority(loader)) {
-            const char* reason = "capability_module offers no usable engine interface";
+        // The authority takes over, with its rules, before anything can be
+        // admitted through it.
+        if (isAuthority && (!attachTokenAuthority(loader) || !pushRestrictions())) {
+            const char* reason = logos::authority::attached()
+                ? "capability_module refused the access policy"
+                : "capability_module offers no usable engine interface";
+            logos::authority::detach();
             markExitExpected(name);
             loader->terminate(name);
             consumeExpectedExit(name);
@@ -1202,7 +1342,6 @@ namespace {
             loader->terminate(name);
             consumeExpectedExit(name);
             abandonLoadAttempt(name);
-            retractCallerRights();
             logos::ModuleStateObserver::instance().record(
                 name, logos::module_state::kLoading, logos::module_state::kError,
                 instanceId, pid, configError);
@@ -1213,7 +1352,6 @@ namespace {
         // registry write — see commitLoad.
         if (!commitLoad(name, loader, std::move(handle))) {
             if (isAuthority) logos::authority::detach();
-            retractCallerRights();
             const char* reason = "the module process exited while it was loading";
             spdlog::error("Failed to load module {}: {}", name, reason);
             logos::ModuleStateObserver::instance().record(
@@ -1227,8 +1365,10 @@ namespace {
             return false;
         }
         admission.active = false;
-
-        pushRestrictions();
+        // Committed: now callers may pair with it. Its rules did not change.
+        if (!isAuthority && !logos::authority::openTarget(name))
+            spdlog::warn("capability_module no longer admits {}: it left while loading", name);
+        if (loading.active) loading.end();
 
         spdlog::info("Module loaded: {}", name);
         logos::ModuleStateObserver::instance().record(
@@ -1307,7 +1447,8 @@ namespace {
         registryInstance().markUnloaded(name);
         logos::authority::retire(name);
 
-        pushRestrictions();
+        if (!pushRestrictions())
+            spdlog::error("capability_module kept the rules {} was part of", name);
 
         spdlog::info("Module unloaded: {}", name);
 
@@ -1402,48 +1543,93 @@ namespace ModuleManager {
     }
 
     // THE deny-by-default switch. `mode: "enforce"` is the whole flag: it is
-    // what turns the derived restrictions on (derivedAllowedCallersFor
-    // returns {} without it, so core registers nothing and capability_module
-    // leaves every target open). Anything else — no policy, empty policy,
-    // unparseable policy, a different mode — is OFF, i.e. exactly the behaviour
-    // of a host that never calls this at all.
+    // what turns the derived restrictions on (listRuleFor answers no rule
+    // without it, so core registers nothing and capability_module leaves every
+    // target open). No policy, an empty one, or `mode: "off"` is OFF, exactly
+    // the behaviour of a host that never calls this at all.
     //
-    // Every branch says out loud which side it landed on. Enforcement that
-    // silently failed to arm is the dangerous outcome: it looks identical to
-    // enforcement that is working and simply has nothing to deny, so an
-    // operator who mistyped `"mode":"enforced"` would otherwise get a
+    // Anything else is refused, and a refusal keeps the runtime from starting:
+    // enforcement that silently failed to arm looks identical to enforcement
+    // with nothing to deny, so a mistyped `"mode":"enforced"` must not leave a
     // wide-open runtime and a clean log.
-    void setAccessPolicy(const std::string& policyJson) {
+    bool setAccessPolicy(const std::string& policyJson, std::string* error) {
         std::unique_lock<std::shared_mutex> g(configMutex());  // guards the read at push time
-        accessPolicyJson() = policyJson;
-        // Cache the parse only in enforce mode; malformed/non-enforce stays empty.
-        parsedEnforcePolicy().reset();
+        accessPolicyJson().clear();
+        activePolicy().reset();
+        policyVersion() = 0;
 
         if (policyJson.empty()) {
+            accessPolicyRefusedFlag() = false;
             spdlog::info("Inter-module access enforcement is OFF (no access policy set): "
                          "any loaded module may call any other");
-            return;
+            return true;
         }
 
-        auto parsed = LogosCore::parseAccessPolicy(policyJson);
+        std::string why;
+        auto parsed = LogosCore::parseAccessPolicy(policyJson, &why);
         if (!parsed) {
-            spdlog::warn("logos_core_set_access_policy: policy is not valid JSON — "
-                         "inter-module access enforcement stays OFF");
-            return;
+            accessPolicyRefusedFlag() = true;
+            spdlog::error("logos_core_set_access_policy: {}; the runtime will not start "
+                          "until a policy is taken", why);
+            if (error) *error = why;
+            return false;
         }
-        if (!parsed->enforce()) {
-            spdlog::warn("logos_core_set_access_policy: mode is \"{}\", not \"enforce\" — "
-                         "inter-module access enforcement stays OFF ({} restriction(s) "
-                         "parsed but not registered)",
-                         parsed->mode, parsed->restrictions.size());
-            return;
+        accessPolicyRefusedFlag() = false;
+        accessPolicyJson() = policyJson;
+        policyVersion() = parsed->version;
+        if (!parsed->active()) {
+            spdlog::warn("logos_core_set_access_policy: mode is \"off\" — "
+                         "inter-module access enforcement is OFF ({} restriction(s) "
+                         "parsed but not registered)", parsed->restrictions.size());
+            return true;
         }
 
-        spdlog::info("Inter-module access enforcement is ON (mode=enforce): deny-by-default — "
-                     "a module may only call the modules it declares as dependencies; "
-                     "{} explicit restriction(s) override the derived allow-list",
-                     parsed->restrictions.size());
-        parsedEnforcePolicy() = std::move(parsed);
+        if (parsed->enforce())
+            spdlog::info("Inter-module access enforcement is ON (mode=enforce, version {}): "
+                         "deny-by-default — a module may only call the modules it declares "
+                         "as dependencies; {} explicit restriction(s) override the derived "
+                         "allow-list", parsed->version, parsed->restrictions.size());
+        else
+            spdlog::info("Inter-module access enforcement is ON (mode=explicit, version {}): "
+                         "{} restricted target(s); every other module is open",
+                         parsed->version, parsed->restrictions.size());
+        activePolicy() = std::move(parsed);
+        return true;
+    }
+
+    bool accessPolicyRefused() {
+        return accessPolicyRefusedFlag();
+    }
+
+    bool setModuleConfig(const std::string& json, std::string* error) {
+        const auto refuse = [error](std::string why) {
+            spdlog::error("logos_core_set_module_config: {}", why);
+            if (error) *error = std::move(why);
+            return false;
+        };
+        std::unique_lock<std::shared_mutex> g(configMutex());
+        if (json.empty()) {
+            moduleConfigurations().clear();
+            return true;
+        }
+        const nlohmann::json doc = nlohmann::json::parse(json, nullptr, false);
+        if (!doc.is_object())
+            return refuse("the module configuration maps module names to documents");
+        for (const auto& [name, value] : doc.items())
+            if (!logos::isValidModuleName(name) || name == "core_service")
+                return refuse("'" + name + "' is not a module that can be configured");
+        for (const auto& [name, value] : doc.items()) {
+            if (value.is_null()) moduleConfigurations().erase(name);
+            else moduleConfigurations()[name] = value.dump();
+        }
+        return true;
+    }
+
+    std::optional<std::string> moduleConfiguration(const std::string& name) {
+        std::shared_lock<std::shared_mutex> g(configMutex());
+        const auto it = moduleConfigurations().find(name);
+        if (it == moduleConfigurations().end()) return std::nullopt;
+        return it->second;
     }
 
     void discoverInstalledModules() {
@@ -1764,8 +1950,15 @@ namespace ModuleManager {
         {
             std::unique_lock<std::shared_mutex> cfg(configMutex());
             moduleTransportsMap().clear();
+            moduleConfigurations().clear();
             accessPolicyJson().clear();  // same rationale — don't leak across restarts
-            parsedEnforcePolicy().reset();
+            activePolicy().reset();
+            policyVersion() = 0;
+            accessPolicyRefusedFlag() = false;
+        }
+        {
+            std::lock_guard<std::mutex> g(loadingMutex());
+            loadingModules().clear();
         }
         // Same rationale again: the next run may have a host that does report.
         hostStaysSilent().store(false);

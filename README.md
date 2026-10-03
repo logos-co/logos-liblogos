@@ -158,6 +158,10 @@ int  logos_core_set_placement_policy(const char* policy_json);
 // only), applied as it loads: its setters answer only the runtime.
 int  logos_core_set_package_config(const char* config_json);
 
+// Each module's configuration (before start only), {"<module>": <document>}:
+// delivered with its credential, before it can be called, on every start.
+int  logos_core_set_module_config(const char* config_json);
+
 // Instance persistence
 void logos_core_set_persistence_base_path(const char* path);
 
@@ -170,8 +174,9 @@ void logos_core_set_module_transports(const char* name, const char* transport_se
 // Inter-module access policy (per-target allowed-caller allowlists).
 // Core turns it into one document per change and hands it to
 // capability_module, which then denies token issuance for disallowed
-// (caller, target) pairs. Call before logos_core_start(); NULL/"" clears.
-void logos_core_set_access_policy(const char* policy_json);
+// (caller, target) pairs. Before logos_core_start() only; NULL/"" clears.
+// -1 for a policy it refuses, and the runtime then does not start.
+int  logos_core_set_access_policy(const char* policy_json);
 
 // The embedder's shell identity (before start), and its binding (after).
 int  logos_core_set_shell_identity(const char* name);
@@ -227,7 +232,9 @@ Each core_service method answers the callers its scope admits:
   loaded", and blocks for the bring-up); capability_module is never unloaded;
 - only the shell admits presentation consumers (`admitConsumer`);
 - only operators forward calls (`callModuleMethod`, `watchModuleEvents`), and
-  never to the runtime's own modules.
+  never to the runtime's own modules. A call goes under the operator's own
+  grant, which core_service checks itself for the package modules: those take
+  operators' calls as core_service.
 
 `moduleStateChanged` carries every lifecycle transition. `getModuleInfo` and
 `getModulesInfo` name where a loaded module runs: `placement` is `inproc` or
@@ -262,7 +269,8 @@ logos_runtime_stop(rt);
 
 The configuration carries what the setters take (`modules_dirs`,
 `bundled_modules_dirs`, `persistence_base_path`, `module_transports`,
-`access_policy`, `placement_policy`, `package_config`, `core_service_transports`).
+`access_policy`, `module_config`, `placement_policy`, `package_config`,
+`core_service_transports`).
 The runtime's stdin and stdout are a private channel, one JSON object per line,
 that nothing logs: the configuration and the shell's credential cross it, and so
 do the embedder's hooks (extension methods, the operator resolver, shutdown),
@@ -279,7 +287,8 @@ process, and a process that spawned one cannot also start one itself.
 ### Inter-module access enforcement (off by default)
 
 By default a loaded module may call any other loaded module. Enforcement is
-opt-in, and `mode` in the access policy is the switch:
+opt-in, and `mode` in the access policy is the switch (`enforce`, `explicit` or
+`off`):
 
 ```jsonc
 {"version": 1, "mode": "enforce"}
@@ -297,13 +306,20 @@ capability_module logs the refusal with both names:
 [capability_module] access policy denies 'caller_module' -> 'target_module'
 ```
 
-Anything other than `mode: "enforce"` — no policy, `NULL`, `""`, unparseable
-JSON, a different mode — leaves enforcement **off**, which is the pre-existing
-behaviour. Core says which side it landed on at startup, so a mistyped mode is
-visible rather than silently permissive:
+The rules go to capability_module before each module is admitted, with the
+modules still loading counted as loaded, and the module is admitted pending:
+nothing can pair with it until its load commits. A load whose rules
+capability_module refuses fails.
+
+No policy, `NULL`, `""` or `mode: "off"` leaves enforcement **off**, which is
+the pre-existing behaviour. A policy the runtime cannot use (unparseable JSON, a
+field of the wrong type, an unknown version or mode) is refused: the setter
+returns -1, `logos_runtime_spawn` fails, and `logos_core_start()` does not start
+the runtime, so a mistyped mode never leaves it silently open. Core says which
+side it landed on:
 
 ```
-Inter-module access enforcement is ON (mode=enforce): deny-by-default — ...
+Inter-module access enforcement is ON (mode=enforce, version 1): deny-by-default — ...
 Inter-module access enforcement is OFF (no access policy set): ...
 ```
 
@@ -318,10 +334,81 @@ need an explicit entry):
 ```
 
 `capability_module`, `core` and `core_service` are never restricted as targets,
-and the shell stays among the allowed callers of an explicit entry too.
+and the shell stays among the allowed callers of an explicit entry too, as does
+`core_service` on `package_manager` and `package_downloader`, which operators'
+package commands reach through it. An entry with no callers admits only those.
+Under version 1, operators (logosctl's tokens, reaching modules through
+core_service) are never restricted.
+
+`mode: "explicit"` sends only the entries written: unlisted modules stay open,
+so a deployer can protect one module without enforcing dependencies everywhere.
+
+#### Version 2: methods
+
+A version 2 policy can grant methods, per caller:
+
+```jsonc
+{"version": 2, "mode": "explicit",
+ "restrictions": {
+   "keystore_module": {"allowedCallers": {
+     "evm_signer_ui":   ["pending", "acknowledge", "approve", "reject"],
+     "evm_keystore_ui": "*",
+     "*":     ["request_approval", "approval_status", "list_accounts"],
+     "@op:*": ["list_accounts"]
+   }}}}
+```
+
+- **Callers**: a module, UI plugin or shell name; `@op:<name>` for one operator
+  token and `@op:*` for any; `*` for any other caller, never an operator. A
+  consumer a peered runtime forwards is the operator
+  `@op:@peer:<runtime id>:<consumer>`.
+- **Grants**: a list is only those methods, `"*"` every method, `[]` none. The
+  list form (`"allowedCallers": ["a", "b"]`) grants each caller every method,
+  and a rule without callers admits nobody.
+- **Resolution**: an exact caller wins, then `@op:*` for operators and `*` for
+  everyone else; otherwise the caller is denied. Entries never merge.
+- **As written**: the shell gets only what a rule gives it, and operators only
+  their `@op:` entries. The runtime adds one entry of its own, `core_service`
+  on `package_manager` and `package_downloader`: operators' calls reach those
+  two through it, and it checks the operator's own grant first.
+- **Strict**: anything outside this grammar refuses the policy, and so does a
+  rule naming `core`, `core_service` or `capability_module`.
+
+capability_module pushes a pair whose grant is a method list to its target as
+a scoped token, and the target refuses any other method with `not_authorised`
+before module code runs. A target whose runtime cannot take a scoped token (a
+Qt-plugin module built before logos-plugin-qt carried it) is refused the pair.
+A version 2 policy needs capability_module's engine version 2; an older one
+fails the runtime's start.
 
 Hosts expose this as `--access-policy` — see the logoscore CLI and Basecamp
 READMEs.
+
+### Module configuration
+
+`logos_core_set_module_config` (or the spawn's `module_config`) gives a module
+one JSON document:
+
+```jsonc
+{"peering_module": {"listen": "..."}, "my_module": {"endpoint": "https://..."}}
+```
+
+- **When**: with its credential, before its context is set (so before
+  `onContextReady`) and before it can be called, on every start: load, reload
+  and a start after a crash.
+- **How**: a subprocess host is launched with `--configuration-source stdin` and
+  reads the document as the line after its credential; an in-process module
+  gets it from the native host directly. The module's image takes it through
+  its optional `logos_module_set_configuration` export, which the cpp and Rust
+  SDKs expose as `LogosModuleContext::configuration()` and
+  `RustModuleContext.configuration`.
+- **Whole**: a module's document replaces the one set before, never merged;
+  `null` removes it.
+- **Fails closed**: the load fails, before the module is published, if its
+  image lacks the export or refuses the document, if its host is too old for the
+  flag, or if it is a Qt plugin module, whose host takes no configuration.
+- **No authority**: grants belong in the access policy, never in a module's
+  configuration.
 
 ### Thread safety
 

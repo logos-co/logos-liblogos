@@ -154,36 +154,51 @@ TEST_F(AppLifecycleTest, Start_UsesCustomModulesDirs) {
 // tested in test_access_policy.cpp, and the enforcement (deny token
 // issuance for a disallowed caller) is tested in capability_module's own
 // suite. Here we only pin the C-API setter contract that holds without a
-// running capability_module: the call accepts a well-formed policy, an
-// empty string, and NULL (the documented "clear" signal) without crashing
-// or aborting, and without disturbing unrelated core state.
+// running capability_module: it takes a well-formed policy, an empty string
+// and NULL (the documented "clear" signal), refuses one it cannot use, and
+// answers only before start.
 
-TEST_F(AppLifecycleTest, SetAccessPolicy_AcceptsValidPolicyWithoutCrashing) {
+TEST_F(AppLifecycleTest, SetAccessPolicy_AcceptsValidPolicy) {
     const char* policy =
         "{\"version\":1,\"mode\":\"enforce\",\"restrictions\":{"
         "\"package_manager\":{\"allowedCallers\":[\"package_manager_ui\"]},"
         "\"package_downloader\":{\"allowedCallers\":[\"package_manager_ui\"]}}}";
 
-    // No-op today: the only contract is "doesn't crash, doesn't throw".
-    EXPECT_NO_THROW(logos_core_set_access_policy(policy));
+    EXPECT_EQ(logos_core_set_access_policy(policy), 0);
 }
 
 TEST_F(AppLifecycleTest, SetAccessPolicy_AcceptsEmptyStringAsClear) {
-    EXPECT_NO_THROW(logos_core_set_access_policy(""));
+    EXPECT_EQ(logos_core_set_access_policy(""), 0);
 }
 
 TEST_F(AppLifecycleTest, SetAccessPolicy_AcceptsNullAsClear) {
     // Unlike the module-name setters, this one must NOT abort on NULL —
     // NULL is the documented "clear the policy" signal.
-    EXPECT_NO_THROW(logos_core_set_access_policy(nullptr));
+    EXPECT_EQ(logos_core_set_access_policy(nullptr), 0);
 }
 
 TEST_F(AppLifecycleTest, SetAccessPolicy_IsIdempotentAcrossRepeatedCalls) {
     // Setting then clearing then re-setting must be safe in any order.
-    EXPECT_NO_THROW(logos_core_set_access_policy("{\"version\":1}"));
-    EXPECT_NO_THROW(logos_core_set_access_policy(nullptr));
-    EXPECT_NO_THROW(logos_core_set_access_policy(""));
-    EXPECT_NO_THROW(logos_core_set_access_policy("{\"version\":1}"));
+    EXPECT_EQ(logos_core_set_access_policy("{\"version\":1}"), 0);
+    EXPECT_EQ(logos_core_set_access_policy(nullptr), 0);
+    EXPECT_EQ(logos_core_set_access_policy(""), 0);
+    EXPECT_EQ(logos_core_set_access_policy("{\"version\":1}"), 0);
+}
+
+// Detector: the setter was void, so a policy it could not use switched
+// enforcement off and the runtime started anyway.
+TEST_F(AppLifecycleTest, SetAccessPolicy_ARefusedPolicyKeepsTheRuntimeFromStarting) {
+    EXPECT_EQ(logos_core_set_access_policy("{\"version\":1,\"mode\":\"audit\"}"), -1);
+    EXPECT_EQ(logos_core_set_access_policy("{not json"), -1);
+    logos_core_start();
+    EXPECT_FALSE(ModuleManager::started());
+    EXPECT_FALSE(ModuleManager::registry().isLoaded("core_service"));
+}
+
+TEST_F(AppLifecycleTest, SetAccessPolicy_IsRefusedAfterStart) {
+    ModuleManager::markStarted();
+    EXPECT_EQ(logos_core_set_access_policy("{\"version\":1,\"mode\":\"enforce\"}"), -1);
+    EXPECT_EQ(logos_core_set_access_policy(nullptr), -1);
 }
 
 TEST_F(AppLifecycleTest, SetAccessPolicy_DoesNotDisturbModulesDirs) {

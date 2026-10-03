@@ -140,6 +140,11 @@ void logos_core_start() {
         logos::logger("core").critical("logos_core_start: this process spawned its runtime");
         return;
     }
+    if (ModuleManager::accessPolicyRefused()) {
+        logos::logger("core").critical("logos_core_start: the access policy was refused, so "
+                                       "the runtime does not start");
+        return;
+    }
     ModuleManager::markStarted();
     // Hosts inherit this value and therefore publish at the endpoint the
     // parent-side plain clients derive independently.
@@ -182,9 +187,16 @@ void logos_core_set_module_transports(const char* module_name,
         transport_set_json ? std::string(transport_set_json) : std::string{});
 }
 
-void logos_core_set_access_policy(const char* policy_json) {
+int logos_core_set_module_config(const char* config_json) {
+    if (!beforeStart("logos_core_set_module_config")) return -1;
+    return ModuleManager::setModuleConfig(config_json ? std::string(config_json) : std::string{})
+        ? 0 : -1;
+}
+
+int logos_core_set_access_policy(const char* policy_json) {
     // NULL/"" clears the policy (see header) — unlike the module-name
     // setters above, this does not abort on NULL.
-    ModuleManager::setAccessPolicy(
-        policy_json ? std::string(policy_json) : std::string{});
+    if (!beforeStart("logos_core_set_access_policy")) return -1;
+    return ModuleManager::setAccessPolicy(policy_json ? std::string(policy_json) : std::string{})
+        ? 0 : -1;
 }

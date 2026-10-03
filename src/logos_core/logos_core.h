@@ -147,7 +147,7 @@ LOGOS_CORE_EXPORT void logos_consumer_release(logos_consumer* consumer);
 //     {"shell": "<name>",                                   required
 //      "modules_dirs": [...], "bundled_modules_dirs": [...],
 //      "persistence_base_path": "...", "module_transports": {"<name>": [...]},
-//      "access_policy": {...}, "placement_policy": {...},
+//      "access_policy": {...}, "module_config": {...}, "placement_policy": {...},
 //      "package_config": {...}, "core_service_transports": [...]}
 // The hooks set with logos_core_set_shutdown_handler, _operator_resolver and
 // _core_service_extension are served here: the runtime forwards each call over
@@ -233,13 +233,32 @@ LOGOS_CORE_EXPORT void logos_core_set_module_transports(const char* module_name,
 //     }
 //
 // A restricted target rejects callers outside its allowlist; a target
-// absent from `restrictions` is unrestricted. Only `mode` == "enforce"
-// activates gating (any other value registers nothing). Enforced by
-// capability_module, which won't issue a token — hence won't allow the
-// call — for a disallowed caller.
+// absent from `restrictions` is unrestricted, and one with no callers admits
+// only the shell. `mode` "enforce" gates the entries plus rules derived from
+// declared dependencies, "explicit" the entries only; "off", or no mode,
+// leaves every target open. Version 2 grants methods per caller,
+// {"allowedCallers": {"<caller>": "*" | ["method", ...]}}, with "@op:<name>",
+// "@op:*" and "*" callers, and binds operators (see the README). Enforced by
+// capability_module, which won't issue a token — hence won't allow the call —
+// for a disallowed caller, and scopes the token of a method grant.
 //
-// Must be called before logos_core_start(). NULL or "" clears the policy.
-LOGOS_CORE_EXPORT void logos_core_set_access_policy(const char* policy_json);
+// Protected input, before logos_core_start() only. NULL or "" clears the
+// policy. Returns 0, or -1 after start or for a policy it refuses (invalid
+// JSON, a field of the wrong type, an unknown version or mode); after a
+// refusal logos_core_start() does not start the runtime.
+LOGOS_CORE_EXPORT int logos_core_set_access_policy(const char* policy_json);
+
+// Each module's configuration, {"<module>": <document>, ...}. A module gets its
+// document with its credential, before it can be called or its context is set
+// (so before onContextReady), on every start: load, reload and respawn. A
+// module's document replaces the one set before, whole, and null removes it.
+// It never carries authority: grants belong in the access policy. Protected
+// input, before logos_core_start() only; NULL or "" clears every module's.
+// Returns 0, or -1 after start or for a malformed document. A configured load
+// fails unless the module's image takes a configuration
+// (logos_module_set_configuration, see logos-protocol) and accepts this one,
+// and its host is new enough; a Qt plugin module cannot take one.
+LOGOS_CORE_EXPORT int logos_core_set_module_config(const char* config_json);
 
 #ifdef __cplusplus
 }

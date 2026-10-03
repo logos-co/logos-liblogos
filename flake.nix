@@ -7,7 +7,7 @@
     logos-cpp-sdk.url = "github:logos-co/logos-cpp-sdk/feat/runtime-delegate-export";
     logos-cpp-sdk.inputs.logos-protocol.follows = "logos-protocol";
     # On protocol 0.13 (logos-protocol#97) and the branches stacked on it until they merge.
-    logos-protocol.url = "github:logos-co/logos-protocol/feat/drop-legacy-mode";
+    logos-protocol.url = "github:logos-co/logos-protocol/feat/method-scopes";
     # ONE logos-protocol, and ONE logos-qt-host, in the closure. qt-host bakes
     # sizeof(LogosAPIClient) into its own `operator new` while logos-protocol
     # defines the constructor, so a second protocol here is an 8-byte heap
@@ -17,9 +17,9 @@
     logos-qt-sdk.url = "github:logos-co/logos-qt-sdk";
     logos-qt-sdk.inputs.logos-protocol.follows = "logos-protocol";
     logos-qt-sdk.inputs.logos-plugin-qt.follows = "logos-plugin-qt";
-    logos-plugin-qt.url = "github:logos-co/logos-plugin-qt/feat/drop-legacy-mode";
+    logos-plugin-qt.url = "github:logos-co/logos-plugin-qt/feat/method-scopes";
     logos-plugin-qt.inputs.logos-protocol.follows = "logos-protocol";
-    logos-capability-module.url = "github:logos-co/logos-capability-module/feat/drop-legacy-mode";
+    logos-capability-module.url = "github:logos-co/logos-capability-module/feat/method-scopes";
     logos-modules-state-module.url = "github:logos-co/logos-modules-state-module/feat/drop-legacy-mode";
     logos-module.url = "github:logos-co/logos-module";
     process-stats.url = "github:logos-co/process-stats";
@@ -31,7 +31,7 @@
     # revision of its own means two of every function-local static in there.
     # Only the protocol-carrying chain follows: the rest of its inputs are lock
     # size, not correctness, and deep follows have broken this repo before.
-    default-module-loader.url = "github:logos-co/logos-module-loader-qt/feat/drop-legacy-mode";
+    default-module-loader.url = "github:logos-co/logos-module-loader-qt/feat/method-scopes";
     default-module-loader.inputs.logos-protocol.follows = "logos-protocol";
     default-module-loader.inputs.logos-plugin-qt.follows = "logos-plugin-qt";
     default-module-loader.inputs.logos-cpp-sdk.follows = "logos-cpp-sdk";

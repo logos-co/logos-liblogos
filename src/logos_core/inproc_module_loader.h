@@ -51,6 +51,9 @@ public:
               std::function<void(const std::string& name)> onTerminated,
               LoadedModuleHandle& out) override;
     bool sendToken(const std::string& name, const std::string& token) override;
+    // The native host hands the configuration to the image before its context.
+    bool sendStartupInput(const std::string& name, const std::string& token,
+                          const std::optional<std::string>& configuration) override;
     LoadOutcome awaitLoad(const std::string& name, std::chrono::milliseconds timeout) override;
     void terminate(const std::string& name) override;
     void terminateAll() override;

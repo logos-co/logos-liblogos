@@ -8,6 +8,7 @@
 #include "module_registry.h"
 #include "module_state_observer.h"
 
+#include <logos_method_scope.h>
 #include <logos_protocol.h>
 #include <nlohmann/json.hpp>
 #include <process_stats/process_stats.h>
@@ -423,6 +424,27 @@ bool isPackageModule(const std::string& module)
     return module == "package_manager" || module == "package_downloader";
 }
 
+// An operator's call to a package module goes as this service, so the operator's
+// own grant is checked here first, as the module would check a scoped pair.
+std::optional<json> refusedPackageCall(const Caller& caller, const std::string& module,
+                                       const std::string& method, const json& args)
+{
+    const auto grant = authority::grantFor("@op:" + caller.name, module);
+    const json parsed = grant ? json::parse(*grant, nullptr, false) : json();
+    if (parsed == "*") return std::nullopt;
+    if (!parsed.is_array() || parsed.empty())
+        return error("FORBIDDEN", "No token for operator '" + caller.name + "' at '" + module + "'.");
+    if (logos::isMethodScopeExempt(method, args.empty())
+        || std::find(parsed.begin(), parsed.end(), method) != parsed.end())
+        return std::nullopt;
+    return callEnvelope(module, method, nullptr,
+                        CallFailure{"not_authorised",
+                                    "operator '" + caller.name + "' is not granted " + module + "."
+                                        + method,
+                                    kName},
+                        {});
+}
+
 // An operator's call reaches the target as that operator, never as the runtime,
 // and never reaches the token store or this service.
 // The token store and core_service itself are never an operator's target.
@@ -450,6 +472,7 @@ json callModuleMethod(const Caller& caller, const std::string& module, const std
         if (!authority::attached())
             return error("UNAVAILABLE", "no token authority is running");
         if (isPackageModule(module)) {
+            if (auto refused = refusedPackageCall(caller, module, method, args)) return *refused;
             origin = kName;
         } else {
             const std::string pair = authority::grantOperatorPair(caller.name, module);

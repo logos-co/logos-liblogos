@@ -103,6 +103,33 @@ json callWithToken(const std::string& identity, const std::string& token, const 
     return value;
 }
 
+// A call as `identity`, holding `credential`, pairing through capability_module.
+// Returns the result, or {"failed": <error>}.
+json callAsConsumer(const std::string& identity, const std::string& credential,
+                    const char* target, const char* method, const json& args = json::array())
+{
+    lp_token_isolate_identity(identity.c_str());
+    lp_token_adopt_credential(identity.c_str(), credential.c_str());
+    lp_token_save_for(identity.c_str(), "capability_module", credential.c_str());
+    lp_client* client = lp_client_create(target, identity.c_str(), nullptr, nullptr);
+    if (!client) return nullptr;
+    char* result = nullptr;
+    char* error = nullptr;
+    const int status = lp_invoke(client, method, args.dump().c_str(), 15000, &result, &error);
+    json value = status == LP_OK ? json::parse(result ? result : "null", nullptr, false)
+                                 : json{{"failed", error ? error : ""}};
+    lp_string_free(result);
+    lp_string_free(error);
+    lp_client_destroy(client);
+    return value;
+}
+
+bool refusedAs(const json& reply, const char* code)
+{
+    return reply.is_object() && reply.contains("failed")
+        && reply["failed"].get<std::string>().find(code) != std::string::npos;
+}
+
 std::int64_t pidOf(const json& stats, const std::string& module)
 {
     if (!stats.is_array()) return 0;
@@ -156,7 +183,10 @@ std::atomic<int> g_shutdowns{0};
 
 char* testOperators(const char* token, const char*, void*)
 {
-    return token && std::string(token) == "alice-token" ? lp_string_copy("alice") : nullptr;
+    const std::string presented = token ? token : "";
+    if (presented == "alice-token") return lp_string_copy("alice");
+    if (presented == "bob-token") return lp_string_copy("bob");
+    return nullptr;
 }
 
 void testShutdown(void*)
@@ -385,6 +415,162 @@ TEST_F(RuntimeProcessTest, WithoutItsAuthorityItNeverBecomesReady)
     Spawned next;
     next.runtime = logos_runtime_spawn(config().dump().c_str(), &error);
     EXPECT_NE(next.runtime, nullptr) << (error ? error : "");
+}
+
+// Detector: the spawn's access_policy was set unchecked, so a policy the runtime
+// refused left it running with enforcement off.
+TEST_F(RuntimeProcessTest, ARefusedAccessPolicyFailsTheSpawn)
+{
+    char* error = nullptr;
+    Spawned spawned;
+    const json policy = {{"version", 1}, {"mode", "enforced"}};
+    spawned.runtime = logos_runtime_spawn(config({{"access_policy", policy}}).dump().c_str(), &error);
+    EXPECT_EQ(spawned.runtime, nullptr);
+    EXPECT_NE(std::string(error ? error : "").find("access_policy"), std::string::npos)
+        << (error ? error : "(no error)");
+    logos_consumer_string_free(error);
+}
+
+// A version 2 rule grants methods with the real capability_module: the pair is
+// pushed scoped, and the target refuses a method outside it before its code
+// runs. Operators need an "@op:" entry, and the shell gets only what the rule
+// gives it. Run with modules_state in the runtime's process and in a host.
+static void checkVersionTwoRule(const json& config)
+{
+    ASSERT_EQ(logos_core_set_operator_resolver(&testOperators, nullptr), 0);
+    char* error = nullptr;
+    Spawned spawned;
+    spawned.runtime = logos_runtime_spawn(config.dump().c_str(), &error);
+    ASSERT_NE(spawned.runtime, nullptr) << (error ? error : "");
+    logos_consumer* shell = logos_runtime_binding(spawned.runtime);
+    ASSERT_NE(shell, nullptr);
+
+    char* out = nullptr;
+    char* err = nullptr;
+    EXPECT_NE(logos_consumer_call(shell, "modules_state", "list_modules", "[]", 15000, &out, &err),
+              LP_OK) << "the shell reached a target its rule does not name";
+    logos_consumer_string_free(out);
+    logos_consumer_string_free(err);
+
+    const json admitted = callAs(shell, "admitConsumer", {"runtime_test_view", "presentation"});
+    const std::string credential = admitted.value("credential", std::string{});
+    ASSERT_FALSE(credential.empty()) << admitted.dump();
+    const json listed = callAsConsumer("runtime_test_view", credential, "modules_state", "list_modules");
+    EXPECT_FALSE(listed.is_object() && listed.contains("failed")) << listed.dump();
+    EXPECT_TRUE(refusedAs(callAsConsumer("runtime_test_view", credential, "modules_state",
+                                         "module_record", {"capability_module"}),
+                          "not_authorised"));
+
+    const json inScope = callWithToken("@test-alice", "alice-token", "callModuleMethod",
+                                       {"modules_state", "module_record", {"capability_module"}});
+    EXPECT_EQ(inScope.value("status", std::string{}), "ok") << inScope.dump();
+    const json outOfScope = callWithToken("@test-alice", "alice-token", "callModuleMethod",
+                                          {"modules_state", "list_modules", json::array()});
+    EXPECT_EQ(outOfScope.value("code", std::string{}), "METHOD_FAILED") << outOfScope.dump();
+    EXPECT_EQ(outOfScope.value("error", json::object()).value("code", std::string{}),
+              "not_authorised") << outOfScope.dump();
+    const json unlisted = callWithToken("@test-bob", "bob-token", "callModuleMethod",
+                                        {"modules_state", "list_modules", json::array()});
+    EXPECT_EQ(unlisted.value("code", std::string{}), "FORBIDDEN") << unlisted.dump();
+}
+
+static const json kVersionTwoPolicy = json::parse(R"({"version":2,"mode":"explicit","restrictions":{
+    "modules_state":{"allowedCallers":{"runtime_test_view":["list_modules"],
+                                       "@op:alice":["module_record"]}}}})");
+
+TEST_F(RuntimeProcessTest, AVersionTwoRuleGrantsMethodsInTheRuntimesProcess)
+{
+    checkVersionTwoRule(config({{"access_policy", kVersionTwoPolicy}}));
+}
+
+TEST_F(RuntimeProcessTest, AVersionTwoRuleGrantsMethodsInAHost)
+{
+    const json placement = {{"modules", {{"modules_state", "subprocess"}}}};
+    checkVersionTwoRule(config({{"access_policy", kVersionTwoPolicy}, {"placement_policy", placement}}));
+}
+
+// The fixture module `name`, installed in `dir`: its image and a sidecar stamping
+// it native and in-process eligible. Returns the image's path.
+static std::string installFixture(const std::filesystem::path& dir, const std::string& name)
+{
+    const std::filesystem::path image = logos_test::fixtureLibrary(name + "_plugin");
+    const std::filesystem::path target = dir / image.filename();
+    std::filesystem::copy_file(image, target, std::filesystem::copy_options::overwrite_existing);
+    std::ofstream(dir / (name + "_plugin.metadata.json"))
+        << json{{"name", name}, {"version", "1.0.0"}, {"transport", "qt_remote_plain"},
+                {"inproc_eligible", true}}.dump();
+    return target.string();
+}
+
+static json callModule(logos_consumer* shell, const std::string& module, const char* method)
+{
+    char* out = nullptr;
+    char* err = nullptr;
+    const int status = logos_consumer_call(shell, module.c_str(), method, "[]", 15000, &out, &err);
+    json value = status == LP_OK ? json::parse(out ? out : "null", nullptr, false)
+                                 : json{{"failed", err ? err : ""}};
+    logos_consumer_string_free(out);
+    logos_consumer_string_free(err);
+    return value;
+}
+
+// A module gets its configuration before its context is set, in the runtime's
+// process and in a host, and again when it starts again. An image without the
+// export fails its load.
+TEST_F(RuntimeProcessTest, AModuleGetsItsConfigurationBeforeItsContext)
+{
+    const auto fixture = logos_test::fixtureLibrary("configured_hosted_plugin");
+    if (!std::filesystem::exists(fixture)) {
+        if (std::getenv("LOGOS_REQUIRE_TEST_FIXTURES")) FAIL() << "no fixture at " << fixture;
+        GTEST_SKIP() << "no fixture at " << fixture;
+    }
+    logos_test::TmpDir dir;
+    std::vector<std::pair<std::string, std::string>> installed;
+    for (const char* name : {"configured_inproc", "configured_hosted", "unconfigurable"})
+        installed.emplace_back(name, installFixture(dir.path, name));
+    const json moduleConfig = {{"configured_inproc", {{"where", "inproc"}}},
+                               {"configured_hosted", {{"where", "hosted"}, {"n", {1, 2}}}},
+                               {"unconfigurable", {{"where", "nowhere"}}}};
+    const json placement = {{"modules", {{"configured_inproc", "inproc"},
+                                         {"configured_hosted", "subprocess"},
+                                         {"unconfigurable", "subprocess"}}}};
+    json settings = config({{"module_config", moduleConfig}, {"placement_policy", placement}});
+    settings["bundled_modules_dirs"].push_back(dir.path.string());
+
+    char* error = nullptr;
+    Spawned spawned;
+    spawned.runtime = logos_runtime_spawn(settings.dump().c_str(), &error);
+    ASSERT_NE(spawned.runtime, nullptr) << (error ? error : "");
+    logos_consumer* shell = logos_runtime_binding(spawned.runtime);
+    for (const auto& [name, path] : installed) {
+        char* processed = logos_runtime_process_module(spawned.runtime, path.c_str());
+        EXPECT_STREQ(processed ? processed : "", name.c_str());
+        logos_consumer_string_free(processed);
+    }
+
+    for (const char* name : {"configured_inproc", "configured_hosted"}) {
+        const json loaded = callAs(shell, "loadModule", {name});
+        ASSERT_EQ(loaded.value("status", std::string{}), "ok") << name << ": " << loaded.dump();
+        const json reported = callModule(shell, name, "configuration");
+        EXPECT_EQ(reported.value("document", json()), moduleConfig[name]) << name << ": " << reported.dump();
+        EXPECT_EQ(reported.value("before_context", false), true) << name << ": " << reported.dump();
+    }
+    EXPECT_EQ(callAs(shell, "getModuleInfo", {"configured_inproc"}).value("placement", std::string{}),
+              "inproc");
+
+    // A new host gets it again.
+    const std::int64_t firstPid = pidOf(callAs(shell, "getModuleStats"), "configured_hosted");
+    ASSERT_GT(firstPid, 0);
+    ASSERT_EQ(callAs(shell, "unloadModule", {"configured_hosted"}).value("status", std::string{}), "ok");
+    ASSERT_EQ(callAs(shell, "loadModule", {"configured_hosted"}).value("status", std::string{}), "ok");
+    EXPECT_NE(pidOf(callAs(shell, "getModuleStats"), "configured_hosted"), firstPid);
+    EXPECT_EQ(callModule(shell, "configured_hosted", "configuration").value("document", json()),
+              moduleConfig["configured_hosted"]);
+
+    const json refused = callAs(shell, "loadModule", {"unconfigurable"});
+    EXPECT_NE(refused.value("status", std::string{}), "ok") << refused.dump();
+    const json listed = callAs(shell, "listModules", {"loaded"});
+    EXPECT_EQ(listed.dump().find("unconfigurable"), std::string::npos) << listed.dump();
 }
 
 TEST_F(RuntimeProcessTest, OneRuntimePerProcess)

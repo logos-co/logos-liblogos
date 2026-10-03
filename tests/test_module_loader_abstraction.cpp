@@ -302,6 +302,19 @@ TEST_F(ModuleLoaderAbstractionTest, LoadModule_DoesNotMarkAsLoadedOnFailure) {
     EXPECT_EQ(logos_core_is_module_loaded("bad"), 0);
 }
 
+// A loader that cannot deliver a configuration keeps the default, which refuses
+// it: the load fails rather than starting the module unconfigured.
+TEST_F(ModuleLoaderAbstractionTest, LoadModule_ALoaderWithoutConfigurationsFailsAConfiguredLoad) {
+    registerModule("configured_mod");
+    ASSERT_TRUE(ModuleManager::setModuleConfig(R"({"configured_mod":{"a":1}})"));
+
+    EXPECT_FALSE(ModuleManager::loadModule("configured_mod"));
+    EXPECT_TRUE(fake->sendTokenCalls.empty());
+    ASSERT_EQ(fake->terminateCalls.size(), 1u);
+    EXPECT_EQ(fake->terminateCalls[0], "configured_mod");
+    EXPECT_FALSE(ModuleManager::isModuleLoaded("configured_mod"));
+}
+
 TEST_F(ModuleLoaderAbstractionTest, LoadModule_ReturnsFalseForUnknownModule) {
     int result = logos_core_load_module("not_registered", LOGOS_LOAD_MODULE_ONLY);
     EXPECT_EQ(result, 0);
