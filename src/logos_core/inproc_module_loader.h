@@ -28,6 +28,18 @@ struct PlacementPolicy {
 
 bool parsePlacementPolicy(const std::string& json, PlacementPolicy& out, std::string& error);
 
+// An import's stand-in (peering): runtime code with no image of its own.
+inline constexpr const char* kFacadeFormat = "peer-facade";
+
+// Whether this build can run facades in the runtime's process (it links libpeering),
+// and the loader that does; nullptr without it.
+bool facadesRunInProcess();
+std::shared_ptr<ModuleLoader> makeInprocFacadeLoader();
+
+// What a provider in this process serves: inproc, plus what it was configured
+// with (the local socket when nothing), so other processes reach it as before.
+std::string inprocTransportSet(const std::string& configured);
+
 struct PlacementDecision {
     bool inProcess = false;
     bool refused = false; // single_process, and this module cannot run here
@@ -35,7 +47,7 @@ struct PlacementDecision {
 };
 
 // `sidecar` is the module's stamped metadata; only a bundled, eligible
-// native module is ever placed here.
+// native module is ever placed here, and a facade only under single_process.
 PlacementDecision decidePlacement(const std::string& name, const nlohmann::json& sidecar,
                                   const std::string& format, bool bundled,
                                   const PlacementPolicy& policy);

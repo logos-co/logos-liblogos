@@ -83,6 +83,10 @@ endif()
 find_package(LogosFormatLoaderImpl REQUIRED)
 
 
+# libpeering, when the build gives it: facades then run in the runtime's process
+# under single_process, instead of in logos_host_remote.
+find_package(logos_peering CONFIG QUIET)
+
 # Define the library sources.
 # The container contract (ModuleContainer + descriptor value types) lives in
 # logos-container and the ModuleFormatLoader contract in logos-module-loader.
@@ -113,6 +117,8 @@ set(LOGOS_CORE_SOURCES
     logos_core/token_authority.h
     logos_core/package_config.cpp
     logos_core/package_config.h
+    logos_core/peering_link.cpp
+    logos_core/peering_link.h
     core_service/call_envelope.cpp
     core_service/call_envelope.h
     core_service/embedded_core_service.cpp
@@ -133,6 +139,11 @@ set(LOGOS_CORE_SOURCES
     logos_core/module_loader_registry.cpp
     logos_core/module_loader_registry.h
 )
+if(logos_peering_FOUND)
+    list(APPEND LOGOS_CORE_SOURCES
+        logos_core/inproc_facade_loader.cpp
+        logos_core/inproc_facade_loader.h)
+endif()
 
 # The format-loader implementation and the logos_host_qt host binary live in the
 # package the build selects (default logos-module-loader-qt); the
@@ -257,6 +268,31 @@ target_link_libraries(logos_core PRIVATE LogosFormatLoaderImpl::native_module_ho
 # like an archive, in order, so the runtime has to follow the host on the line.
 set_property(TARGET LogosFormatLoaderImpl::native_module_host APPEND PROPERTY
              INTERFACE_LINK_LIBRARIES logos-protocol::logos_protocol_plain_shared)
+
+# Its archive links hidden: a process that links libpeering itself (logosctl) keeps
+# its copy, and neither binds to the other's.
+if(logos_peering_FOUND)
+    message(STATUS "In-process facades: on (libpeering)")
+    target_compile_definitions(logos_core PRIVATE LOGOS_CORE_INPROC_FACADES=1)
+    # Nor does the one file that names its types export their inline members.
+    if(CMAKE_CXX_COMPILER_ID MATCHES "Clang|GNU")
+        set_source_files_properties(logos_core/inproc_facade_loader.cpp PROPERTIES
+            COMPILE_OPTIONS "-fvisibility=hidden;-fvisibility-inlines-hidden")
+    endif()
+    if(APPLE)
+        set(CMAKE_LINK_LIBRARY_USING_hidden_archive "LINKER:-load_hidden,<LIBRARY>")
+        set(CMAKE_LINK_LIBRARY_USING_hidden_archive_SUPPORTED TRUE)
+        target_link_libraries(logos_core PRIVATE "$<LINK_LIBRARY:hidden_archive,logos::peering>")
+    else()
+        target_link_libraries(logos_core PRIVATE logos::peering)
+        if(NOT WIN32)
+            target_link_options(logos_core PRIVATE
+                "LINKER:--exclude-libs,$<TARGET_FILE_NAME:logos::peering>")
+        endif()
+    endif()
+else()
+    message(STATUS "In-process facades: off (no libpeering)")
+endif()
 
 # capability_module's engine interface (logos_capability_engine.h), from its source.
 if(NOT DEFINED LOGOS_CAPABILITY_ENGINE_INCLUDE AND DEFINED ENV{LOGOS_CAPABILITY_ENGINE_INCLUDE})

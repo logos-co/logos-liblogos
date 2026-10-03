@@ -113,8 +113,9 @@ pkgs.stdenv.mkDerivation {
       patchelf --set-rpath "$_rpath" $out/bin/logos_core_tests || true
       patchelf --set-rpath "$_rpath" $out/bin/logos_runtime || true
       patchelf --set-rpath "$_rpath" $out/bin/logos_runtime_test_app || true
-      # Fix RPATH on liblogos_core.so so it can find its transitive deps (e.g. libboost_process, spdlog, fmt, libssl)
-      _rpath_lib="$out/lib:${common.env.LOGOS_PROTOCOL_ROOT}/lib:${pkgs.boost}/lib:${pkgs.openssl.out}/lib:${common.env.LOGOS_PACKAGE_MANAGER_ROOT}/lib:${pkgs.spdlog}/lib:${pkgs.fmt}/lib:${pkgs.stdenv.cc.cc.lib}/lib"
+      # Fix RPATH on liblogos_core.so so it can find its transitive deps (e.g. libboost_process, spdlog, fmt, libssl),
+      # then the build's own, which nix derived from what it links (libpeering's libblake3 and TBB among them).
+      _rpath_lib="$out/lib:${common.env.LOGOS_PROTOCOL_ROOT}/lib:${pkgs.boost}/lib:${pkgs.openssl.out}/lib:${common.env.LOGOS_PACKAGE_MANAGER_ROOT}/lib:${pkgs.spdlog}/lib:${pkgs.fmt}/lib:${pkgs.stdenv.cc.cc.lib}/lib:$(patchelf --print-rpath ${build}/lib/liblogos_core.so)"
       patchelf --set-rpath "$_rpath_lib" $out/lib/liblogos_core.so || true
     ''}
     

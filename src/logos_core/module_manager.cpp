@@ -11,6 +11,7 @@
 #include "module_loader_registry.h"
 #include "composite_module_loader.h"
 #include "module_state_observer.h"
+#include "peering_link.h"
 #include <logos_container/container_factory.h>
 #include <logos_module_loader/format_loader_factory.h>
 #include <spdlog/spdlog.h>
@@ -322,6 +323,8 @@ namespace {
         static LogosCore::ModuleLoaderRegistry reg;
         static std::once_flag initFlag;
         std::call_once(initFlag, []() {
+            // Before InprocModuleLoader, which only refuses a facade.
+            if (auto facades = LogosCore::makeInprocFacadeLoader()) reg.registerLoader(facades);
             // First, so a module placed in-process never reaches a subprocess.
             reg.registerLoader(std::make_shared<LogosCore::InprocModuleLoader>());
             auto container = LogosCore::makeContainer();
@@ -1074,6 +1077,7 @@ namespace {
                 return;
 
             logos::authority::retire(n);
+            logos::peering_link::exited(n);
             auto& observer = logos::ModuleStateObserver::instance();
             if (consumeExpectedExit(n)) {
                 observer.record(n, logos::module_state::kStopping,
@@ -1085,6 +1089,13 @@ namespace {
             }
             observer.flush();
         };
+
+        // peering_module hears of a facade or an export before its host asks
+        // for a certificate; an export gains its tls_tcp listener here.
+        logos::peering_link::Announcement peering = logos::peering_link::beforeSpawn(
+            name, desc.format,
+            std::dynamic_pointer_cast<LogosCore::InprocModuleLoader>(loader) != nullptr,
+            desc.transportSetJson);
 
         // Past here a child process may exist, so a termination belongs to this
         // attempt rather than to whatever the module was doing before.
@@ -1230,6 +1241,7 @@ namespace {
 
         pushRestrictions();
 
+        peering.commit();
         spdlog::info("Module loaded: {}", name);
         logos::ModuleStateObserver::instance().record(
             name, logos::module_state::kLoading, logos::module_state::kLoaded,
@@ -1238,6 +1250,12 @@ namespace {
         // The feed can only exist once its consumer does.
         if (name == kModulesState)
             enableModulesStateFeed();
+
+        // A facade is ready when its import is, not when its host started.
+        if (registryInstance().isFacade(name)) {
+            logos::peering_link::facadeLoaded(name);
+            return true;
+        }
 
         // After the feed: modules_state installs the sink as it loads, and
         // armReadinessWatch is a no-op without one, so it must see its own sink.
@@ -1306,6 +1324,9 @@ namespace {
 
         registryInstance().markUnloaded(name);
         logos::authority::retire(name);
+        // A container sends no onTerminated for a teardown it was asked for, and an
+        // in-process loader none at all.
+        logos::peering_link::exited(name);
 
         pushRestrictions();
 
@@ -1332,6 +1353,16 @@ namespace ModuleManager {
 
     ModuleRegistry& registry() {
         return registryInstance();
+    }
+
+    nlohmann::json callAsRuntime(const std::string& target, const std::string& method,
+                                 const nlohmann::json& args) {
+        if (!registryInstance().isLoaded(target)) return nullptr;
+        return invokeModule(target, method, args);
+    }
+
+    std::shared_ptr<lp_client> runtimeClient(const std::string& target) {
+        return moduleClient(target);
     }
 
     void anchorCoreApi() {
@@ -1700,6 +1731,7 @@ namespace ModuleManager {
         // While their target still answers; the teardown's own transitions
         // are not sent.
         orderedCalls().stop();
+        logos::peering_link::stop();
         // EXCLUSIVE: markAllLoadedExitsExpected needs the loaded set to hold
         // still, and every load and unload holds this shared for its span.
         std::unique_lock<std::shared_mutex> fleet(fleetMutex());
@@ -1721,8 +1753,10 @@ namespace ModuleManager {
         // Nothing the runtime admitted outlives it, so nothing is revoked on the
         // way out: capability's pushes would only race the teardown and fail.
         logos::authority::detach();
-        // The control surface and the shell's identity go before the fleet does.
+        // The control surface and the shell's identity go before the fleet does;
+        // peering first, whose Runtime Control link uses core_service's provider.
         logos::shell_binding::shutdown();
+        logos::peering_link::stop();
         logos::core_service::stop();
         logos::core_service::resetConfiguration();
         logos::package_config::reset();

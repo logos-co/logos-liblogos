@@ -4,6 +4,7 @@
 #include "logos_core.h"
 #include "inproc_module_loader.h"
 #include "token_authority.h"
+#include "core_service/embedded_core_service.h"
 #include "module_manager.h"
 #include "module_registry.h"
 #include "module_state_observer.h"
@@ -364,6 +365,57 @@ TEST_F(InprocBundledTest, TheRuntimeRunsItsModulesInProcessBehindCoreService)
     // An unknown token gets nothing.
     lp_client* stranger = clientAs("stranger-cli", {}, "core_service", "no-such-token");
     EXPECT_TRUE(callWith(stranger, "listModules").is_null());
+
+    // The peering scope: peering_module's question alone, which capability decides
+    // from the remote policy the runtime hands it.
+    const std::string peeringCredential = logos::authority::admit("peering_module", "module");
+    ASSERT_FALSE(peeringCredential.empty());
+    lp_client* peering = clientAs("peering_module", peeringCredential);
+    const json question = json::array({"peer-1", "wallet", "modules_state"});
+    const json unlisted = callWith(peering, "evaluateRemoteAccess", question);
+    EXPECT_EQ(unlisted.value("allow", true), false) << unlisted.dump();
+    ASSERT_TRUE(logos::authority::setRemotePolicy(R"({"peer-1/wallet":["modules_state"]})"));
+    const json granted = callWith(peering, "evaluateRemoteAccess", question);
+    EXPECT_EQ(granted.value("allow", false), true) << granted.dump();
+    EXPECT_FALSE(granted.value("decision", std::string{}).empty());
+    EXPECT_TRUE(forbidden(callWith(alice, "evaluateRemoteAccess", question)));
+    // Runtime Control, with the real authority: capability decides each method, and a
+    // forwarded call never reaches the runtime's own modules, granted or not.
+    ASSERT_TRUE(logos::authority::setRemotePolicy(
+        R"({"peer-1/ctl":{"core_service":["callModuleMethod","watchModuleEvents","getStatus"],)"
+        R"("modules_state":"*"}})"));
+    const auto remote = [](const char* method, const json& args) {
+        char* out = logos::core_service::dispatchAs(R"({"kind":"remote","peer":"peer-1","name":"ctl"})",
+                                                    method, args.dump().c_str());
+        const json value = out ? json::parse(out, nullptr, false) : json();
+        lp_string_free(out);
+        return value;
+    };
+    EXPECT_TRUE(remote("getStatus", json::array()).contains("daemon"));
+    EXPECT_EQ(remote("listModules", json::array({"all"})).value("code", std::string{}), "NOT_AUTHORISED");
+    const json own = remote("callModuleMethod", json::array({"modules_state", "list_modules", json::array()}));
+    EXPECT_EQ(own.value("error", json::object()).value("code", std::string{}), "unauthorized") << own.dump();
+    EXPECT_EQ(remote("watchModuleEvents", json::array({"modules_state", ""})), json(false));
+    ASSERT_TRUE(logos::authority::setRemotePolicy("{}"));
+    // A facade's scope: it gets no token for anything but peering_module.
+    const std::string facadeCredential = logos::authority::admit("an_import", "module");
+    ASSERT_TRUE(logos::authority::setCallerScopes(R"({"an_import":["peering_module"]})"));
+    lp_client* facade = clientAs("an_import", facadeCredential);
+    lp_client* facadeToState = lp_client_create("modules_state", "an_import", nullptr, nullptr);
+    {
+        char* out = nullptr;
+        char* err = nullptr;
+        EXPECT_NE(lp_invoke(facadeToState, "list_modules", "[]", 5000, &out, &err), LP_OK)
+            << "a facade reached a module outside its scope";
+        lp_string_free(out);
+        lp_string_free(err);
+    }
+    lp_client_destroy(facadeToState);
+    lp_client_destroy(facade);
+    lp_client_destroy(peering);
+    ASSERT_TRUE(logos::authority::setCallerScopes("{}"));
+    logos::authority::retire("an_import");
+    logos::authority::retire("peering_module");
 
     // Detector: each watch left a forwarder behind, so the Nth watcher saw every event N times.
     Events relayed;

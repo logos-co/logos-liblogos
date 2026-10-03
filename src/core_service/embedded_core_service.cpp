@@ -20,6 +20,8 @@
 #include <optional>
 #include <set>
 #include <unordered_set>
+#include <functional>
+#include <memory>
 #include <vector>
 
 #ifdef _WIN32
@@ -69,6 +71,7 @@ struct Service {
     // One forwarder per module and event ("" is every event).
     std::map<std::string, std::map<std::string, Watch>> watches;
     std::set<std::string> consumers; // admitted here, so retireConsumer may end them
+    std::vector<std::shared_ptr<void>> kept; // an added listener's authenticator state
 };
 
 // Outside the lock: an unsubscribe waits for a forward in flight.
@@ -92,17 +95,24 @@ Service& service()
 struct Caller {
     std::string kind;
     std::string name;
+    std::string peer; // a remote consumer's runtime
 };
 
-Caller currentCaller()
+Caller callerOf(const char* text)
 {
-    const char* text = lp_current_caller_json();
     const json doc = json::parse(text ? text : "{}", nullptr, false);
-    if (!doc.is_object()) return {"unknown", {}};
-    return {doc.value("kind", std::string{"unknown"}), doc.value("name", std::string{})};
+    if (!doc.is_object()) return {"unknown", {}, {}};
+    const auto field = [&](const char* key) {
+        const auto it = doc.find(key);
+        return it != doc.end() && it->is_string() ? it->get<std::string>() : std::string{};
+    };
+    Caller caller{field("kind"), field("name"), field("peer")};
+    if (caller.kind.empty() || (caller.kind == "remote" && (caller.peer.empty() || caller.name.empty())))
+        caller.kind = "unknown";
+    return caller;
 }
 
-enum class Scope { Read, Control, Shell, Stop, Forward };
+enum class Scope { Read, Control, Shell, Stop, Forward, Peering };
 
 std::optional<Scope> scopeOf(const std::string& method)
 {
@@ -117,6 +127,7 @@ std::optional<Scope> scopeOf(const std::string& method)
         {"admitConsumer", Scope::Shell},   {"retireConsumer", Scope::Shell},
         {"shutdown", Scope::Stop},
         {"callModuleMethod", Scope::Forward}, {"watchModuleEvents", Scope::Forward},
+        {"evaluateRemoteAccess", Scope::Peering},
     };
     auto it = scopes.find(method);
     return it == scopes.end() ? std::nullopt : std::optional<Scope>(it->second);
@@ -140,6 +151,8 @@ bool allowed(const Caller& caller, Scope scope)
     case Scope::Shell: return isShell(caller);
     case Scope::Stop: return isShell(caller) || operatorCaller;
     case Scope::Forward: return operatorCaller;
+    // peering_module's question on the network path, never anyone else's.
+    case Scope::Peering: return caller.kind == "module" && caller.name == "peering_module";
     }
     return false;
 }
@@ -147,6 +160,26 @@ bool allowed(const Caller& caller, Scope scope)
 json error(const std::string& code, const std::string& message)
 {
     return {{"status", "error"}, {"code", code}, {"message", message}};
+}
+
+// A remote consumer (Runtime Control) may make a call only when its runtime's
+// policy grants `target`.`method`: nothing then, else the uniform refusal.
+std::optional<json> refuseRemote(const Caller& caller, const std::string& target, const std::string& method)
+{
+    const auto decision = authority::evaluateRemoteCall(caller.peer, caller.name, target, method);
+    const json parsed = decision ? json::parse(*decision, nullptr, false) : json();
+    json refusal = error("NOT_AUTHORISED", "not authorised");
+    if (!parsed.is_object()) {
+        spdlog::warn("core_service: no decision for {}/{} calling {}.{}", caller.peer, caller.name, target,
+                     method);
+        return refusal;
+    }
+    if (parsed.value("allow", false)) return std::nullopt;
+    const std::string id = parsed.value("decision", std::string{});
+    spdlog::info("core_service: {}/{} may not call {}.{} (decision {})", caller.peer, caller.name, target,
+                 method, id);
+    if (!id.empty()) refusal["decision"] = id;
+    return refusal;
 }
 
 // ── the runtime, straight from its module manager ────────────────────────────
@@ -424,39 +457,45 @@ bool isPackageModule(const std::string& module)
 }
 
 // An operator's call reaches the target as that operator, never as the runtime,
-// and never reaches the token store or this service.
-// The token store and core_service itself are never an operator's target.
+// and never reaches the token store or this service. A remote consumer's reaches
+// none of the runtime's own modules, so a policy's "*" means user modules only.
 bool closedToOperator(const Caller& caller, const std::string& module)
 {
+    if (caller.kind == "remote") return bootstrap::isReservedName(module);
     return caller.kind == "operator" && (module == "capability_module" || module == kName);
 }
 
 json callModuleMethod(const Caller& caller, const std::string& module, const std::string& method,
                       const json& args)
 {
-    if (module != kName && !contains(loadedNames(), module))
-        return error("MODULE_NOT_LOADED", "Module '" + module + "' is not loaded. Load it with: "
-                                          "logosctl module load " + module);
     // Refused like any unauthorized call, so the answer is the usual envelope.
     if (closedToOperator(caller, module))
         return callEnvelope(module, method, nullptr,
                             CallFailure{"unauthorized",
-                                        "an operator cannot call " + module + " through core_service",
+                                        (caller.kind == "remote" ? "a remote consumer" : "an operator")
+                                            + std::string(" cannot call ") + module + " through core_service",
                                         kName},
                             {});
-    // Only the runtime itself calls as the runtime; an operator goes as itself.
+    // A remote consumer needs a grant on the method too, asked first so a refusal says nothing more.
+    if (caller.kind == "remote")
+        if (auto refusal = refuseRemote(caller, module, method)) return *refusal;
+    if (module != kName && !contains(loadedNames(), module))
+        return error("MODULE_NOT_LOADED", "Module '" + module + "' is not loaded. Load it with: "
+                                          "logosctl module load " + module);
+    // Only the runtime itself calls as the runtime; an operator goes as itself, and a
+    // remote consumer as the operator @peer:<runtime>:<consumer>.
     std::string origin = "core";
-    if (caller.kind == "operator") {
+    if (caller.kind == "operator" || caller.kind == "remote") {
         if (!authority::attached())
             return error("UNAVAILABLE", "no token authority is running");
+        const std::string op = caller.kind == "remote" ? "@peer:" + caller.peer + ":" + caller.name : caller.name;
         if (isPackageModule(module)) {
             origin = kName;
         } else {
-            const std::string pair = authority::grantOperatorPair(caller.name, module);
+            const std::string pair = authority::grantOperatorPair(op, module);
             if (pair.empty())
-                return error("FORBIDDEN",
-                             "No token for operator '" + caller.name + "' at '" + module + "'.");
-            origin = "@op:" + caller.name;
+                return error("FORBIDDEN", "No token for operator '" + op + "' at '" + module + "'.");
+            origin = "@op:" + op;
             lp_token_isolate_identity(origin.c_str());
             lp_token_save_for(origin.c_str(), module.c_str(), pair.c_str());
         }
@@ -484,7 +523,14 @@ void forwardEvent(const char* event, const char* data, void* userData)
 // the same event would deliver it twice. A watch on every event covers the rest.
 json watchModuleEvents(const Caller& caller, const std::string& module, const std::string& event)
 {
-    if (closedToOperator(caller, module) || !contains(loadedNames(), module)) return false;
+    if (closedToOperator(caller, module)) return false;
+    // A remote consumer watches only a module it may call.
+    if (caller.kind == "remote") {
+        const auto decision = authority::evaluateRemoteAccess(caller.peer, caller.name, module);
+        const json parsed = decision ? json::parse(*decision, nullptr, false) : json();
+        if (!parsed.is_object() || !parsed.value("allow", false)) return false;
+    }
+    if (!contains(loadedNames(), module)) return false;
     auto covered = [&](const std::map<std::string, Watch>& events) {
         return events.count("") > 0 || events.count(event) > 0;
     };
@@ -575,6 +621,15 @@ json shutdownRuntime()
     return {{"status", "ok"}, {"message", "Daemon shutting down."}};
 }
 
+// Whether a consumer on a paired runtime may reach `target`: capability decides.
+json evaluateRemoteAccess(const std::string& peer, const std::string& consumer, const std::string& target)
+{
+    const auto decision = authority::evaluateRemoteAccess(peer, consumer, target);
+    const json parsed = decision ? json::parse(*decision, nullptr, false) : json();
+    if (!parsed.is_object()) return error("UNAVAILABLE", "the token authority decides no remote access");
+    return parsed;
+}
+
 json run(const std::string& method, const json& args, const Caller& caller)
 {
     auto text = [&](std::size_t i, const char* fallback = nullptr) -> std::string {
@@ -604,6 +659,7 @@ json run(const std::string& method, const json& args, const Caller& caller)
     if (method == "admitConsumer") return admitConsumer(text(0), text(1, "presentation"));
     if (method == "retireConsumer") return retireConsumer(text(0));
     if (method == "shutdown") return shutdownRuntime();
+    if (method == "evaluateRemoteAccess") return evaluateRemoteAccess(text(0), text(1), text(2));
     return nullptr;
 }
 
@@ -614,11 +670,18 @@ char* copy(const json& value)
     return lp_string_copy(value.dump().c_str());
 }
 
-char* dispatch(const char* method, const char* argsJson, void*)
+char* dispatchFor(const char* callerJson, const char* method, const char* argsJson)
 {
     const std::string name = method ? method : "";
-    const Caller caller = currentCaller();
+    const Caller caller = callerOf(callerJson);
     const std::optional<Scope> scope = scopeOf(name);
+    // Runtime Control: the remote policy decides each method, the embedder's too;
+    // the shell's and peering's are never a remote consumer's.
+    if (caller.kind == "remote") {
+        if (scope == Scope::Shell || scope == Scope::Peering)
+            return copy(error("NOT_AUTHORISED", "not authorised"));
+        if (auto refusal = refuseRemote(caller, kName, name)) return copy(*refusal);
+    }
     if (!scope) {
         Extension extension = nullptr;
         void* data = nullptr;
@@ -628,11 +691,10 @@ char* dispatch(const char* method, const char* argsJson, void*)
             data = config().extensionData;
         }
         if (!extension) return nullptr;
-        const char* callerJson = lp_current_caller_json();
         return extension(callerJson ? callerJson : "{}", name.c_str(),
                          argsJson && *argsJson ? argsJson : "[]", data);
     }
-    if (!allowed(caller, *scope))
+    if (caller.kind != "remote" && !allowed(caller, *scope))
         return copy(error("FORBIDDEN", "core_service." + name + " is not open to "
                                        + (caller.name.empty() ? caller.kind : caller.name) + "."));
     const json args = json::parse(argsJson && *argsJson ? argsJson : "[]", nullptr, false);
@@ -642,6 +704,11 @@ char* dispatch(const char* method, const char* argsJson, void*)
     } catch (const std::exception& e) {
         return copy(error("INVALID_ARGS", std::string("invalid arguments: ") + e.what()));
     }
+}
+
+char* dispatch(const char* method, const char* argsJson, void*)
+{
+    return dispatchFor(lp_current_caller_json(), method, argsJson);
 }
 
 char* methods(void*)
@@ -673,6 +740,8 @@ char* methods(void*)
     add("admitConsumer", {{"name", "string"}, {"kind", "string"}}, "LogosMap");
     add("retireConsumer", {{"name", "string"}}, "LogosMap");
     add("shutdown", {}, "LogosMap");
+    add("evaluateRemoteAccess", {{"peer", "string"}, {"consumer", "string"}, {"target", "string"}},
+        "LogosMap");
     {
         std::lock_guard<std::mutex> lock(config().mutex);
         for (const auto& extra : config().extensionMethods) list.push_back(extra);
@@ -849,16 +918,47 @@ bool start()
     return true;
 }
 
+bool addEndpoint(const std::string& transportJson, const std::function<bool(lp_provider*)>& configure,
+                 std::shared_ptr<void> keep)
+{
+    Service& s = service();
+    lp_provider* provider = nullptr;
+    {
+        std::lock_guard<std::mutex> lock(s.mutex);
+        if (!s.provider) return false;
+        provider = s.provider;
+        // Before the authenticator exists, so it never outlives what it uses.
+        s.kept.push_back(std::move(keep));
+    }
+    return configure(provider) && lp_provider_add_endpoint(provider, transportJson.c_str()) == LP_OK;
+}
+
+char* dispatchAs(const char* callerJson, const char* method, const char* argsJson)
+{
+    return dispatchFor(callerJson, method, argsJson);
+}
+
+void closeSessions()
+{
+    Service& s = service();
+    std::lock_guard<std::mutex> lock(s.mutex);
+    if (!s.provider) return;
+    lp_provider_set_trust_anchors(s.provider, "");
+    lp_provider_close_sessions(s.provider, "{}");
+}
+
 void stop()
 {
     Service& s = service();
     lp_provider* provider = nullptr;
     std::vector<Watch> watches;
     std::map<std::pair<std::string, std::string>, lp_client*> clients;
+    std::vector<std::shared_ptr<void>> kept;
     {
         std::lock_guard<std::mutex> lock(s.mutex);
         provider = s.provider;
         s.provider = nullptr;
+        kept.swap(s.kept);
         for (auto& [module, events] : s.watches)
             for (auto& [name, watch] : events) watches.push_back(watch);
         s.watches.clear();
@@ -874,6 +974,7 @@ void stop()
         if (client) lp_client_destroy(client);
     if (!provider) return;
     lp_provider_destroy(provider);
+    kept.clear();
     ModuleManager::registry().forgetEmbedded(kName);
     authority::retire(kName);
 }

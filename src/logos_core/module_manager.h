@@ -5,12 +5,15 @@
 #include "dependency_gate.h"
 #include "module_loader_registry.h"
 #include "inproc_module_loader.h"
+#include <nlohmann/json_fwd.hpp>
+#include <memory>
 #include <string>
 #include <vector>
 #include <unordered_map>
 #include <cstdint>
 
 class ModuleRegistry;
+struct lp_client;
 
 namespace ModuleManager {
     ModuleRegistry& registry();
@@ -158,6 +161,13 @@ namespace ModuleManager {
     // observer's single counter, same as the real push (see the seq rule in
     // module_manager.cpp), so calling it advances that counter.
     std::string buildSnapshotListingJson();
+
+    // The runtime's own call to a loaded module, which sees {"kind":"host"}:
+    // its result, or null when the call failed.
+    nlohmann::json callAsRuntime(const std::string& target, const std::string& method,
+                                 const nlohmann::json& args);
+    // The runtime's client of a loaded module, e.g. to follow its events.
+    std::shared_ptr<lp_client> runtimeClient(const std::string& target);
 }
 
 #endif // MODULE_MANAGER_H

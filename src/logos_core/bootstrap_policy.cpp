@@ -25,6 +25,11 @@ const std::vector<Row>& rows()
         // They download and unpack packages: never in the runtime's process.
         {"package_manager", {}, false, false, Placement::Subprocess, true, 1},
         {"package_downloader", {}, false, false, Placement::Subprocess, true, 1},
+        // Links with other runtimes. peering_module faces the network and gates
+        // its callers itself; peering_identity holds the root key, apart from it.
+        // A single-process runtime has no other process to keep them in.
+        {"peering_module", {}, true, false, Placement::Subprocess, true, 1, true},
+        {"peering_identity", {}, false, false, Placement::Subprocess, true, 2, true},
     };
     return table;
 }
@@ -51,6 +56,8 @@ bool isReservedName(const std::string& name)
     const std::string key = lower(name);
     if (key.rfind("logos_", 0) == 0) return true;
     if (rowFor(key)) return true;
+    // peering_module serves a second provider under this name.
+    if (key == "peering_control") return true;
     return std::find(shellNames().begin(), shellNames().end(), key) != shellNames().end();
 }
 

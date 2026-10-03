@@ -5,7 +5,11 @@
 // published as a module of its own: every consumer reaches it the same way, and
 // each method answers only the callers its scope admits.
 
+#include <functional>
+#include <memory>
 #include <string>
+
+struct lp_provider;
 
 namespace logos::core_service {
 
@@ -41,6 +45,18 @@ Hooks hooks();
 // Publishes it, after capability_module; stop() withdraws it.
 bool start();
 void stop();
+
+// Remote Runtime Control: one more listener, readied by `configure` (its
+// credential, anchors and authenticator) before it starts. `keep` holds what
+// that authenticator uses until the provider is gone.
+bool addEndpoint(const std::string& transportJson, const std::function<bool(lp_provider*)>& configure,
+                 std::shared_ptr<void> keep);
+// Ends the sessions on those listeners and admits no new one.
+void closeSessions();
+
+// What a call answers the caller `callerJson` (heap JSON, lp_string_free). For tests:
+// only a tls_tcp session binds a remote consumer.
+char* dispatchAs(const char* callerJson, const char* method, const char* argsJson);
 
 } // namespace logos::core_service
 

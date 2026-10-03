@@ -227,7 +227,12 @@ Each core_service method answers the callers its scope admits:
   loaded", and blocks for the bring-up); capability_module is never unloaded;
 - only the shell admits presentation consumers (`admitConsumer`);
 - only operators forward calls (`callModuleMethod`, `watchModuleEvents`), and
-  never to the runtime's own modules.
+  never to the runtime's own modules;
+- a remote consumer (Remote Runtime Control, with peering's `runtime_control`
+  on) may call a method only when the remote policy grants it, never the
+  shell's or peering's; a forwarded call also needs a grant on the target
+  method, never reaches the runtime's own modules (reserved names), and
+  reaches its target as the operator `@peer:<runtime>:<consumer>`.
 
 `moduleStateChanged` carries every lifecycle transition. `getModuleInfo` and
 `getModulesInfo` name where a loaded module runs: `placement` is `inproc` or

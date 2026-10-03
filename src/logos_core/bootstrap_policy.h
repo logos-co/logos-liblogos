@@ -20,6 +20,7 @@ struct Row {
     Placement placement = Placement::Default;
     bool pinned = false;                   // no placement policy moves it
     int teardownRank = 0;                  // higher goes down later
+    bool joinsSingleProcess = false;       // pinned apart, but single_process runs it here
 };
 
 // The row for `name` (compared without case), or nullptr.

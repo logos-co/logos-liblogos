@@ -28,6 +28,8 @@ struct State {
     std::map<std::string, std::pair<std::string, unsigned long long>> admitted;  // name -> (credential, generation)
     std::map<std::string, std::string> names;                                   // credential -> name
     std::vector<std::string> restrictions;                                       // every document, in order
+    nlohmann::json remotePolicy = nlohmann::json::object();                      // the latest
+    std::vector<std::string> scopes;                                             // every document, in order
     std::function<void(const nlohmann::json&)> onRestrictions;                   // runs before one is recorded
     unsigned long long next = 1;
 };
@@ -110,12 +112,68 @@ inline int setRestrictions(const char* document)
 
 inline void stringFree(char* value) { std::free(value); }
 
+// Grants like capability: the exact key, else <peer>/*; the exact target, else "*"
+// (never for core_service). "*", a method list, or null.
+inline nlohmann::json grantFor(const std::string& peer, const std::string& consumer, const std::string& target)
+{
+    const nlohmann::json& policy = state().remotePolicy;
+    auto rule = policy.find(peer + "/" + consumer);
+    if (rule == policy.end()) rule = policy.find(peer + "/*");
+    if (rule == policy.end()) return nullptr;
+    const bool wild = target != "core_service";
+    if (rule->is_array()) {
+        for (const auto& t : *rule)
+            if (t == target || (wild && t == "*")) return "*";
+        return nullptr;
+    }
+    auto grant = rule->find(target);
+    if (grant == rule->end() && wild) grant = rule->find("*");
+    return grant == rule->end() ? nlohmann::json() : *grant;
+}
+
+inline char* evaluateRemoteAccess(const char* peer, const char* consumer, const char* target)
+{
+    std::lock_guard<std::mutex> lock(state().mutex);
+    const nlohmann::json grant = grantFor(peer, consumer, target);
+    const bool allow = grant == "*" || (grant.is_array() && !grant.empty());
+    return copy(nlohmann::json{{"allow", allow}, {"decision", "stand-in"}}.dump());
+}
+
+inline char* evaluateRemoteCall(const char* peer, const char* consumer, const char* target, const char* method)
+{
+    std::lock_guard<std::mutex> lock(state().mutex);
+    const nlohmann::json grant = grantFor(peer, consumer, target);
+    bool allow = grant == "*";
+    if (grant.is_array())
+        for (const auto& m : grant) allow = allow || m == method;
+    return copy(nlohmann::json{{"allow", allow}, {"decision", "stand-in"}}.dump());
+}
+
+inline int setRemotePolicy(const char* document)
+{
+    const nlohmann::json parsed = nlohmann::json::parse(document ? document : "", nullptr, false);
+    if (!parsed.is_object()) return -1;
+    std::lock_guard<std::mutex> lock(state().mutex);
+    state().remotePolicy = parsed;
+    return 0;
+}
+
+inline int setCallerScopes(const char* document)
+{
+    const nlohmann::json parsed = nlohmann::json::parse(document ? document : "", nullptr, false);
+    if (!parsed.is_object()) return -1;
+    std::lock_guard<std::mutex> lock(state().mutex);
+    state().scopes.push_back(parsed.dump());
+    return 0;
+}
+
 inline const logos_capability_engine_v1& engine()
 {
     static const logos_capability_engine_v1 table = {
         sizeof(logos_capability_engine_v1), LOGOS_CAPABILITY_ENGINE_VERSION,
         &admit, &retire, &resolveCaller, &credentialFor, &grantOperatorPair,
-        &setRestrictions, &stringFree,
+        &setRestrictions, &stringFree, &evaluateRemoteAccess, &setRemotePolicy, &setCallerScopes,
+        &evaluateRemoteCall,
     };
     return table;
 }
@@ -137,6 +195,15 @@ inline void forgetRestrictions()
 {
     std::lock_guard<std::mutex> lock(state().mutex);
     state().restrictions.clear();
+    state().scopes.clear();
+    state().remotePolicy = nlohmann::json::object();
+}
+
+// The caller-scope documents received so far.
+inline std::vector<std::string> scopeDocuments()
+{
+    std::lock_guard<std::mutex> lock(state().mutex);
+    return state().scopes;
 }
 
 // Runs on each document before it is recorded, e.g. to make one slow; {} clears.
