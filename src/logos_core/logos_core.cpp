@@ -6,7 +6,7 @@
 #include "bootstrap_policy.h"
 #include "core_service/embedded_core_service.h"
 #include "core_service/shell_binding.h"
-#include <process_stats/process_stats.h>
+#include "token_authority.h"
 #include "logos_protocol.h"
 #include <atomic>
 #include <chrono>
@@ -143,7 +143,9 @@ void logos_core_start() {
     ModuleManager::anchorCoreApi();
     ModuleManager::discoverInstalledModules();
     ModuleManager::initializeCapabilityModule();
-    // Admitted by capability when it is the authority, so modules can call it.
+    // Without the token authority nothing can be admitted, so nothing else starts.
+    if (!logos::authority::attached()) return;
+    // Admitted by capability, so modules can call it.
     logos::core_service::start();
     // After capability_module: this one is optional, and its snapshot back-fills
     // everything that happened before it was up.
@@ -155,94 +157,9 @@ void logos_core_cleanup() {
     ModuleManager::clear();
 }
 
-char** logos_core_get_loaded_modules() {
-    return ModuleManager::getLoadedModulesCStr();
-}
-
-char** logos_core_get_known_modules() {
-    return ModuleManager::getKnownModulesCStr();
-}
-
-int logos_core_load_module(const char* module_name, LogosLoadDeps deps) {
-    if (!module_name) { logos::logger("core").critical("logos_core_load_module: module_name must not be null"); std::abort(); }
-    // "Already loaded ⇒ success" is implemented in
-    // ModuleManager::loadModuleInternal (see the block at the top there
-    // for the rationale and the dep-tree fast path). The header doc
-    // documents this as part of the public contract — keep both in sync.
-    switch (deps) {
-    case LOGOS_LOAD_REQUIRED_AND_OPTIONAL:
-        return ModuleManager::loadModuleWithDependencies(
-                   module_name, DependencyResolver::OptionalLoad::BestEffort) ? 1 : 0;
-    case LOGOS_LOAD_REQUIRED_DEPS:
-        return ModuleManager::loadModuleWithDependencies(
-                   module_name, DependencyResolver::OptionalLoad::OrderOnly) ? 1 : 0;
-    case LOGOS_LOAD_MODULE_ONLY:
-        return ModuleManager::loadModule(module_name) ? 1 : 0;
-    }
-    // An out-of-range enum is a caller bug, and loading the required tree is
-    // the answer that surprises least: it is what every caller of the old
-    // `with_dependencies=true` asked for.
-    logos::logger("core").warn("logos_core_load_module: unrecognised LogosLoadDeps {}; "
-                               "treating as LOGOS_LOAD_REQUIRED_DEPS", static_cast<int>(deps));
-    return ModuleManager::loadModuleWithDependencies(
-               module_name, DependencyResolver::OptionalLoad::OrderOnly) ? 1 : 0;
-}
-
-char* logos_core_optional_load_report(const char* module_name) {
-    if (!module_name) { logos::logger("core").critical("logos_core_optional_load_report: module_name must not be null"); std::abort(); }
-    return ModuleManager::optionalLoadReportCStr(module_name);
-}
-
-int logos_core_unload_module(const char* module_name, bool with_dependents) {
-    if (!module_name) { logos::logger("core").critical("logos_core_unload_module: module_name must not be null"); std::abort(); }
-    if (with_dependents)
-        return ModuleManager::unloadModuleWithDependents(module_name) ? 1 : 0;
-    return ModuleManager::unloadModule(module_name) ? 1 : 0;
-}
-
-char** logos_core_get_module_dependencies(const char* module_name, bool recursive) {
-    if (!module_name) { logos::logger("core").critical("logos_core_get_module_dependencies: module_name must not be null"); std::abort(); }
-    return ModuleManager::getDependenciesCStr(module_name, recursive);
-}
-
-char** logos_core_get_module_optional_dependencies(const char* module_name) {
-    if (!module_name) { logos::logger("core").critical("logos_core_get_module_optional_dependencies: module_name must not be null"); std::abort(); }
-    return ModuleManager::getOptionalDependenciesCStr(module_name);
-}
-
-char** logos_core_get_module_dependents(const char* module_name, bool recursive) {
-    if (!module_name) { logos::logger("core").critical("logos_core_get_module_dependents: module_name must not be null"); std::abort(); }
-    return ModuleManager::getDependentsCStr(module_name, recursive);
-}
-
-char* logos_core_get_modules_info() {
-    return ModuleManager::getModulesInfoCStr();
-}
-
 char* logos_core_process_module(const char* module_path) {
     if (!module_path) { logos::logger("core").critical("logos_core_process_module: module_path must not be null"); std::abort(); }
     return ModuleManager::processModuleCStr(module_path);
-}
-
-char* logos_core_get_token(const char* key) {
-    if (!key) { logos::logger("core").critical("logos_core_get_token: key must not be null"); std::abort(); }
-
-    char* stored = lp_token_get(key);
-    std::string token = stored ? stored : "";
-    lp_string_free(stored);
-    if (token.empty()) return nullptr;
-
-    char* result = new char[token.size() + 1];
-    memcpy(result, token.c_str(), token.size() + 1);
-    return result;
-}
-
-void logos_core_set_token_listener(LogosCoreTokenListener listener, void* user_data) {
-    ModuleManager::setTokenListener(listener, user_data);
-}
-
-char* logos_core_get_module_stats() {
-    return ProcessStats::getModuleStats(ModuleManager::getModuleProcessIds());
 }
 
 void logos_core_set_persistence_base_path(const char* path) {
@@ -266,9 +183,4 @@ void logos_core_set_access_policy(const char* policy_json) {
     // setters above, this does not abort on NULL.
     ModuleManager::setAccessPolicy(
         policy_json ? std::string(policy_json) : std::string{});
-}
-
-void logos_core_refresh_modules()
-{
-    ModuleManager::discoverInstalledModules();
 }

@@ -41,7 +41,8 @@ bool attach(const logos_capability_engine_v1* engine, lp_provider* capabilityPro
 {
     if (!engine || engine->size < sizeof(logos_capability_engine_v1)
         || engine->version < LOGOS_CAPABILITY_ENGINE_VERSION) {
-        spdlog::warn("capability_module exports no usable engine interface; core mints credentials");
+        spdlog::critical("capability_module's engine interface is missing or older than "
+                         "version {}", LOGOS_CAPABILITY_ENGINE_VERSION);
         return false;
     }
     {
@@ -110,6 +111,12 @@ std::string grantOperatorPair(const std::string& op, const std::string& target)
     const logos_capability_engine_v1* engine = current();
     if (!engine) return {};
     return take(engine, engine->grant_operator_pair(op.c_str(), target.c_str()));
+}
+
+bool setRestrictions(const std::string& json)
+{
+    const logos_capability_engine_v1* engine = current();
+    return engine && engine->set_restrictions(json.c_str()) == 0;
 }
 
 char* resolveCallerCallback(const char* token, const char* transport, void*)

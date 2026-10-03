@@ -127,6 +127,8 @@ protected:
     {
         logos_core_terminate_all();
         logos_core_clear();
+        // This case runs the real token authority, not the stand-in.
+        logos::authority::detach();
         const char* dir = std::getenv("TEST_BUNDLED_MODULES_DIR");
         if (!dir || !*dir) {
             if (std::getenv("LOGOS_REQUIRE_TEST_FIXTURES")) FAIL() << "TEST_BUNDLED_MODULES_DIR not set";
@@ -137,6 +139,7 @@ protected:
 
     void TearDown() override
     {
+        logos_core_set_access_policy(nullptr);
         logos_core_terminate_all();
         logos_core_clear();
     }
@@ -202,6 +205,9 @@ TEST_F(InprocBundledTest, TheRuntimeRunsItsModulesInProcessBehindCoreService)
     ASSERT_EQ(logos_core_set_shell_identity("capability_module"), -1) << "not a shell";
     ASSERT_EQ(logos_core_set_shell_identity("basecamp"), 0);
     ASSERT_EQ(logos_core_set_operator_resolver(&testOperators, nullptr), 0);
+    // Reaches capability_module through its engine interface, not an RPC.
+    logos_core_set_access_policy(
+        R"({"version":1,"mode":"enforce","restrictions":{"modules_state":{"allowedCallers":["test_ui_plugin"]}}})");
     logos_core_start();
     EXPECT_EQ(logos_core_set_placement_policy("{}"), -1) << "protected once started";
     EXPECT_EQ(logos_core_set_shell_identity("basecamp"), -1);
@@ -303,6 +309,23 @@ TEST_F(InprocBundledTest, TheRuntimeRunsItsModulesInProcessBehindCoreService)
     };
     std::string why;
     EXPECT_TRUE(listModules(&why)) << why;
+    // The access policy reached capability: a consumer it does not list gets no
+    // token for modules_state.
+    const json other = shellCall("admitConsumer", json::array({"other_ui", "presentation"}));
+    ASSERT_EQ(other.value("status", std::string{}), "ok") << other.dump();
+    lp_client* otherUi = clientAs("other_ui", other.value("credential", std::string{}));
+    lp_client* otherToState = lp_client_create("modules_state", "other_ui", nullptr, nullptr);
+    ASSERT_NE(otherToState, nullptr);
+    {
+        char* out = nullptr;
+        char* err = nullptr;
+        EXPECT_NE(lp_invoke(otherToState, "list_modules", "[]", 5000, &out, &err), LP_OK)
+            << "modules_state took a caller the policy does not list";
+        lp_string_free(out);
+        lp_string_free(err);
+    }
+    lp_client_destroy(otherToState);
+    lp_client_destroy(otherUi);
     // The shell retires only what it admitted, never a module.
     EXPECT_EQ(shellCall("retireConsumer", json::array({"modules_state"})).value("code", std::string{}),
               "NOT_FOUND");

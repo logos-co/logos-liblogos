@@ -66,10 +66,11 @@ nix build '.#portable'
 #### Running Tests
 
 ```bash
-# Build and run tests (tests run automatically during build)
-nix build '.#logos-liblogos-tests'
+# Run the test suite (the check runs every case, in one process)
+nix build '.#checks.<system>.tests'
 
-# To run tests manually after building:
+# Or build the test binary and run it by hand:
+nix build '.#logos-liblogos-tests'
 ./result/bin/logos_core_tests
 
 # Run specific tests
@@ -104,7 +105,7 @@ The nix build system is organized into modular files in the `/nix` directory:
 - `nix/bin.nix` - Extracts binaries (logos_host, includes libraries for runtime linking)
 - `nix/lib.nix` - Extracts libraries only
 - `nix/include.nix` - Header installation
-- `nix/tests.nix` - Test suite build and execution
+- `nix/tests.nix` - Test suite build (the `tests` check runs it)
 
 **Note:** The `logos-liblogos-bin` package includes both the `logos_host` binary and its required libraries to ensure proper runtime linking.
 
@@ -167,62 +168,71 @@ void logos_core_set_persistence_base_path(const char* path);
 void logos_core_set_module_transports(const char* name, const char* transport_set_json);
 
 // Inter-module access policy (per-target allowed-caller allowlists).
-// Core parses it and registers the per-target restrictions with
+// Core turns it into one document per change and hands it to
 // capability_module, which then denies token issuance for disallowed
 // (caller, target) pairs. Call before logos_core_start(); NULL/"" clears.
 void logos_core_set_access_policy(const char* policy_json);
 
-// Module management
-int  logos_core_load_module(const char* name, bool with_dependencies);
-int  logos_core_unload_module(const char* name, bool with_dependents);
+// The embedder's shell identity (before start), and its binding (after).
+int  logos_core_set_shell_identity(const char* name);
+logos_consumer* logos_core_take_shell_binding(void);
+int  logos_consumer_call(logos_consumer*, const char* target, const char* method,
+                         const char* args_json, int timeout_ms,
+                         char** out_result_json, char** out_error_json);
+
+// The embedder's alone: register a module file.
 char* logos_core_process_module(const char* path);
-void logos_core_refresh_modules();
-
-// Dependency graph queries (forward + reverse edges; recursive walks BFS)
-char** logos_core_get_module_dependencies(const char* name, bool recursive);
-char** logos_core_get_module_dependents(const char* name, bool recursive);
-
-// Module queries
-char** logos_core_get_loaded_modules();
-char** logos_core_get_known_modules();
-
-// Module stats and tokens
-char* logos_core_get_module_stats();
-char* logos_core_get_token(const char* key);
 ```
+
+Everything else — loading, unloading, refreshing, and every query about modules —
+is a `core_service` method, called over the shell binding (see below). The C
+functions that used to do it are gone, and so are `logos_core_get_token` and
+`logos_core_set_token_listener`: nothing outside the runtime reads its tokens.
 
 See `src/logos_core/logos_core.h` for the full API.
 
 ### In-process modules
 
 A bundled native module whose build stamped it `inproc_eligible` can run inside
-this process instead of in `logos_host_plain`. capability_module does whenever it
-can; modules_state and the package modules do by default; anything else only
-when the placement policy says so. An in-process module calls out through the
+this process instead of in `logos_host_plain`. capability_module always does, and
+runs nowhere else; modules_state and the package modules do by default; anything
+else only when the placement policy says so. An in-process module calls out through the
 runtime as its own identity (a runtime delegate), is served over `inproc` and the
 local socket, and shares this process's fate: a crash takes the host down, and
 its image stays mapped after an unload, so loading it again needs a restart.
 
 ### core_service and the shell binding
 
-`logos_core_start()` publishes `core_service`, the runtime's control surface, as
-a module of its own (inproc and the local socket, plus what
-`logos_core_set_core_service_transports` adds). Each method answers the callers
-its scope admits: any admitted module reads (`listModules`, `getStatus`,
-`getModuleInfo`, `getModuleStats`); the shell and operators load, unload and
-refresh; only the shell admits presentation consumers (`admitConsumer`); only
-operators forward calls (`callModuleMethod`, `watchModuleEvents`), and never to
-the runtime's own modules. `moduleStateChanged` carries every lifecycle
-transition. `getModuleInfo`, like `logos_core_get_modules_info()`, names where
-a loaded module runs: `placement` is `inproc` or `subprocess`. The embedder names
+`logos_core_start()` loads capability_module, the token authority, and publishes
+`core_service`, the runtime's control surface, as a module of its own (inproc and
+the local socket, plus what `logos_core_set_core_service_transports` adds).
+capability_module has to be bundled and run in-process: without it there is no
+authority, `logos_core_start()` logs why and publishes nothing, and nothing
+loads.
+
+Each core_service method answers the callers its scope admits:
+- any admitted module reads: `listModules`, `getStatus`, `getModuleInfo`,
+  `getModulesInfo`, `getModuleStats`, `getModuleDependencies`,
+  `getModuleDependents`, `getModuleOptionalDependencies`,
+  `getOptionalLoadReport`;
+- the shell and operators load, unload and refresh (`loadModule` means "ensure
+  loaded", and blocks for the bring-up); capability_module is never unloaded;
+- only the shell admits presentation consumers (`admitConsumer`);
+- only operators forward calls (`callModuleMethod`, `watchModuleEvents`), and
+  never to the runtime's own modules.
+
+`moduleStateChanged` carries every lifecycle transition. `getModuleInfo` and
+`getModulesInfo` name where a loaded module runs: `placement` is `inproc` or
+`subprocess`. The embedder names
 its operators (`logos_core_set_operator_resolver`), handles `shutdown` and adds
 methods of its own (`logos_core_set_core_service_extension`).
 
 An embedder that sets `logos_core_set_shell_identity("basecamp")` before start
 gets its own identity: `logos_core_take_shell_binding()` returns a
 `logos_consumer` whose calls reach modules as `{"kind":"module","name":"basecamp"}`,
-with tokens capability_module issues. When capability_module runs in-process it
-is the token authority: it mints every credential and names every caller.
+with tokens capability_module issues. capability_module mints every credential
+but its own and names every caller; logos-cpp-sdk's `logos::host::LogosCore`
+wraps the binding for C++ embedders.
 
 ### Inter-module access enforcement (off by default)
 
@@ -237,7 +247,7 @@ Installing that document (via `logos_core_set_access_policy`, before
 `logos_core_start()`) turns on **deny-by-default**: for every loaded target,
 core derives the allowed callers from the declared dependency graph — the
 target's loaded dependents, plus the trusted `core` / `core_service` and the
-embedder's shell — and registers them with capability_module. A module that never declared the target
+embedder's shell — and hands them to capability_module. A module that never declared the target
 as a dependency is refused a token, so its call can never proceed, and
 capability_module logs the refusal with both names:
 
@@ -273,11 +283,9 @@ READMEs.
 
 ### Thread safety
 
-Module load/unload operations (`logos_core_load_module`, `logos_core_unload_module`) are serialised internally by a single mutex. It is safe to call them concurrently from multiple threads, including rapid and repeated load/unload cycles on the same module — each call waits for its turn and the process management layer handles teardown cleanly before the next launch. `logos_core_unload_module` with `with_dependents=true` in particular holds the lock for its entire leaves-first teardown so a late-arriving load can't interleave between tearing down a dependent and its parent.
+core_service's `loadModule` and `unloadModule` are safe to call concurrently from multiple threads: loads of different modules run at the same time, each under its own module's lock, and two loads of the same module are one load. A cascade `unloadModule(name, true)` holds the fleet lock for its entire leaves-first teardown, so a late-arriving load can't interleave between tearing down a dependent and its parent.
 
-`logos_core_refresh_modules` is synchronised through the module registry's reader-writer lock — it is safe to call concurrently with other registry accesses, but it is **not** serialised against load/unload by the same mutex as above.
-
-Read-only accessors (`logos_core_get_known_modules`, `logos_core_get_loaded_modules`) use that shared reader-writer lock and are safe to call concurrently with each other and with `logos_core_refresh_modules`.
+`refreshModules` is synchronised through the module registry's reader-writer lock, and the queries (`listModules`, the graph queries, `getModulesInfo`) read under its shared side.
 
 ## Module lifecycle observer
 

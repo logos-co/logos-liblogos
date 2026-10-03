@@ -63,16 +63,15 @@ symlinked to `./logos/`.
 ### 1.1 Build the CLI with the liblogos override
 
 ```bash
-nix build 'github:logos-co/logos-logoscore-cli/codex/qt-free-logoscore' \
+nix build 'github:logos-co/logos-logoscore-cli/feat/drop-legacy-mode' \
   --override-input logos-liblogos 'github:logos-co/logos-liblogos' \
-  --override-input logos-protocol 'github:logos-co/logos-protocol/codex/qt-remote-plain' \
+  --override-input logos-protocol 'github:logos-co/logos-protocol/feat/drop-legacy-mode' \
   --out-link ./logos
 ```
 
 The build produces `logos/bin/logoscore` plus bundled runtime libraries
-and a `logos/modules/` directory containing the built-in
-`capability_module` (required for the auth handshake when loading
-modules). Because `follows` propagates the override, the whole
+and a `logos/modules/` directory: the daemon's bundled modules, with
+`capability_module`, the token authority it runs in-process. Because `follows` propagates the override, the whole
 dependency closure — `logos_host`, `liblogos_core`, every module — is
 rebuilt against this liblogos.
 
@@ -121,19 +120,7 @@ The `.lgx` package is now under `./module-lgx/`:
 ls module-lgx/*.lgx
 ```
 
-### 3.2 Seed the modules directory with the bundled capability module
-
-Modules are loaded through the host's capability layer, so the modules
-directory also needs the `capability_module` that ships with
-`logoscore`. Copy it across first.
-
-```bash
-mkdir -p modules
-cp -RL ./logos/modules/. ./modules/
-
-```
-
-### 3.3 Install the .lgx with lgpm
+### 3.2 Install the .lgx with lgpm
 
 Install the freshly-built package into `./modules`. `test_basic_module`
 is a `core` module, so it goes to `--modules-dir`. The package is
@@ -143,7 +130,7 @@ unsigned (a local dev build), so we pass `--allow-unsigned`.
 ./lgpm/bin/lgpm --modules-dir ./modules --allow-unsigned install --file module-lgx/*.lgx
 ```
 
-### 3.4 Confirm the install
+### 3.3 Confirm the install
 
 Scan the directory and confirm the module landed:
 

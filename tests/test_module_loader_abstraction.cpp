@@ -316,35 +316,31 @@ TEST_F(ModuleLoaderAbstractionTest, LoadModule_ReturnsFalseForUnknownModule) {
 
 class CapabilityOrderTest : public ModuleLoaderAbstractionTest {
 protected:
-    std::vector<std::pair<std::string, std::vector<std::string>>> rpcs;
-
     void SetUp() override {
         ModuleLoaderAbstractionTest::SetUp();
-        ModuleManager::setCapabilityRpcSinkForTests(
-            [this](const std::string& method, const std::vector<std::string>& args) {
-                rpcs.push_back({method, args});
-            });
+        stand_in::forgetRestrictions();
     }
 
     void TearDown() override {
-        ModuleManager::setCapabilityRpcSinkForTests({});
         ModuleManager::setAccessPolicy("");
         ModuleLoaderAbstractionTest::TearDown();
     }
 
-    bool informed(const std::string& name, const std::string& token) const {
-        for (const auto& [method, args] : rpcs)
-            if (method == "informModuleToken" && args == std::vector<std::string>{name, token})
-                return true;
-        return false;
+    // Whether the authority admitted `name` with exactly this credential.
+    static bool admitted(const std::string& name, const std::string& token) {
+        char* credential = stand_in::credentialFor(name.c_str());
+        const bool same = credential && token == credential;
+        stand_in::stringFree(credential);
+        return same;
     }
 
-    // The callers in the latest registerRestriction for `target`.
-    std::vector<std::string> lastCallersOf(const std::string& target) const {
-        for (auto it = rpcs.rbegin(); it != rpcs.rend(); ++it)
-            if (it->first == "registerRestriction" && it->second.at(0) == target)
-                return {it->second.begin() + 1, it->second.end()};
-        return {};
+    // The callers of `target` in the latest access-policy document.
+    static std::vector<std::string> lastCallersOf(const std::string& target) {
+        const auto documents = stand_in::restrictionDocuments();
+        if (documents.empty()) return {};
+        const auto document = nlohmann::json::parse(documents.back());
+        if (!document.contains(target)) return {};
+        return document.at(target).get<std::vector<std::string>>();
     }
 
     static bool contains(const std::vector<std::string>& v, const std::string& x) {
@@ -360,7 +356,7 @@ TEST_F(CapabilityOrderTest, TokenIsRegisteredBeforeTheChildHoldsIt) {
     registerModule("foo");
     bool informedFirst = false;
     fake->onSendToken = [&](const std::string& name, const std::string& token) {
-        informedFirst = informed(name, token);
+        informedFirst = admitted(name, token);
     };
 
     ASSERT_EQ(logos_core_load_module("foo", LOGOS_LOAD_MODULE_ONLY), 1);

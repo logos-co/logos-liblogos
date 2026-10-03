@@ -22,6 +22,8 @@ int main(int argc, char** argv) {
         return RUN_ALL_TESTS();
     }
     logos_core_init(argc, argv);
+    // Every case is admitted by the stand-in authority; see stand_in_authority.h.
+    stand_in::attach();
     int result = RUN_ALL_TESTS();
     logos_core_cleanup();
     return result;

@@ -17,8 +17,9 @@ program**, built against **this** liblogos commit:
    ([`capability_module`](https://github.com/logos-co/logos-capability-module)
    and [`test_basic_module`](https://github.com/logos-co/logos-test-modules))
    into a local modules directory.
-3. Write a ~50-line C++ program that links `liblogos_core`, then calls the C
-   API to start the runtime and load `test_basic_module`.
+3. Write a ~60-line C++ program that links `liblogos_core`, starts the
+   runtime with `capability_module` as its token authority, and loads
+   `test_basic_module` through `core_service` over its shell binding.
 4. Build that program against this liblogos and run it — watching the module
    come up over liblogos' own IPC.
 
@@ -39,7 +40,7 @@ an embeddable library, not just through the `logoscore` frontend.
 
 - How to build `liblogos_core`, `logos_host`, and `logos_core.h` from a specific liblogos commit
 - What a minimal `CMakeLists.txt` that links `liblogos_core` looks like
-- The lifecycle of the C API: `logos_core_init` → `add_modules_dir` → `start` → `load_module` → `cleanup`
+- The lifecycle of the C API: `logos_core_init` → `set_bundled_modules_dirs` → `set_shell_identity` → `start` → `take_shell_binding` → core_service calls → `cleanup`
 - Why an embedding program needs a `QCoreApplication`, and where `logos_host` fits in (`LOGOS_HOST_PATH`)
 - How to install modules with `lgpm` so the runtime can discover them
 
@@ -104,8 +105,10 @@ ls liblogos/include/logos_core.h liblogos/lib/liblogos_core.dylib liblogos/bin/l
 
 The runtime discovers modules from a directory of installed packages. We
 build the `lgpm` package manager and two real modules' `.lgx` packages,
-then install them in the next step. `test_basic_module` is loaded through
-the host's capability layer, so we install `capability_module` alongside it.
+then install them in the next step. `capability_module` is the runtime's
+token authority: nothing loads without it, so we install it alongside
+`test_basic_module`, and the program will name that directory as its
+bundled modules so the runtime runs it in-process.
 
 ### 2.1 Build lgpm
 
@@ -187,37 +190,49 @@ drives the C API. Two files: the source and a `CMakeLists.txt`.
 The whole lifecycle in one `main()`:
 
 - Construct a `QCoreApplication` (liblogos uses Qt internally), but
-  never call `app.exec()` — the load calls are synchronous.
+  never call `app.exec()` — the calls are synchronous.
 - Resolve the modules directory to an absolute path (`logos_core`
   cannot read plugin metadata from a relative path).
-- `logos_core_init` → `logos_core_add_modules_dir` → `logos_core_start`
-  (this discovers modules and brings up `capability_module`).
-- `logos_core_load_module(name, LOGOS_LOAD_REQUIRED_DEPS)` loads the requested module and
-  its dependencies; the module list accessors confirm what is up.
+- `logos_core_init` → `logos_core_set_bundled_modules_dirs` →
+  `logos_core_set_shell_identity` → `logos_core_start` (this discovers
+  the modules and brings up `capability_module` in-process).
+- `logos_core_take_shell_binding` hands the program its own identity.
+  Every call about modules goes through it to `core_service`:
+  `loadModule(name, "required")` loads the module and its
+  dependencies, and `listModules` says what is up.
 
 ```cpp
 // Embedding the Logos runtime (liblogos_core) in your own program.
 //
-// liblogos exposes a C API in <logos_core.h>. Internally the runtime
-// is built on Qt (it uses QPluginLoader to read module metadata and
-// Qt's IPC stack to talk to modules), so an application that embeds
-// it must construct a QCoreApplication before driving the C API. You
-// do NOT need to run Qt's event loop: the load API below is
-// synchronous. Module subprocesses are launched through a separate
-// `logos_host` binary, located via the LOGOS_HOST_PATH environment
-// variable.
+// liblogos exposes a C API in <logos_core.h>: configuration before
+// start, the runtime's lifecycle, and a shell binding. Everything
+// about modules is a call to core_service, the runtime's control
+// surface, made through that binding as this program's own identity.
+// capability_module, the token authority, must be in a bundled
+// directory: the runtime runs it in-process, and without it nothing
+// loads. Internally the runtime is built on Qt, so the program
+// constructs a QCoreApplication; it never runs Qt's event loop.
+// Module subprocesses are launched through a separate `logos_host`
+// binary, located via the LOGOS_HOST_PATH environment variable.
 #include <QCoreApplication>
 #include "logos_core.h"
 
 #include <cstdio>
 #include <filesystem>
+#include <string>
 
-static void printList(const char* label, char** items) {
-    printf("%s:", label);
-    if (!items || !items[0]) { printf(" (none)\n"); return; }
-    printf("\n");
-    for (int i = 0; items[i]; ++i)
-        printf("  - %s\n", items[i]);
+// core_service's answer, as JSON text.
+static std::string call(logos_consumer* shell, const char* method,
+                        const std::string& args) {
+    char* result = nullptr;
+    char* error = nullptr;
+    const int status = logos_consumer_call(shell, "core_service", method,
+                                           args.c_str(), 120000, &result, &error);
+    std::string text = status == 0 && result ? result
+                     : std::string("(no answer) ") + (error ? error : "");
+    logos_consumer_string_free(result);
+    logos_consumer_string_free(error);
+    return text;
 }
 
 int main(int argc, char** argv) {
@@ -231,24 +246,33 @@ int main(int argc, char** argv) {
     const std::string modulesDir =
         std::filesystem::absolute(modulesArg).string();
 
-    // liblogos uses Qt internally, so a QCoreApplication must exist
-    // before we start the runtime. We never call app.exec(): the
-    // calls below are synchronous.
     QCoreApplication app(argc, argv);
 
     printf("Initializing Logos runtime...\n");
     logos_core_init(argc, argv);
-    logos_core_add_modules_dir(modulesDir.c_str());
+    // This program ships its modules here, capability_module among them.
+    const char* bundled[] = {modulesDir.c_str(), nullptr};
+    logos_core_set_bundled_modules_dirs(bundled);
+    logos_core_set_shell_identity("embed_app");
 
     printf("Starting (modules dir: %s)\n", modulesDir.c_str());
     logos_core_start();
-    printList("Discovered modules", logos_core_get_known_modules());
+    logos_consumer* shell = logos_core_take_shell_binding();
+    if (!shell) {
+        printf("No shell binding: capability_module is not running\n");
+        logos_core_cleanup();
+        return 1;
+    }
+    printf("Discovered modules: %s\n", call(shell, "listModules", R"(["all"])").c_str());
 
     printf("Loading '%s' (with dependencies)...\n", moduleName);
-    int ok = logos_core_load_module(moduleName, LOGOS_LOAD_REQUIRED_DEPS);
+    const std::string loaded =
+        call(shell, "loadModule", std::string("[\"") + moduleName + "\",\"required\"]");
+    const bool ok = loaded.find("\"status\":\"ok\"") != std::string::npos;
     printf("Load %s\n", ok ? "OK" : "FAILED");
-    printList("Loaded modules", logos_core_get_loaded_modules());
+    printf("Loaded modules: %s\n", call(shell, "listModules", R"(["loaded"])").c_str());
 
+    logos_consumer_release(shell);
     logos_core_cleanup();
     return ok ? 0 : 1;
 }
@@ -325,7 +349,7 @@ Run the program. It needs two things in the environment:
 
 We point it at `./modules` and ask it to load `test_basic_module`.
 
-### 6.1 Load test_basic_module through the C API
+### 6.1 Load test_basic_module through core_service
 
 ```bash
 export LOGOS_HOST_PATH="$PWD/liblogos/bin/logos_host"
@@ -333,24 +357,11 @@ export QT_QPA_PLATFORM=offscreen
 ./embed-app/build/logos_embed_app ./modules test_basic_module
 ```
 
-The output shows the runtime starting, discovering both modules,
-bringing up `capability_module`, then loading `test_basic_module` (a real
-subprocess launched via `logos_host` and wired up over liblogos' IPC):
-
-```
-Initializing Logos runtime...
-Starting (modules dir: .../modules)
-Module loaded: capability_module
-Discovered modules:
-  - capability_module
-  - test_basic_module
-Loading 'test_basic_module' (with dependencies)...
-Module loaded: test_basic_module
-Load OK
-Loaded modules:
-  - capability_module
-  - test_basic_module
-```
+The output shows the runtime starting, bringing up `capability_module`
+in-process as the token authority, then loading `test_basic_module` (a
+real subprocess launched via `logos_host` and wired up over liblogos'
+IPC) through `core_service`. `listModules` answers JSON records, one
+per module.
 
 That is your own program — not the `logoscore` CLI — running a real
 module on top of this liblogos.
@@ -359,8 +370,8 @@ module on top of this liblogos.
 
 ## Step 7: Inspect the module's API
 
-The C API loads and manages modules; it does not call their methods (that
-goes over the typed IPC bridge, which the frontends wrap). To see what
+`core_service` loads and manages modules; calling their methods goes over
+the typed IPC bridge, which the frontends wrap. To see what
 `test_basic_module` exposes, introspect the installed plugin with `lm`, the
 module inspector from [`logos-module`](https://github.com/logos-co/logos-module).
 

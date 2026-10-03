@@ -24,6 +24,7 @@ add_executable(logos_core_tests
     test_package_config.cpp
     test_inproc_loader.cpp
     test_call_envelope.cpp
+    test_token_authority.cpp
 )
 
 # The stand-in module host the load-path tests start, beside the test binary
@@ -61,6 +62,12 @@ target_include_directories(logos_core_tests PRIVATE
     ${CMAKE_SOURCE_DIR}/src
     ${CMAKE_SOURCE_DIR}/src/logos_core
 )
+
+# The stand-in authority implements capability_module's engine interface.
+if(NOT DEFINED LOGOS_CAPABILITY_ENGINE_INCLUDE AND DEFINED ENV{LOGOS_CAPABILITY_ENGINE_INCLUDE})
+  set(LOGOS_CAPABILITY_ENGINE_INCLUDE "$ENV{LOGOS_CAPABILITY_ENGINE_INCLUDE}")
+endif()
+target_include_directories(logos_core_tests PRIVATE "${LOGOS_CAPABILITY_ENGINE_INCLUDE}")
 
 # freeTcpPort() in test_core_outbound.cpp.
 if(WIN32)

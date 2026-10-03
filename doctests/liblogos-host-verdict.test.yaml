@@ -3,7 +3,7 @@ output: liblogos-host-verdict.md
 release: ""
 
 intro: |
-  `logos_core_load_module` used to answer "loaded" as soon as the OS had made a
+  A module load used to answer "loaded" as soon as the OS had made a
   process. Spawning a host and loading the plugin inside it are two different
   facts, and collapsing them is how a module whose plugin never loaded got
   reported as loaded, with the real failure surfacing hops away in a consumer.
