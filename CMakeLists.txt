@@ -4,19 +4,8 @@ project(SimplePluginExample LANGUAGES CXX)
 set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 
-# Find Qt packages
-# Network is needed explicitly by the token-exchange tests (QLocalServer /
-# QLocalSocket); it is also pulled transitively by RemoteObjects in the
-# runtime build, but we declare it here so the test target can link it
-# explicitly without depending on that transitive resolution.
-find_package(QT NAMES Qt6 Qt5 REQUIRED COMPONENTS Core Network RemoteObjects)
-find_package(Qt${QT_VERSION_MAJOR} REQUIRED COMPONENTS Core Network RemoteObjects)
-
 # Find nlohmann_json
 find_package(nlohmann_json REQUIRED)
-
-# OpenSSL needed transitively by logos_sdk (plain-C++ TCP+SSL transport)
-find_package(OpenSSL REQUIRED)
 
 # Find spdlog
 find_package(spdlog REQUIRED)
@@ -31,57 +20,30 @@ if(DEFINED LOGOS_PACKAGE_MANAGER_ROOT)
     list(APPEND CMAKE_BUILD_RPATH "${LOGOS_PACKAGE_MANAGER_ROOT}/lib")
 endif()
 
-# The shared C++ runtime, which logos_core now IMPORTS rather than absorbing.
-# Both libraries carry an @rpath install name, so a consumer that does not know
-# where they live cannot load at all -- and the failure is at dyld time, before
-# main(), with no hint from the build.
-#
-# Measured before this existed: logos_core_tests aborted with
-#   dyld: Library not loaded: @rpath/liblogos_qt_host.dylib
-# while `nix build .#default` had already succeeded. The library builds and
-# installs whether or not anything can load it.
-#
-# The INSTALLED liblogos_core is covered separately by INSTALL_RPATH $ORIGIN in
-# src/CMakeLists.txt plus staging both libraries beside it (nix/lib.nix); this
-# entry is what makes the BUILD tree -- tests especially -- resolve them.
-# BUILD_RPATH covers binaries run from the build tree; INSTALL_RPATH covers the
-# ones that get installed and run from $out -- which is what the test derivation
-# actually executes. Both are needed, and only Linux says so: on macOS the
-# installed test binary resolved the libraries anyway and the suite passed, while
-# the same commit on Linux died with
-#   error while loading shared libraries: liblogos_qt_host.so
-# A macOS-green test run is not evidence here.
-#
-# logos_core itself is unaffected by the INSTALL_RPATH lines: it sets its own
-# INSTALL_RPATH ($ORIGIN / @loader_path in src/CMakeLists.txt), which overrides
-# the directory-level default, and nix/lib.nix stages both libraries beside it.
+# The installed test binary resolves the Qt-free protocol runtime from the same
+# package root used at build time. logos_core itself overrides this with an
+# origin-relative RPATH in src/CMakeLists.txt for redistribution.
 if(DEFINED LOGOS_PROTOCOL_ROOT)
     list(APPEND CMAKE_BUILD_RPATH "${LOGOS_PROTOCOL_ROOT}/lib")
     list(APPEND CMAKE_INSTALL_RPATH "${LOGOS_PROTOCOL_ROOT}/lib")
 endif()
-if(DEFINED LOGOS_QT_HOST_ROOT)
-    list(APPEND CMAKE_BUILD_RPATH "${LOGOS_QT_HOST_ROOT}/lib")
-    list(APPEND CMAKE_INSTALL_RPATH "${LOGOS_QT_HOST_ROOT}/lib")
-endif()
 
-# Build src first to ensure logos_core is built before modules
-add_subdirectory(src)
-
-# Tests. Gated EXPLICITLY rather than left to find_package: the suite is
-# POSIX-only (tests/test_process_stats.cpp uses <spawn.h>, <sys/wait.h>,
-# posix_spawn/waitpid/kill and `environ`; tests/test_subprocess_manager.cpp
-# spawns /bin/sh), none of which mingw-w64 provides. The default build target
-# is `all`, so an ungated tests/ subdirectory would be compiled by every
-# cross build.
+# Tests. Off by default on Windows, where only nix/tests-windows.nix builds them:
+# the default target is `all`, so the library's cross build would compile them.
+# Declared before src/, which builds the library the Windows suite links.
 #
 # The gate wraps the GTest lookup too: dropping only `add_subdirectory(tests)`
 # would still leave find_package(GTest) able to miss and fall through to the
 # FetchContent download, which dies in the nix sandbox with a misleading
 # "downloading ... failed".
-option(LOGOS_BUILD_TESTS "Build the logos_core test suite" ON)
 if(WIN32)
-    set(LOGOS_BUILD_TESTS OFF)
+    option(LOGOS_BUILD_TESTS "Build the logos_core test suite" OFF)
+else()
+    option(LOGOS_BUILD_TESTS "Build the logos_core test suite" ON)
 endif()
+
+# Build src first to ensure logos_core is built before modules
+add_subdirectory(src)
 
 if(LOGOS_BUILD_TESTS)
     # Try to find GoogleTest via find_package first (for Nix and system installations)

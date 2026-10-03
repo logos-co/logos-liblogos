@@ -1,6 +1,10 @@
 # logos-liblogos
 
-The core runtime library for the Logos modular application platform. Provides `liblogos_core` (a C-API shared library) and `logos_host` (the module subprocess host binary).
+The core runtime library for the Logos modular application platform. It
+provides the Qt-free `liblogos_core` C API and packages two module subprocess
+hosts: `logos_host_plain` for native `qt_remote_plain` modules and
+`logos_host_qt` (also exposed as the compatibility `logos_host` symlink) for
+current `qt_remote` Qt plugins.
 
 `logos-liblogos` is a **library**. It is consumed by two frontends:
 - **[logos-basecamp](https://github.com/logos-co/logos-basecamp)** — the desktop GUI application shell
@@ -14,6 +18,11 @@ piece can be swapped independently:
 - **[logos-capability-module](https://github.com/logos-co/logos-capability-module)** — issues the auth tokens that gate inter-module calls.
 - **[logos-container](https://github.com/logos-co/logos-container)** — the container interface (*where/how* a module runs); current default is the subprocess implementation: **[logos-container-subprocess](https://github.com/logos-co/logos-container-subprocess)** (one OS process per module).
 - **[logos-module-loader](https://github.com/logos-co/logos-module-loader)** — the format-loader interface (*what kind* of module); current default is : **[logos-module-loader-qt](https://github.com/logos-co/logos-module-loader-qt)**.
+
+`liblogos_core` itself uses the Qt-free `logos-protocol-plain` runtime. Module
+metadata is read from the adjacent `<main>.metadata.json` sidecar. Existing Qt
+plugins without that sidecar are inspected by a short-lived
+`logos_host_qt --inspect` subprocess, keeping Qt out of the parent process.
 
 ## How to Build
 
@@ -31,7 +40,7 @@ nix build '.#default'
 ```
 
 The result will include:
-- `/bin/` - Host binary (logos_host)
+- `/bin/` - `logos_host_plain`, `logos_host_qt`, and the compatibility `logos_host` symlink
 - `/lib/` - Core library (liblogos_core)
 - `/include/` - Headers (logos_core.h, interface.h)
 

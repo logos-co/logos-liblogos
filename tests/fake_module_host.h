@@ -10,13 +10,13 @@
 #include "logos_core.h"
 #include "module_state_observer.h"
 #include "qt_test_adapter.h"
+#include "test_platform.h"
 
 #include <cstdlib>
 #include <filesystem>
 #include <fstream>
 #include <mutex>
 #include <set>
-#include <stdexcept>
 #include <string>
 #include <vector>
 
@@ -24,62 +24,31 @@ namespace fs = std::filesystem;
 
 namespace {
 
-struct TmpDir {
-    fs::path path;
+using logos_test::TmpDir;
 
-    TmpDir() {
-        std::string tmpl = (fs::temp_directory_path() / "logos_verdict_XXXXXX").string();
-        std::vector<char> buf(tmpl.begin(), tmpl.end());
-        buf.push_back('\0');
-        if (!mkdtemp(buf.data())) throw std::runtime_error("mkdtemp failed");
-        path = buf.data();
-    }
-
-    ~TmpDir() {
-        std::error_code ec;
-        fs::remove_all(path, ec);
-    }
-};
-
-// Stand-in for logos_host_qt. Its behaviour is the first line of the file the
-// daemon names with --path, so one script covers every case and each module
-// carries its own. `exec sleep` matters: a plain `sleep` would leave the shell
-// as the process the container signals and the sleep behind it orphaned.
+// The stand-in for logos_host_qt is tests/fake_module_host_main.cpp. Its
+// behaviour is the first line of the file the daemon names with --path, so one
+// host covers every case and each module carries its own:
+//
+//   die                 exit 3 before reporting anything
+//   report-fail         report a plugin that failed to load, exit 1
+//   report-ok           report ok and stay up
+//   report-ok-then-die  report ok and exit
+//   slow-ok             stall a whole second, then report ok and stay up
+//   pdeathsig-ok        arm PR_SET_PDEATHSIG as logos_host_qt does (Linux),
+//                       then report ok and stay up
+//   anything else       stay up without a word, as a host too old to report
+//
+// `slow-ok`'s second is not a timeout to be waited out: it is the window a test
+// needs a second host to turn up inside, wide enough that a loaded machine
+// cannot close it.
 //
 // Every host writes two marks into ONE log shared by every module in the
 // directory: `enter` the moment it starts, `report` as it is about to answer.
 // One shared log rather than a file per module because the order of the marks
-// across modules is itself the evidence -- see hostWindow() below -- and
-// appends of a short line to an O_APPEND fd do not interleave, so the file
-// records the real sequence even with several hosts running at once.
-//
-// `slow-ok` stalls a whole second before reporting. It is not a timeout to be
-// waited out: it is the window a test needs a second host to turn up inside,
-// wide enough that a loaded machine cannot close it.
-//
-// `pdeathsig-ok` arms PR_SET_PDEATHSIG before reporting, as logos_host_qt does
-// (Linux only: needs util-linux's setpriv).
-constexpr const char* kFakeHostScript = R"sh(#!/bin/sh
-path=""
-while [ $# -gt 0 ]; do
-  case "$1" in
-    -p|--path) path="$2"; shift 2 ;;
-    *) shift ;;
-  esac
-done
-mod="${path##*/}"; mod="${mod%_plugin.so}"
-mark() { [ -n "$path" ] && echo "$1 $mod" >> "${path%/*}/host_events"; }
-mark enter
-case "$(head -n 1 "$path" 2>/dev/null)" in
-  die)         exit 3 ;;
-  report-fail) mark report ; printf '%s\n' "@logos-load-status failed undefined symbol: logos_module_install" ; exit 1 ;;
-  report-ok)   mark report ; printf '%s\n' "@logos-load-status ok" ; exec sleep 300 ;;
-  report-ok-then-die) mark report ; printf '%s\n' "@logos-load-status ok" ; exit 0 ;;
-  slow-ok)     sleep 1 ; mark report ; printf '%s\n' "@logos-load-status ok" ; exec sleep 300 ;;
-  pdeathsig-ok) mark report ; exec setpriv --pdeathsig KILL sh -c 'printf "%s\n" "@logos-load-status ok"; exec sleep 300' ;;
-  *)           exec sleep 300 ;;
-esac
-)sh";
+// across modules is itself the evidence -- see hostWindow() below -- and each
+// mark is one write to an append-only handle, so the file records the real
+// sequence even with several hosts running at once.
 
 std::set<std::string> loadedModuleNames() {
     std::set<std::string> names;
@@ -117,7 +86,7 @@ protected:
         auto& o = logos::ModuleStateObserver::instance();
         o.setSink({});
         o.clearPending();
-        unsetenv("LOGOS_HOST_PATH");
+        logos_test::unsetEnv("LOGOS_HOST_PATH");
         logos_core_terminate_all();
         logos_core_clear();
     }
@@ -154,7 +123,7 @@ protected:
         return w;
     }
 
-    // How many hosts the fake host script recorded for this module.
+    // How many hosts the stand-in recorded for this module.
     int spawnCount(const std::string& name) const {
         int n = 0;
         for (const std::string& e : hostEvents())
@@ -179,14 +148,9 @@ protected:
 
     // Installs the stand-in host for the duration of the test.
     void useFakeHost() {
-        fs::path fakeHost = tmp.path / "fake_logos_host";
-        std::ofstream f(fakeHost);
-        f << kFakeHostScript;
-        f.close();
-        fs::permissions(fakeHost, fs::perms::owner_all | fs::perms::group_exec |
-                                      fs::perms::others_exec);
-        ASSERT_TRUE(fs::exists(fakeHost));
-        setenv("LOGOS_HOST_PATH", fakeHost.c_str(), 1);
+        const fs::path fakeHost = logos_test::fakeHostPath();
+        ASSERT_TRUE(fs::exists(fakeHost)) << fakeHost;
+        logos_test::setEnv("LOGOS_HOST_PATH", fakeHost.string());
     }
 
     bool sawTransitionTo(const std::string& name, const std::string& state) const {

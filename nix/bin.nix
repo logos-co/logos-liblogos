@@ -2,7 +2,7 @@
 # binary (logos_host_qt moved to logos-module-loader-qt), so this re-exports the
 # already-wrapped host binary from that package and bundles the runtime libs +
 # built-in modules, keeping the output shape frontends expect.
-{ pkgs, common, build, lib, modules, formatLoaderImpl }:
+{ pkgs, common, build, lib, modules, moduleHosts }:
 
 pkgs.stdenvNoCC.mkDerivation {
   pname = "${common.pname}-bin";
@@ -17,8 +17,8 @@ pkgs.stdenvNoCC.mkDerivation {
     # Re-export the host binary (logos_host_qt + logos_host symlink), already
     # Qt-wrapped and patched, from the format-loader implementation package.
     mkdir -p $out/bin
-    if [ -d ${formatLoaderImpl}/bin ]; then
-      cp -a ${formatLoaderImpl}/bin/. $out/bin/
+    if [ -d ${moduleHosts}/bin ]; then
+      cp -a ${moduleHosts}/bin/. $out/bin/
     fi
 
     # Runtime libraries for downstream linking (liblogos_core etc.)

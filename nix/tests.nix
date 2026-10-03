@@ -1,16 +1,14 @@
 # Builds tests
 { pkgs, common, build }:
 
-# The suite is POSIX-only (posix_spawn/waitpid/kill, /bin/sh) and CMake turns
-# LOGOS_BUILD_TESTS off for a Windows host, so there would be no
-# `logos_core_tests` target to build. Refuse loudly instead: the configurePhase
-# below hand-rolls its `cmake` invocation and never expands $cmakeFlags, so a
-# Windows instantiation would silently drop -DCMAKE_SYSTEM_NAME=Windows and
-# every entry of logosQtCrossCmakeFlags -- i.e. configure as a NATIVE build and
-# link the wrong architecture, which is far worse than an error. flake.nix
-# already withholds this attribute on Windows; this makes that non-negotiable.
+# Unix only; nix/tests-windows.nix builds the suite for Windows. This refuses
+# loudly because the configurePhase below hand-rolls its `cmake` invocation and
+# never expands $cmakeFlags, so a Windows instantiation would silently drop
+# -DCMAKE_SYSTEM_NAME=Windows and every entry of logosQtCrossCmakeFlags -- i.e.
+# configure as a NATIVE build and link the wrong architecture, which is far
+# worse than an error.
 if pkgs.stdenv.hostPlatform.isWindows then
-  throw "logos-liblogos: the logos_core test suite is POSIX-only and cannot be cross-compiled for ${pkgs.stdenv.hostPlatform.system}"
+  throw "logos-liblogos: nix/tests.nix cannot cross-compile for ${pkgs.stdenv.hostPlatform.system}; use nix/tests-windows.nix"
 else
 
 pkgs.stdenv.mkDerivation {
@@ -39,10 +37,7 @@ pkgs.stdenv.mkDerivation {
     # Reconfigure to generate test targets
     cmake -B build -S ${build.src} \
       -GNinja \
-      -DLOGOS_CPP_SDK_ROOT=${common.env.LOGOS_CPP_SDK_ROOT} \
       -DLOGOS_PROTOCOL_ROOT=${common.env.LOGOS_PROTOCOL_ROOT} \
-      -DLOGOS_QT_HOST_ROOT=${common.env.LOGOS_QT_HOST_ROOT} \
-      -DLOGOS_MODULE_ROOT=${common.env.LOGOS_MODULE_ROOT} \
       -DPROCESS_STATS_ROOT=${common.env.PROCESS_STATS_ROOT} \
       -DLOGOS_CONTAINER_ROOT=${common.env.LOGOS_CONTAINER_ROOT} \
       -DLOGOS_MODULE_LOADER_ROOT=${common.env.LOGOS_MODULE_LOADER_ROOT} \
@@ -68,7 +63,7 @@ pkgs.stdenv.mkDerivation {
     runHook preInstall
     
     mkdir -p $out/bin
-    cp bin/logos_core_tests $out/bin/
+    cp bin/logos_core_tests bin/logos_fake_module_host $out/bin/
     
     # Copy the libraries so tests can run
     mkdir -p $out/lib
@@ -84,7 +79,7 @@ pkgs.stdenv.mkDerivation {
     # were added to close.
     for _name in dep_range_fixture_plugin dep_malformed_fixture_plugin; do
       _fixture=""
-      for cand in $out/lib/$_name.so $out/lib/$_name.dylib; do
+      for cand in $out/lib/$_name.fixture; do
         [ -f "$cand" ] && _fixture="$cand"
       done
       if [ -z "$_fixture" ]; then
@@ -112,13 +107,10 @@ pkgs.stdenv.mkDerivation {
       # changed nothing and the suite still died with
       #   error while loading shared libraries: liblogos_qt_host.so
       # while the same commit passed on macOS, which does not go through here.
-      # OpenSSL (libssl, libcrypto) is needed because the SDK's plain-C++ TLS
-      # transport links it transitively — without this the wrapped binary
-      # dies with `libssl.so.3: cannot open shared object`.
-      _rpath="$out/lib:${common.env.LOGOS_PROTOCOL_ROOT}/lib:${common.env.LOGOS_QT_HOST_ROOT}/lib:${pkgs.boost}/lib:${common.env.LOGOS_PACKAGE_MANAGER_ROOT}/lib:${pkgs.gtest}/lib:${pkgs.qt6.qtbase}/lib:${pkgs.qt6.qtremoteobjects}/lib:${pkgs.spdlog}/lib:${pkgs.fmt}/lib:${pkgs.openssl.out}/lib:${pkgs.stdenv.cc.cc.lib}/lib"
+      _rpath="$out/lib:${common.env.LOGOS_PROTOCOL_ROOT}/lib:${pkgs.boost}/lib:${pkgs.openssl.out}/lib:${common.env.LOGOS_PACKAGE_MANAGER_ROOT}/lib:${pkgs.gtest}/lib:${pkgs.spdlog}/lib:${pkgs.fmt}/lib:${pkgs.stdenv.cc.cc.lib}/lib"
       patchelf --set-rpath "$_rpath" $out/bin/logos_core_tests || true
       # Fix RPATH on liblogos_core.so so it can find its transitive deps (e.g. libboost_process, spdlog, fmt, libssl)
-      _rpath_lib="$out/lib:${common.env.LOGOS_PROTOCOL_ROOT}/lib:${common.env.LOGOS_QT_HOST_ROOT}/lib:${pkgs.boost}/lib:${common.env.LOGOS_PACKAGE_MANAGER_ROOT}/lib:${pkgs.qt6.qtbase}/lib:${pkgs.qt6.qtremoteobjects}/lib:${pkgs.spdlog}/lib:${pkgs.fmt}/lib:${pkgs.openssl.out}/lib:${pkgs.stdenv.cc.cc.lib}/lib"
+      _rpath_lib="$out/lib:${common.env.LOGOS_PROTOCOL_ROOT}/lib:${pkgs.boost}/lib:${pkgs.openssl.out}/lib:${common.env.LOGOS_PACKAGE_MANAGER_ROOT}/lib:${pkgs.spdlog}/lib:${pkgs.fmt}/lib:${pkgs.stdenv.cc.cc.lib}/lib"
       patchelf --set-rpath "$_rpath_lib" $out/lib/liblogos_core.so || true
     ''}
     

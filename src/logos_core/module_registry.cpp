@@ -1,14 +1,30 @@
+#ifdef _WIN32
+// Boost.Process uses Boost.Asio, which requires WinSock2 to be selected before
+// protocol headers transitively include windows.h.
+#include <winsock2.h>
+#endif
+
 #include "module_registry.h"
 #include "module_state_observer.h"
 #include <spdlog/spdlog.h>
 #include <cassert>
+#include <cstdlib>
 #include <ctime>
 #include <deque>
+#include <map>
 #include <mutex>
 #include <shared_mutex>
 #include <algorithm>
+#include <filesystem>
+#include <fstream>
+#include <sstream>
 #include <unordered_set>
-#include <module_lib/module_lib.h>
+#include <boost/dll/runtime_symbol_info.hpp>
+#if __has_include(<boost/process/v1.hpp>)
+#include <boost/process/v1.hpp>
+#else
+#include <boost/process.hpp>
+#endif
 #include <package_manager_lib.h>
 
 namespace logos {
@@ -29,6 +45,10 @@ bool isValidModuleName(const std::string& name) {
     }
     if (name == "." || name == "..")
         return false;
+    // Core's own key in its token store: a module loaded under it would file
+    // its token over core's credential.
+    if (name == "core")
+        return false;
     return true;
 }
 
@@ -41,24 +61,197 @@ static PackageManagerLib& packageManagerInstance() {
 
 namespace {
 
+namespace fs = std::filesystem;
+
+std::optional<nlohmann::json> readMetadataSidecar(const std::string& modulePath)
+{
+    const fs::path binary(modulePath);
+    const fs::path sidecar = binary.parent_path()
+        / (binary.stem().string() + ".metadata.json");
+    std::ifstream input(sidecar);
+    if (!input) return std::nullopt;
+    nlohmann::json value = nlohmann::json::parse(input, nullptr, false);
+    if (value.is_discarded() || !value.is_object()) return std::nullopt;
+    return value;
+}
+
+#ifdef _WIN32
+constexpr const char* kExecutableSuffix = ".exe";
+#else
+constexpr const char* kExecutableSuffix = "";
+#endif
+
+#if __has_include(<boost/process/v1.hpp>)
+namespace bp = boost::process::v1;
+#else
+namespace bp = boost::process;
+#endif
+
+// Every Qt host that could read a plugin's metadata, in the order tried.
+std::vector<fs::path> qtHostCandidates(const std::vector<std::string>& moduleDirs)
+{
+    std::vector<fs::path> candidates;
+    if (const char* configured = std::getenv("LOGOS_HOST_PATH"); configured && *configured) {
+        fs::path candidate(configured);
+        if (fs::exists(candidate)) candidates.push_back(candidate);
+    }
+    std::vector<fs::path> directories;
+    try {
+        directories.push_back(
+            fs::path(boost::dll::program_location().parent_path().string()));
+    } catch (...) {
+    }
+    if (!moduleDirs.empty())
+        directories.push_back(fs::absolute(fs::path(moduleDirs.front()) / ".." / "bin"));
+    for (const auto& directory : directories) {
+        for (const char* name : {"logos_host_qt", "logos_host"}) {
+            fs::path candidate = (directory / (std::string(name) + kExecutableSuffix)).lexically_normal();
+            if (fs::exists(candidate)
+                && std::find(candidates.begin(), candidates.end(), candidate) == candidates.end())
+                candidates.push_back(candidate);
+        }
+    }
+    return candidates;
+}
+
+// A host from before --inspect rejects it, and every module without a sidecar
+// would read as having no metadata. Asked once per host.
+bool canInspect(const fs::path& host)
+{
+    static std::mutex mutex;
+    static std::map<std::string, bool> known;
+    std::lock_guard<std::mutex> lock(mutex);
+    const auto [entry, fresh] = known.try_emplace(host.string(), false);
+    if (!fresh) return entry->second;
+    try {
+        bp::ipstream output;
+        bp::child child(host.string(), "--help", bp::std_out > output, bp::std_err > bp::null);
+        std::ostringstream text;
+        text << output.rdbuf();
+        child.wait();
+        entry->second = text.str().find("--inspect") != std::string::npos;
+    } catch (const std::exception&) {
+    }
+    if (!entry->second)
+        spdlog::error("{} cannot read Qt plugin metadata (it has no --inspect); "
+                      "trying another logos_host_qt", host.string());
+    return entry->second;
+}
+
+std::optional<nlohmann::json> spawnInspect(
+    const std::string& modulePath, const std::vector<std::string>& moduleDirs)
+{
+    std::optional<fs::path> host;
+    for (const auto& candidate : qtHostCandidates(moduleDirs)) {
+        if (canInspect(candidate)) {
+            host = candidate;
+            break;
+        }
+    }
+    if (!host) {
+        spdlog::error("No logos_host_qt with --inspect found (set LOGOS_HOST_PATH): "
+                      "{} has no metadata sidecar, so it cannot be discovered", modulePath);
+        return std::nullopt;
+    }
+    try {
+        bp::ipstream output;
+        bp::child child(host->string(), "--inspect", modulePath,
+                        bp::std_out > output, bp::std_err > bp::null);
+        std::ostringstream text;
+        text << output.rdbuf();
+        child.wait();
+        if (child.exit_code() != 0) return std::nullopt;
+        nlohmann::json metadata = nlohmann::json::parse(text.str(), nullptr, false);
+        if (metadata.is_discarded() || !metadata.is_object()) return std::nullopt;
+        return metadata;
+    } catch (const std::exception& exception) {
+        spdlog::warn("Qt metadata inspection failed for {}: {}", modulePath,
+                     exception.what());
+        return std::nullopt;
+    }
+}
+
+// An --inspect spawn costs 40-100 ms and discovery repeats on every refresh, so
+// a binary is asked once until its size or mtime changes.
+std::optional<nlohmann::json> inspectQtMetadata(
+    const std::string& modulePath, const std::vector<std::string>& moduleDirs)
+{
+    struct Inspected {
+        std::uintmax_t size = 0;
+        fs::file_time_type modified;
+        nlohmann::json metadata;
+    };
+    static std::mutex mutex;
+    static std::map<std::string, Inspected> cache;
+    std::error_code sizeError;
+    std::error_code timeError;
+    const std::uintmax_t size = fs::file_size(modulePath, sizeError);
+    const fs::file_time_type modified = fs::last_write_time(modulePath, timeError);
+    const bool identified = !sizeError && !timeError;
+    if (identified) {
+        std::lock_guard<std::mutex> lock(mutex);
+        const auto found = cache.find(modulePath);
+        if (found != cache.end() && found->second.size == size
+            && found->second.modified == modified)
+            return found->second.metadata;
+    }
+    auto metadata = spawnInspect(modulePath, moduleDirs);
+    if (metadata && identified) {
+        std::lock_guard<std::mutex> lock(mutex);
+        cache[modulePath] = {size, modified, *metadata};
+    }
+    return metadata;
+}
+
+// Metadata is untrusted input: a field of the wrong type reads as absent
+// instead of throwing out of logos_core_start.
+std::string stringField(const nlohmann::json& metadata, const char* key)
+{
+    const auto found = metadata.find(key);
+    return found != metadata.end() && found->is_string() ? found->get<std::string>()
+                                                         : std::string{};
+}
+
+// Same rules as the Qt-era gate: a present but non-string `version` or
+// `signer` is a malformed constraint (refused, never unconstrained), and an
+// empty name is not a dependency.
+std::vector<LogosCore::ModuleDependency> jsonDependencies(
+    const nlohmann::json& metadata, const char* field)
+{
+    std::vector<LogosCore::ModuleDependency> result;
+    const auto found = metadata.find(field);
+    if (found == metadata.end() || !found->is_array()) return result;
+    for (const auto& entry : *found) {
+        if (entry.is_string()) {
+            if (!entry.get<std::string>().empty())
+                result.push_back({entry.get<std::string>(), {}, {}});
+        } else if (entry.is_object() && entry.contains("name")
+                   && entry["name"].is_string()
+                   && !entry["name"].get<std::string>().empty()) {
+            std::string range;
+            bool malformedConstraint = false;
+            if (auto version = entry.find("version"); version != entry.end()) {
+                if (version->is_string()) range = version->get<std::string>();
+                else malformedConstraint = true;
+            }
+            std::string signer;
+            if (auto value = entry.find("signer"); value != entry.end()) {
+                if (value->is_string()) signer = value->get<std::string>();
+                else malformedConstraint = true;
+            }
+            result.push_back({entry["name"].get<std::string>(), range,
+                              signer, malformedConstraint});
+        }
+    }
+    return result;
+}
+
 std::vector<std::string> dependencyNames(
     const std::vector<LogosCore::ModuleDependency>& deps) {
     std::vector<std::string> names;
     names.reserve(deps.size());
     for (const auto& d : deps) names.push_back(d.name);
     return names;
-}
-
-// ModuleLib's entry is Qt-free but reachable only through a Qt-bearing header,
-// and dependency_gate.h is deliberately std-only -- so the gate keeps its own
-// type and the two meet here, in the TU that already speaks Qt.
-std::vector<LogosCore::ModuleDependency> toGateDependencies(
-    const std::vector<ModuleLib::ModuleDependency>& entries) {
-    std::vector<LogosCore::ModuleDependency> deps;
-    deps.reserve(entries.size());
-    for (const auto& e : entries)
-        deps.push_back({e.name, e.versionRange, e.signer, e.malformedConstraint});
-    return deps;
 }
 
 std::vector<LogosCore::ModuleDependency> toDependencyEntries(
@@ -143,7 +336,7 @@ void ModuleRegistry::discoverInstalledModules() {
         // self-asserted name embedded in the plugin binary. processModuleInternal
         // refuses the plugin if its embedded metadata name disagrees, so a
         // package cannot register under a privileged name it doesn't own.
-        std::string moduleName = processModuleInternal(mod.mainFilePath, mod.name);
+        std::string moduleName = processModuleInternal(mod.mainFilePath, mod.name, mod.version);
         if (moduleName.empty()) {
             spdlog::warn("Failed to process module: {}", mod.mainFilePath);
             continue;
@@ -218,18 +411,63 @@ std::string ModuleRegistry::processModule(const std::string& modulePath) {
 }
 
 std::string ModuleRegistry::processModuleInternal(const std::string& modulePath,
-                                                  const std::string& trustedName) {
-    // The plugin's *self-asserted* identity, read verbatim from its embedded
-    // metadata. This is attacker-controlled for any plugin we didn't build,
-    // so it must never be trusted as the module's identity on its own. One
-    // read serves identity, the cached blob and the gate's inputs alike --
-    // each per-field ModuleLib accessor would re-open the plugin.
-    auto metadata = ModuleLib::LogosModule::extractMetadata(modulePath);
-    if (!metadata || !metadata->isValid()) {
+                                                  const std::string& trustedName,
+                                                  const std::string& trustedVersion) {
+    auto sidecar = readMetadataSidecar(modulePath);
+    // lgpm copies a package over its module directory, so one that ships no
+    // sidecar leaves the previous install's behind, describing another binary.
+    if (sidecar && !trustedVersion.empty()) {
+        const std::string described = stringField(*sidecar, "version");
+        if (!described.empty() && described != trustedVersion) {
+            spdlog::warn("Ignoring the metadata sidecar of {}: it describes version {}, "
+                         "the installed package is {}", modulePath, described, trustedVersion);
+            sidecar.reset();
+        }
+    }
+    if (sidecar) {
+        const std::string embedded = stringField(*sidecar, "name");
+        if (embedded.empty()) {
+            spdlog::warn("Module metadata sidecar has no name: {}", modulePath);
+            return {};
+        }
+        const auto transport = sidecar->find("transport");
+        const std::string transportName = transport == sidecar->end()
+            ? std::string{"qt_remote"} : stringField(*sidecar, "transport");
+        if (transportName != "qt_remote" && transportName != "qt_remote_plain") {
+            spdlog::warn("Refusing module {}: unsupported transport in its metadata",
+                         modulePath);
+            return {};
+        }
+        if (!trustedName.empty() && embedded != trustedName) {
+            spdlog::error("Refusing module {}: sidecar name '{}' does not match package name '{}'",
+                          modulePath, embedded, trustedName);
+            return {};
+        }
+        const std::string& name = trustedName.empty() ? embedded : trustedName;
+        if (!logos::isValidModuleName(name)) {
+            spdlog::warn("Rejecting module with invalid name '{}' from {}", name, modulePath);
+            return {};
+        }
+        ModuleInfo& info = m_modules[name];
+        info.path = modulePath;
+        info.format = transportName == "qt_remote_plain" ? "native-cdylib" : "qt-plugin";
+        info.metadataJson = sidecar->dump();
+        info.version = stringField(*sidecar, "version");
+        info.dependencies = jsonDependencies(*sidecar, "dependencies");
+        info.optionalDependencies = jsonDependencies(*sidecar, "optional_dependencies");
+        return name;
+    }
+
+    // Compatibility path for a current qt_remote binary built before module
+    // packages began installing sidecars. The same logos_host_qt process that
+    // loads it reads Q_PLUGIN_METADATA in metadata-only mode; this parent
+    // process remains Qt-free.
+    auto metadata = inspectQtMetadata(modulePath, m_modulesDirs);
+    if (!metadata || stringField(*metadata, "name").empty()) {
         spdlog::warn("No valid metadata for module: {}", modulePath);
         return {};
     }
-    const std::string embedded = metadata->name.toStdString();
+    const std::string embedded = stringField(*metadata, "name");
 
     // When discovery supplies a trusted package name, the plugin's
     // embedded name MUST match it. Otherwise a package installed under an
@@ -263,10 +501,11 @@ std::string ModuleRegistry::processModuleInternal(const std::string& modulePath,
     // (and any other state that lives on ModuleInfo).
     ModuleInfo& info = m_modules[name];
     info.path = modulePath;
-    info.metadataJson = std::move(metadata->rawMetadataJson);
-    info.version = metadata->version.toStdString();
-    info.dependencies = toGateDependencies(metadata->dependencies);
-    info.optionalDependencies = toGateDependencies(metadata->optionalDependencies);
+    info.format = "qt-plugin";
+    info.metadataJson = metadata->dump();
+    info.version = stringField(*metadata, "version");
+    info.dependencies = jsonDependencies(*metadata, "dependencies");
+    info.optionalDependencies = jsonDependencies(*metadata, "optional_dependencies");
 
     return name;
 }
@@ -280,6 +519,22 @@ std::string ModuleRegistry::modulePath(const std::string& name) const {
     std::shared_lock lock(m_mutex);
     auto it = m_modules.find(name);
     return it != m_modules.end() ? it->second.path : std::string{};
+}
+
+std::string ModuleRegistry::moduleFormat(const std::string& name) const {
+    std::shared_lock lock(m_mutex);
+    auto it = m_modules.find(name);
+    return it != m_modules.end() ? it->second.format : std::string{};
+}
+
+nlohmann::json ModuleRegistry::moduleMetadata(const std::string& name) const {
+    std::shared_lock lock(m_mutex);
+    auto it = m_modules.find(name);
+    if (it == m_modules.end() || it->second.metadataJson.empty())
+        return nlohmann::json::object();
+    nlohmann::json value = nlohmann::json::parse(
+        it->second.metadataJson, nullptr, false);
+    return value.is_discarded() ? nlohmann::json::object() : value;
 }
 
 nlohmann::json ModuleRegistry::allModulesInfo() const {
