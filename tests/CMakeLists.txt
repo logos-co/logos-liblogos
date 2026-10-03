@@ -79,11 +79,6 @@ if(NOT DEFINED LOGOS_CAPABILITY_ENGINE_INCLUDE AND DEFINED ENV{LOGOS_CAPABILITY_
 endif()
 target_include_directories(logos_core_tests PRIVATE "${LOGOS_CAPABILITY_ENGINE_INCLUDE}")
 
-# freeTcpPort() in test_core_outbound.cpp.
-if(WIN32)
-    target_link_libraries(logos_core_tests PRIVATE ws2_32)
-endif()
-
 # Propagate portable build flag to tests so manifest variant keys match
 if(LOGOS_PORTABLE_BUILD)
     target_compile_definitions(logos_core_tests PRIVATE LOGOS_PORTABLE_BUILD=1)

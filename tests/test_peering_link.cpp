@@ -114,9 +114,9 @@ TEST(PeeringLink, AnExportListensBesideTheModulesOwnTransports)
     EXPECT_EQ(added[0], json({{"protocol", "qt_remote_plain"}}));
     EXPECT_EQ(added[1], json({{"protocol", "tls_tcp"}, {"host", "127.0.0.1"}, {"port", 0}}));
     const json kept = json::parse(logos::peering_link::withExportListener(
-        R"([{"protocol":"inproc"},{"protocol":"tcp","host":"0.0.0.0","port":9000}])", "0.0.0.0"));
+        R"([{"protocol":"inproc"},{"protocol":"qt_remote_plain"}])", "0.0.0.0"));
     ASSERT_EQ(kept.size(), 3u);
-    EXPECT_EQ(kept[1].value("protocol", ""), "tcp");
+    EXPECT_EQ(kept[1].value("protocol", ""), "qt_remote_plain");
     EXPECT_EQ(kept[2].value("protocol", ""), "tls_tcp");
 }
 

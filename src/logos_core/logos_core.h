@@ -80,9 +80,6 @@ LOGOS_CORE_EXPORT int logos_core_set_package_config(const char* config_json);
 // the runtime's own modules). These setters are protected input, taken before
 // logos_core_start() only, and return 0 or -1.
 
-// Further transports for it (tcp, tcp_ssl), as a JSON array.
-LOGOS_CORE_EXPORT int logos_core_set_core_service_transports(const char* transports_json);
-
 // Links with other runtimes: peering_module's configuration, a JSON object
 // (logos-peering's docs/api.md). With it, start loads peering_module and
 // peering_identity (both bundled), configures it with this runtime's shell as
@@ -157,8 +154,7 @@ LOGOS_CORE_EXPORT void logos_consumer_release(logos_consumer* consumer);
 //      "modules_dirs": [...], "bundled_modules_dirs": [...],
 //      "persistence_base_path": "...", "module_transports": {"<name>": [...]},
 //      "access_policy": {...}, "placement_policy": {...},
-//      "package_config": {...}, "core_service_transports": [...],
-//      "peering_config": {...}}
+//      "package_config": {...}, "peering_config": {...}}
 // The hooks set with logos_core_set_shutdown_handler, _operator_resolver and
 // _core_service_extension are served here: the runtime forwards each call over
 // its private pipe, and they run on this library's threads. A hook must not
@@ -226,7 +222,8 @@ LOGOS_CORE_EXPORT void logos_core_set_persistence_base_path(const char* path);
 // Must be called BEFORE the module is loaded — for capability_module
 // this means before logos_core_start(); for user modules, before
 // core_service loads them. Modules without an entry continue to
-// inherit the global default.
+// inherit the global default. A set logos-protocol refuses (malformed, or
+// naming tcp or tcp_ssl, removed in 0.15) fails that module's load, with why.
 LOGOS_CORE_EXPORT void logos_core_set_module_transports(const char* module_name,
                                                          const char* transport_set_json);
 

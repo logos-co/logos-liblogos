@@ -129,7 +129,7 @@ on a specific container.
 | **Qt 6** (Core, RemoteObjects) | Event loop, module system, IPC, meta-object system |
 | **Boost** (Process, Asio, Uuid) | Subprocess management, async I/O, and UUID generation |
 | **nlohmann_json** | JSON parsing/serialization (replaces Qt JSON internally) |
-| **OpenSSL** | Required transitively by the SDK's plain-C++ TCP+TLS transport |
+| **OpenSSL** | Required transitively by the plain runtime's tls_tcp sessions |
 | **zstd** | Compression (build dependency) |
 | **spdlog** | Structured logging |
 | **Google Test** | Unit testing framework |
@@ -474,7 +474,7 @@ nix build --override-input logos-cpp-sdk path:../logos-cpp-sdk
 - Qt 6 with Core, Network, and RemoteObjects modules
 - Boost (with Process and Filesystem components)
 - nlohmann_json
-- OpenSSL (transitive: SDK's plain-C++ TCP+TLS transport)
+- OpenSSL (transitive: the plain runtime's tls_tcp sessions)
 - Google Test (fetched via FetchContent if not system-installed)
 
 **Build:**

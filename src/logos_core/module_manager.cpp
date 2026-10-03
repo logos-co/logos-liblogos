@@ -36,6 +36,7 @@
 #include <boost/uuid/uuid_generators.hpp>
 #include <boost/uuid/uuid_io.hpp>
 #include "logos_protocol.h"
+#include "logos_transport_config_json.h"
 #include "dependency_gate.h"
 #include "protocol_gate.h"
 
@@ -367,10 +368,8 @@ namespace {
         return value;
     }
 
-    // Core dials the first transport a module was configured with, as it always
-    // has. A local one is QtRO, which from this process means qt_remote_plain;
-    // tcp and tcp_ssl are dialled as configured, so a module that listens on
-    // nothing else is still reachable.
+    // Core dials a module on its local socket, which from this process means
+    // qt_remote_plain; a configured local transport keeps its other fields.
     std::string plainTransportFor(const std::string& name) {
         nlohmann::json config = nlohmann::json::object();
         std::string configured;
@@ -389,7 +388,6 @@ namespace {
         const auto field = config.find("protocol");
         const std::string protocol = field != config.end() && field->is_string()
             ? field->get<std::string>() : "qt_remote_plain";
-        if (protocol == "tcp" || protocol == "tcp_ssl") return config.dump();
         if (protocol != "local" && protocol != "qt_remote" && protocol != "qt_remote_plain") {
             spdlog::warn("Core cannot use configured transport '{}' for {}; using "
                          "qt_remote_plain", protocol, name);
@@ -973,6 +971,15 @@ namespace {
                 it != moduleTransportsMap().end()) {
                 desc.transportSetJson = it->second;
             }
+        }
+        // Refused here with its reason, not left to the host (tcp since 0.15).
+        if (std::string problem; !desc.transportSetJson.empty()
+            && !logos::parseTransportSet(desc.transportSetJson, nullptr, &problem)) {
+            spdlog::error("Refusing to load module {}: unusable transport set: {}", name, problem);
+            logos::ModuleStateObserver::instance().record(
+                name, logos::module_state::kLoading, logos::module_state::kError,
+                instanceId, std::nullopt, "unusable transport set: " + problem);
+            return false;
         }
 
         // ── Protocol-version load gate ─────────────────────────────────

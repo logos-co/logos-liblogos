@@ -101,12 +101,6 @@ bool beforeStart(const char* setter) {
 }
 } // namespace
 
-int logos_core_set_core_service_transports(const char* transports_json) {
-    if (!beforeStart("logos_core_set_core_service_transports")) return -1;
-    logos::core_service::setTransports(transports_json ? transports_json : "");
-    return 0;
-}
-
 int logos_core_set_shutdown_handler(LogosCoreShutdownHandler handler, void* user_data) {
     if (!beforeStart("logos_core_set_shutdown_handler")) return -1;
     logos::core_service::setShutdownHandler(handler, user_data);
