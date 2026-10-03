@@ -256,12 +256,15 @@ TEST(PeeringLink, AnAppMayExitWithPeeringLive)
     ASSERT_TRUE(installStub(stub.path));
     logos_test::setEnv("PEERING_EXIT_BUNDLED", bundled);
     logos_test::setEnv("PEERING_EXIT_STUB", stub.path.string());
+    // The child overwrites freed memory, so a use after free there faults every time.
+    logos_test::setEnv("MallocScribble", "1");
+    logos_test::setEnv("MALLOC_PERTURB_", "85");
     logos_test::Child child;
     const bool started = child.start(logos_test::thisExecutable().string(),
         {"--gtest_filter=PeeringLinkChild.DISABLED_ExitsWithPeeringLive",
          "--gtest_also_run_disabled_tests"}, true);
-    logos_test::unsetEnv("PEERING_EXIT_BUNDLED");
-    logos_test::unsetEnv("PEERING_EXIT_STUB");
+    for (const char* name : {"PEERING_EXIT_BUNDLED", "PEERING_EXIT_STUB", "MallocScribble", "MALLOC_PERTURB_"})
+        logos_test::unsetEnv(name);
     ASSERT_TRUE(started);
     std::string output;
     char buffer[512];
