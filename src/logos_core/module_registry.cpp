@@ -5,6 +5,7 @@
 #endif
 
 #include "module_registry.h"
+#include "bootstrap_policy.h"
 #include "module_state_observer.h"
 #include <spdlog/spdlog.h>
 #include <cassert>
@@ -279,7 +280,75 @@ void ModuleRegistry::addModulesDir(const std::string& dir) {
 
 std::vector<std::string> ModuleRegistry::modulesDirs() const {
     std::shared_lock lock(m_mutex);
-    return m_modulesDirs;
+    std::vector<std::string> dirs = m_modulesDirs;
+    for (const std::string& dir : m_bundledDirs)
+        if (std::find(dirs.begin(), dirs.end(), dir) == dirs.end()) dirs.push_back(dir);
+    return dirs;
+}
+
+void ModuleRegistry::setBundledModulesDirs(const std::vector<std::string>& dirs) {
+    std::unique_lock lock(m_mutex);
+    m_bundledDirs.clear();
+    for (const std::string& dir : dirs)
+        if (!dir.empty()) m_bundledDirs.push_back(dir);
+}
+
+std::vector<std::string> ModuleRegistry::bundledModulesDirs() const {
+    std::shared_lock lock(m_mutex);
+    return m_bundledDirs;
+}
+
+bool ModuleRegistry::isBundled(const std::string& name) const {
+    std::shared_lock lock(m_mutex);
+    auto it = m_modules.find(name);
+    return it != m_modules.end() && it->second.bundled;
+}
+
+// Once the embedder names its bundled directories, a reserved name comes only
+// from them; before that nothing is bundled and names load as they always did.
+bool ModuleRegistry::admitsRecordLocked(const std::string& name,
+                                        const std::string& modulePath) const {
+    if (m_bundledDirs.empty() || !logos::bootstrap::isReservedName(name)
+        || isUnderBundledDirLocked(modulePath))
+        return true;
+    spdlog::error("Refusing module {}: '{}' is reserved for the runtime's bundled modules",
+                  modulePath, name);
+    return false;
+}
+
+// A loaded module keeps the image it runs from until it unloads.
+bool ModuleRegistry::keepsLoadedRecordLocked(const ModuleInfo& info, const std::string& name,
+                                             const std::string& modulePath) const {
+    if (!info.loaded || info.path.empty() || info.path == modulePath) return false;
+    spdlog::warn("Module {} is loaded from {}; ignoring {} until it unloads", name, info.path,
+                 modulePath);
+    return true;
+}
+
+// Inside a bundled directory as scanned, or once resolved: a bundle may be a
+// symlink farm (a nix buildEnv) whose links point outside it.
+bool ModuleRegistry::isUnderBundledDirLocked(const std::string& path) const {
+    namespace fs = std::filesystem;
+    auto contains = [](fs::path root, const fs::path& file) {
+        if (!root.has_filename()) root = root.parent_path();
+        const fs::path rel = file.lexically_relative(root);
+        return !rel.empty() && *rel.begin() != ".." && *rel.begin() != ".";
+    };
+    std::error_code error;
+    const fs::path given = fs::absolute(fs::path(path), error);
+    // `..` would let the text say one directory and the filesystem another.
+    const bool lexical = !error && std::none_of(given.begin(), given.end(),
+                                                [](const fs::path& part) { return part == ".."; });
+    const fs::path resolved = fs::weakly_canonical(fs::path(path), error);
+    const bool canonical = !error;
+    for (const std::string& dir : m_bundledDirs) {
+        std::error_code dirError;
+        const fs::path root = fs::absolute(fs::path(dir), dirError).lexically_normal();
+        if (lexical && !dirError && contains(root, given.lexically_normal())) return true;
+        const fs::path canonicalRoot = fs::weakly_canonical(fs::path(dir), dirError);
+        if (canonical && !dirError && contains(canonicalRoot, resolved)) return true;
+    }
+    return false;
 }
 
 void ModuleRegistry::discoverInstalledModules() {
@@ -310,15 +379,44 @@ void ModuleRegistry::discoverInstalledModules() {
             knownBefore.insert(name);
     }
 
+    // Bundled directories scan first, so among equals the last-scanned (user)
+    // copy still wins, as before; reserved names are settled below.
+    std::vector<std::string> scanDirs = m_bundledDirs;
+    for (const std::string& dir : m_modulesDirs)
+        if (std::find(scanDirs.begin(), scanDirs.end(), dir) == scanDirs.end())
+            scanDirs.push_back(dir);
+
     PackageManagerLib& pm = packageManagerInstance();
-    if (!m_modulesDirs.empty()) {
-        pm.setEmbeddedModulesDirectory(m_modulesDirs.front());
-        for (std::size_t i = 1; i < m_modulesDirs.size(); ++i) {
-            pm.addEmbeddedModulesDirectory(m_modulesDirs[i]);
+    if (!scanDirs.empty()) {
+        pm.setEmbeddedModulesDirectory(scanDirs.front());
+        for (std::size_t i = 1; i < scanDirs.size(); ++i) {
+            pm.addEmbeddedModulesDirectory(scanDirs[i]);
         }
     }
 
     std::vector<InstalledPackage> modules = pm.getInstalledModules();
+
+    // A reserved name that a user directory also provides resolves to the
+    // bundled copy; one no bundled directory provides is refused below.
+    if (!m_bundledDirs.empty()) {
+        PackageManagerLib bundledPm;
+        bundledPm.setEmbeddedModulesDirectory(m_bundledDirs.front());
+        for (std::size_t i = 1; i < m_bundledDirs.size(); ++i)
+            bundledPm.addEmbeddedModulesDirectory(m_bundledDirs[i]);
+        std::unordered_map<std::string, InstalledPackage> bundled;
+        for (InstalledPackage& mod : bundledPm.getInstalledModules())
+            bundled[mod.name] = std::move(mod);
+        for (InstalledPackage& mod : modules) {
+            if (!logos::bootstrap::isReservedName(mod.name)
+                || isUnderBundledDirLocked(mod.mainFilePath))
+                continue;
+            if (auto it = bundled.find(mod.name); it != bundled.end()) {
+                spdlog::warn("Ignoring {} for reserved module {}: using the bundled {}",
+                             mod.mainFilePath, mod.name, it->second.mainFilePath);
+                mod = it->second;
+            }
+        }
+    }
 
     // Collect names seen in this scan. Used after the upsert loop to prune
     // entries for modules whose files disappeared (typical path: the user
@@ -448,8 +546,11 @@ std::string ModuleRegistry::processModuleInternal(const std::string& modulePath,
             spdlog::warn("Rejecting module with invalid name '{}' from {}", name, modulePath);
             return {};
         }
+        if (!admitsRecordLocked(name, modulePath)) return {};
         ModuleInfo& info = m_modules[name];
+        if (keepsLoadedRecordLocked(info, name, modulePath)) return name;
         info.path = modulePath;
+        info.bundled = isUnderBundledDirLocked(modulePath);
         info.format = transportName == "qt_remote_plain" ? "native-cdylib" : "qt-plugin";
         info.metadataJson = sidecar->dump();
         info.version = stringField(*sidecar, "version");
@@ -497,10 +598,14 @@ std::string ModuleRegistry::processModuleInternal(const std::string& modulePath,
         return {};
     }
 
+    if (!admitsRecordLocked(name, modulePath)) return {};
+
     // Update module info in place so re-discovery preserves the loaded flag
     // (and any other state that lives on ModuleInfo).
     ModuleInfo& info = m_modules[name];
+    if (keepsLoadedRecordLocked(info, name, modulePath)) return name;
     info.path = modulePath;
+    info.bundled = isUnderBundledDirLocked(modulePath);
     info.format = "qt-plugin";
     info.metadataJson = metadata->dump();
     info.version = stringField(*metadata, "version");
@@ -874,5 +979,6 @@ void ModuleRegistry::clearLoaded() {
 void ModuleRegistry::clear() {
     std::unique_lock lock(m_mutex);
     m_modulesDirs.clear();
+    m_bundledDirs.clear();
     m_modules.clear();
 }
