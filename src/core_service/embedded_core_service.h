@@ -26,6 +26,18 @@ void setShellIdentity(const std::string& name);
 std::string shellIdentity();
 void resetConfiguration();
 
+// The embedder's hooks, for a runtime it spawns to forward to.
+struct Hooks {
+    ShutdownHandler shutdown = nullptr;
+    void* shutdownData = nullptr;
+    OperatorResolver operators = nullptr;
+    void* operatorData = nullptr;
+    Extension extension = nullptr;
+    std::string extensionMethods = "[]";
+    void* extensionData = nullptr;
+};
+Hooks hooks();
+
 // Publishes it, after capability_module; stop() withdraws it.
 bool start();
 void stop();

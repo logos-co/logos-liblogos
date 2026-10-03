@@ -99,6 +99,28 @@ Each module runs in its own process for isolation:
 - Modules can be written in different languages as long as they implement the RPC protocol
 - Alternative containers (Docker, in-process) and loaders (WASM, Extism) can be composed and registered
 
+An app can also run the runtime in a process of its own. It spawns `logos_runtime`
+(`logos_runtime_spawn`), which holds liblogos_core, core_service, capability_module
+and modules_state, and then acts only as its shell:
+
+```
+┌─ App (Basecamp, logosctl -D, ...) ─────────┐
+│  shell binding: module calls, as the shell │
+└──────┬──────────────────────┬──────────────┘
+       │ private pipe         │ local socket
+┌──────▼──────────────────────▼──────────────┐
+│  logos_runtime                             │
+│  core_service · capability_module ·        │
+│  modules_state                             │
+└──────┬──────────────┬──────────────┬───────┘
+       ▼              ▼              ▼
+ package_manager package_downloader  other module hosts
+```
+
+The private pipe is the runtime's stdin and stdout: the configuration, the shell's
+credential and the embedder's hooks cross it, one JSON object per line. The package
+modules, which download and unpack packages, always run in hosts of their own.
+
 ### Token-Based Authentication
 
 Since the remote object registry has no built-in security mechanisms, all RPC calls require an authentication token. This is transparent to module developers when using the SDK:
@@ -254,14 +276,15 @@ The embedder's configuration before start, the runtime's lifecycle, and the shel
 | `logos_core_init(argc, argv)` | Initialize global state. |
 | `logos_core_add_modules_dir(path)` | Add a module directory to scan (duplicates ignored). |
 | `logos_core_set_bundled_modules_dirs(dirs)` | The directories the embedder ships its own modules in; reserved names resolve only from them, and capability_module must be among them. Before start only. |
-| `logos_core_set_placement_policy(json)` | Where modules run: `subprocess` or `inproc`. Before start only. |
+| `logos_core_set_placement_policy(json)` | Where modules run: `subprocess` or `inproc`. capability_module runs only in-process, and package_manager and package_downloader never do. Before start only. |
 | `logos_core_set_package_config(json)` | package_manager's directories, keyring and signature policy, applied as it loads. Before start only. |
 | `logos_core_set_persistence_base_path(path)` | Where each module's instance persistence lives. |
 | `logos_core_set_module_transports(name, json)` | Register a per-module `LogosTransportSet` for the named module; the loader forwards it to the child via `--transport-set`. Before that module loads. NULL or empty clears it. |
 | `logos_core_set_access_policy(json)` | Install the inter-module access policy (`version`, `mode`, `restrictions`). Only `mode: "enforce"` activates gating. Under it the core also derives restrictions from the dependency graph — a module may only call modules it declared, so each loaded target admits its loaded dependents plus `core`, `core_service` and the shell — and an explicit `restrictions` entry overrides the derived set verbatim. The core hands capability_module the whole policy as one document through its engine interface, on every load and unload; capability_module then refuses to mint a token for a caller a target does not list, and revokes the pairs a new policy denies. NULL or empty clears it. |
 | `logos_core_set_core_service_transports`, `logos_core_set_shutdown_handler`, `logos_core_set_operator_resolver`, `logos_core_set_core_service_extension` | core_service's further transports, the embedder's shutdown handler, its operators, and methods of its own. Before start only. |
 | `logos_core_set_shell_identity(name)` | The embedder's own identity. Before start only. |
-| `logos_core_start()` | Scan the module directories, load capability_module (the token authority), publish core_service, load modules_state, prepare the shell binding. Without capability_module in-process there is no authority: it logs why and publishes nothing, and nothing loads. |
+| `logos_core_start()` | Scan the module directories, load capability_module (the token authority), publish core_service, load modules_state, prepare the shell binding. Without capability_module in-process there is no authority: it logs why and publishes nothing, and nothing loads. Refused in a process that spawned its runtime. |
+| `logos_runtime_spawn(json, &error)`, `logos_runtime_binding`, `logos_runtime_process_module`, `logos_runtime_on_exit`, `logos_runtime_stop` | The runtime in a process of its own, instead of `logos_core_start()`: spawn `logos_runtime` with the configuration the setters take, reach it through the shell's binding over the local socket, register a module file there, hear of an exit nobody asked for, and stop it. The hooks set before are served over its private pipe. |
 | `logos_core_take_shell_binding()`, `logos_consumer_*` | The shell's binding, once, after start: calls, async calls and subscriptions as the shell identity. |
 | `logos_core_process_module(path) → char*` | Read a module file's metadata and register it as known without loading. Returns the module name or NULL; free with `delete[]`. |
 | `logos_core_cleanup()` | Unload all modules, stop processes, clean up global state. |
