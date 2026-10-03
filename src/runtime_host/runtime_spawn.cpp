@@ -333,7 +333,13 @@ bool spawned()
 struct logos_runtime {
     std::shared_ptr<logos::runtime_host::Runtime> state;
     logos_consumer* binding = nullptr;
+    bool embedded = false; // runs in this process: no state, no pipe
 };
+
+namespace {
+// Its images stay mapped once it ran: a process runs one runtime, once.
+std::atomic<bool> g_embedded{false};
+} // namespace
 
 extern "C" {
 
@@ -347,12 +353,15 @@ logos_runtime* logos_runtime_spawn(const char* config_json, char** out_error)
         if (out_error) *out_error = lp_string_copy(why.c_str());
         return nullptr;
     };
+#ifdef LOGOS_CORE_NO_SUBPROCESS
+    return fail("this build creates no process: embed the runtime (logos_runtime_embed)");
+#endif
     json config = json::parse(config_json ? config_json : "", nullptr, false);
     if (!config.is_object()) return fail("the configuration is not a JSON object");
     const std::string shell = textOf(config, "shell");
     if (!logos::isValidModuleName(shell) || logos::bootstrap::rowFor(shell))
         return fail("'" + shell + "' is not a shell name");
-    if (ModuleManager::started()) return fail("this process already runs a runtime itself");
+    if (ModuleManager::started() || g_embedded) return fail("this process already runs a runtime itself");
     if (logos::runtime_host::g_spawned.exchange(true))
         return fail("this process already spawned a runtime");
     auto failSpawn = [&](const std::string& why) {
@@ -428,6 +437,34 @@ logos_runtime* logos_runtime_spawn(const char* config_json, char** out_error)
     return new logos_runtime{rt, binding};
 }
 
+logos_runtime* logos_runtime_embed(const char* config_json, char** out_error)
+{
+    if (out_error) *out_error = nullptr;
+    logos::initLogging();
+    auto fail = [&](const std::string& why) -> logos_runtime* {
+        runtimeLog().error("logos_runtime_embed: {}", why);
+        if (out_error) *out_error = lp_string_copy(why.c_str());
+        return nullptr;
+    };
+    const json config = json::parse(config_json ? config_json : "", nullptr, false);
+    if (!config.is_object()) return fail("the configuration is not a JSON object");
+    if (config.contains("hooks"))
+        return fail("an embedded runtime serves its hooks in place: set them with logos_core_set_*");
+    if (logos::runtime_host::spawned()) return fail("this process already spawned a runtime");
+    if (ModuleManager::started() || g_embedded.exchange(true))
+        return fail("a process runs one runtime, once, and this one already ran it");
+    std::string error;
+    if (!logos::runtime_host::configure(config.dump(), error)) return fail(error);
+    logos_core_start();
+    logos_consumer* shell = logos_core_take_shell_binding();
+    if (!shell) {
+        logos_core_cleanup();
+        return fail("there is no token authority, so it could not admit its shell (its log says why)");
+    }
+    runtimeLog().info("the runtime runs in this process for '{}'", logos_consumer_name(shell));
+    return new logos_runtime{nullptr, shell, true};
+}
+
 logos_consumer* logos_runtime_binding(logos_runtime* runtime)
 {
     return runtime ? runtime->binding : nullptr;
@@ -436,6 +473,12 @@ logos_consumer* logos_runtime_binding(logos_runtime* runtime)
 char* logos_runtime_process_module(logos_runtime* runtime, const char* module_path)
 {
     if (!runtime || !module_path || !*module_path) return nullptr;
+    if (runtime->embedded) {
+        char* name = logos_core_process_module(module_path);
+        const std::string text = name ? name : "";
+        delete[] name;
+        return text.empty() ? nullptr : lp_string_copy(text.c_str());
+    }
     const auto reply = logos::runtime_host::call(
         runtime->state, {{"op", "process_module"}, {"path", module_path}});
     const std::string name = reply ? textOf(*reply, "text") : std::string{};
@@ -444,7 +487,8 @@ char* logos_runtime_process_module(logos_runtime* runtime, const char* module_pa
 
 void logos_runtime_on_exit(logos_runtime* runtime, logos_runtime_exit_cb cb, void* user_data)
 {
-    if (!runtime) return;
+    // Embedded, it does not exit on its own.
+    if (!runtime || runtime->embedded) return;
     auto& rt = *runtime->state;
     std::string reason;
     {
@@ -464,6 +508,12 @@ void logos_runtime_on_exit(logos_runtime* runtime, logos_runtime_exit_cb cb, voi
 void logos_runtime_stop(logos_runtime* runtime)
 {
     if (!runtime) return;
+    if (runtime->embedded) {
+        logos_consumer_release(runtime->binding);
+        logos_core_cleanup();
+        delete runtime;
+        return;
+    }
     logos::shell_binding::release(runtime->binding);
     logos::runtime_host::stopProcess(runtime->state);
     logos::runtime_host::stopWorkers(runtime->state);

@@ -19,11 +19,13 @@ struct lp_provider;
 namespace LogosCore {
 
 // The embedder's placement policy: {"default":"subprocess"|"inproc",
-// "modules":{"<name>":"subprocess"|"inproc"}, "single_process":bool}.
+// "modules":{"<name>":"subprocess"|"inproc"}, "single_process":bool,
+// "local_endpoints":bool}.
 struct PlacementPolicy {
     bool defaultInProcess = false;
     std::unordered_map<std::string, bool> modules; // name -> in-process
     bool singleProcess = false;                    // every module in-process, or it does not load
+    bool localEndpoints = true;                    // false (single_process only): inproc alone, no local socket
 };
 
 bool parsePlacementPolicy(const std::string& json, PlacementPolicy& out, std::string& error);

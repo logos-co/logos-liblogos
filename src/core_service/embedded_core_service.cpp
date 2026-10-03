@@ -880,7 +880,9 @@ bool start()
         spdlog::error("core_service: capability_module refused to admit it");
         return false;
     }
-    json transports = json::array({{{"protocol", "inproc"}}, {{"protocol", "qt_remote_plain"}}});
+    json transports = json::array({{{"protocol", "inproc"}}});
+    if (ModuleManager::placementPolicy().localEndpoints)
+        transports.push_back({{"protocol", "qt_remote_plain"}});
     {
         std::lock_guard<std::mutex> lock(config().mutex);
         const json extra = json::parse(config().transports.empty() ? "[]" : config().transports,

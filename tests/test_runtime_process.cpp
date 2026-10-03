@@ -289,6 +289,51 @@ protected:
     }
 };
 
+// Embedded (iOS spawns nothing): the stand-in app runs the runtime itself, so
+// each case is a process of its own. Its sockets would be in its TMPDIR.
+static std::string embedIn(const std::filesystem::path& tmp, const json& config, StandInApp& app)
+{
+    std::filesystem::remove_all(tmp);
+    std::filesystem::create_directories(tmp);
+    SavedEnv tmpdir{"TMPDIR"};
+    logos_test::setEnv("TMPDIR", tmp.string());
+    app.start(config.dump(), {"embed"});
+    return app.output;
+}
+
+TEST_F(RuntimeProcessTest, AnEmbeddedRuntimeRunsInTheAppsProcessOnceWithNoLocalSocket)
+{
+    const auto tmp = std::filesystem::temp_directory_path()
+        / ("embed-" + std::to_string(logos_test::currentPid()));
+    StandInApp app;
+    const std::string out = embedIn(
+        tmp, config({{"placement_policy", {{"single_process", true}, {"local_endpoints", false}}}}), app);
+    EXPECT_NE(out.find("READY"), std::string::npos) << out;
+    EXPECT_NE(out.find("\"capability_module\""), std::string::npos) << out;
+    EXPECT_NE(out.find("SOCKETS 0"), std::string::npos) << out;
+#ifndef _WIN32
+    EXPECT_NE(out.find("CHILDREN 0"), std::string::npos) << out;
+#endif
+    EXPECT_NE(out.find("SECOND_EMBED refused"), std::string::npos) << out;
+    EXPECT_NE(out.find("SPAWN_AFTER refused"), std::string::npos) << out;
+
+    // The count means something: with its local endpoints, it binds them there.
+    StandInApp withSockets;
+    const std::string bound = embedIn(tmp, config({{"placement_policy", {{"single_process", true}}}}),
+                                      withSockets);
+    EXPECT_NE(bound.find("READY"), std::string::npos) << bound;
+    EXPECT_EQ(bound.find("SOCKETS 0"), std::string::npos) << bound;
+    std::filesystem::remove_all(tmp);
+}
+
+TEST_F(RuntimeProcessTest, AnAppMayExitWithItsEmbeddedRuntimeLive)
+{
+    const json placement = {{"single_process", true}, {"local_endpoints", false}};
+    StandInApp app;
+    ASSERT_TRUE(app.start(config({{"placement_policy", placement}}).dump(), {"embed-exit"})) << app.output;
+    EXPECT_EQ(app.child.wait(std::chrono::seconds(30)), 1) << "a negative code is the signal that ended it";
+}
+
 TEST_F(RuntimeProcessTest, TheShellReachesItsRuntimeOnlyThroughModuleCalls)
 {
     ASSERT_EQ(logos_core_set_operator_resolver(&testOperators, nullptr), 0);

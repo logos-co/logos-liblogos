@@ -600,6 +600,11 @@ int run()
 
 } // namespace
 
+bool logos::runtime_host::configure(const std::string& configJson, std::string& error)
+{
+    return ::configure(json::parse(configJson, nullptr, false), error);
+}
+
 int logos_runtime_host_main(int argc, char* argv[])
 {
     for (int i = 1; i < argc; ++i) {
