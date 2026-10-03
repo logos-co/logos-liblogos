@@ -14,6 +14,7 @@
 #include <spdlog/spdlog.h>
 
 #include <condition_variable>
+#include <cstdlib>
 #include <deque>
 #include <functional>
 #include <map>
@@ -50,10 +51,11 @@ struct State {
     bool stopping = false;
 };
 
+// Never destroyed: with the runtime live at exit, its worker still waits on it.
 State& state()
 {
-    static State s;
-    return s;
+    static State* const s = new State;
+    return *s;
 }
 
 json call(const std::string& method, const json& args)
@@ -88,6 +90,24 @@ void run()
         job();
         lock.lock();
     }
+}
+
+// With the runtime live at exit, the worker stops before the statics its jobs use
+// are destroyed; registered once start() has used them.
+void stopWorkerAtExit()
+{
+    State& s = state();
+    std::thread worker;
+    {
+        std::lock_guard<std::mutex> lock(s.mutex);
+        s.stopping = true;
+        s.jobs.clear();
+        worker = std::move(s.worker);
+    }
+    s.wake.notify_all();
+    if (!worker.joinable()) return;
+    if (worker.get_id() == std::this_thread::get_id()) worker.detach();
+    else worker.join();
 }
 
 // What the registry knows a facade by: the import's name, a universal plain
@@ -362,6 +382,8 @@ void start()
     const auto runtimeControl = config.find("runtime_control");
     if (runtimeControl != config.end() && runtimeControl->is_boolean() && runtimeControl->get<bool>())
         startRuntimeControlEndpoint(config);
+    static const bool stopsAtExit = std::atexit(stopWorkerAtExit) == 0;
+    (void)stopsAtExit;
     // Facades load in the background: the runtime's ready line never waits on a peer.
     post(refreshImports);
 }

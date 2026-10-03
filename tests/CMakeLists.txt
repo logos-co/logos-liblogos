@@ -114,3 +114,14 @@ foreach(_fixture dep_range_fixture dep_malformed_fixture)
 endforeach()
 
 gtest_discover_tests(logos_core_tests DISCOVERY_MODE PRE_TEST)
+
+# The stand-in peering_module PeeringLink.AnAppMayExitWithPeeringLive bundles.
+if(NOT WIN32)
+    add_library(peering_stub_module MODULE fixtures/peering_stub_module.cpp)
+    target_include_directories(peering_stub_module PRIVATE
+        ${LOGOS_PROTOCOL_ROOT}/include ${LOGOS_PROTOCOL_ROOT}/include/cpp)
+    set_target_properties(peering_stub_module PROPERTIES
+        PREFIX "" SUFFIX ".fixture"
+        LIBRARY_OUTPUT_DIRECTORY "${CMAKE_CURRENT_BINARY_DIR}/../lib")
+    add_dependencies(logos_core_tests peering_stub_module)
+endif()
