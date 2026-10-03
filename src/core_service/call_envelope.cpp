@@ -4,6 +4,19 @@
 
 namespace logos::core_service {
 
+namespace {
+
+nlohmann::json methodNotFound(const std::string& module, const std::string& method,
+                              const std::vector<std::string>& names)
+{
+    return {{"status", "error"},
+            {"code", "METHOD_NOT_FOUND"},
+            {"message", "Method '" + method + "' not found on module '" + module + "'."},
+            {"available_methods", names}};
+}
+
+} // namespace
+
 bool dispatchRejection(const nlohmann::json& value, CallFailure& out)
 {
     if (!value.is_object() || value.size() != 3) return false;
@@ -22,6 +35,10 @@ nlohmann::json callEnvelope(const std::string& module, const std::string& method
 {
     nlohmann::json result = nlohmann::json::object();
     if (failure.ok()) dispatchRejection(returned, failure);
+    // The provider refused the NAME: the same envelope as the null-return rescue below.
+    if (failure.code == "unknown_method")
+        return methodNotFound(module, method,
+                              listMethods ? listMethods() : std::vector<std::string>{});
     if (!failure.ok()) {
         result["status"] = "error";
         result["code"] = "METHOD_FAILED";
@@ -31,16 +48,12 @@ nlohmann::json callEnvelope(const std::string& module, const std::string& method
                            {"origin", failure.origin}};
         return result;
     }
-    // Null is also what a void method returns; only the module's own list can say.
+    // A module built before providers refused unknown names answers one with a
+    // bare null, as a void method does; only the module's own list can say.
     if (returned.is_null() && listMethods) {
         const std::vector<std::string> names = listMethods();
-        if (!names.empty() && std::find(names.begin(), names.end(), method) == names.end()) {
-            result["status"] = "error";
-            result["code"] = "METHOD_NOT_FOUND";
-            result["message"] = "Method '" + method + "' not found on module '" + module + "'.";
-            result["available_methods"] = names;
-            return result;
-        }
+        if (!names.empty() && std::find(names.begin(), names.end(), method) == names.end())
+            return methodNotFound(module, method, names);
     }
     result["status"] = "ok";
     result["module"] = module;
