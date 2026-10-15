@@ -221,7 +221,7 @@ boundary: during processing (`ModuleRegistry::processModuleInternal`) a module w
 
 `LOGOS_LOAD_REQUIRED_AND_OPTIONAL` expands the closure instead of merely ordering it (`DependencyResolver::OptionalLoad::BestEffort`): every optional dependency that is INSTALLED is loaded too, ordered ahead of the module that names it. It is transitive — an optional dependency brings its own required tree with it, and its own optional edges are considered in turn.
 
-Best effort in all three directions, and none of them changes the return value: one that is not installed is skipped silently, one that is installed but fails to load is logged and stepped over, and a branch whose own REQUIRED dependencies are not all installed is left out whole rather than half-loaded. `logos_core_optional_load_report(name)` returns, as JSON, which optional dependencies would be left out and why (`not_installed` or `unsatisfiable`).
+Best effort in all three directions, and none of them changes the return value: one that is not installed is skipped with a single `info` line (only when the load brings up the module naming it), one that is installed but fails to load is logged and stepped over, and a branch whose own REQUIRED dependencies are not all installed is left out whole rather than half-loaded. `logos_core_optional_load_report(name)` returns, as JSON, which optional dependencies would be left out and why (`not_installed` or `unsatisfiable`).
 
 ### Process Monitoring
 

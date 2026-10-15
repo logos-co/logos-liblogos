@@ -1279,6 +1279,19 @@ namespace ModuleManager {
             return false;
         }
 
+        // One line per optional dependency left out, only when this call brings up the
+        // module naming it: an "ensure loaded" of a running module stays quiet.
+        for (const auto& skipped : resolved.skippedOptional) {
+            if (registryInstance().isLoaded(skipped.namedBy))
+                continue;
+            if (skipped.detail.empty())
+                spdlog::info("Optional dependency '{}' of '{}' is not installed; loading without it",
+                             skipped.module, skipped.namedBy);
+            else
+                spdlog::info("Optional dependency '{}' of '{}' needs '{}', which is not installed; "
+                             "loading without it", skipped.module, skipped.namedBy, skipped.detail);
+        }
+
         bool allSucceeded = true;
         for (const std::string& moduleName : resolved.order) {
             if (loadModuleInternal(moduleName.c_str()))
