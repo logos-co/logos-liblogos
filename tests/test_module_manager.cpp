@@ -4,12 +4,16 @@
 #include "logos_core/module_state_observer.h"
 #include "qt_test_adapter.h"
 #include <nlohmann/json.hpp>
+#include <spdlog/sinks/ostream_sink.h>
+#include <spdlog/spdlog.h>
 #include <algorithm>
 #include <cstdlib>
 #include <cstring>
 #include <filesystem>
 #include <fstream>
+#include <memory>
 #include <set>
+#include <sstream>
 #include <string>
 #include <vector>
 
@@ -465,6 +469,39 @@ TEST_F(ModuleManagerTest, BestEffort_TheSameFailureIsStillFatalForARequiredDepen
     EXPECT_EQ(logos_core_load_module("app", LOGOS_LOAD_REQUIRED_AND_OPTIONAL), 0)
         << "a REQUIRED dependency failing must still fail the load, even when "
            "best-effort optional loading is asked for";
+}
+
+// An absent optional dependency is one info line, visible at the default
+// level, and none when the module naming it is already up.
+TEST_F(ModuleManagerTest, BestEffort_AnAbsentOptionalDependencyIsOneInfoLine) {
+    std::ostringstream captured;
+    auto capture = std::make_shared<spdlog::logger>(
+        "capture", std::make_shared<spdlog::sinks::ostream_sink_mt>(captured));
+    capture->set_pattern("%l %v");
+    capture->set_level(spdlog::level::info);
+    const auto previous = spdlog::default_logger();
+    spdlog::set_default_logger(capture);
+
+    logos_core_register_module("app", "/fake/app");
+    const char* optApp[] = {"ghost"};
+    logos_core_register_module_optional_dependencies("app", optApp, 1);
+    // /fake/app has no plugin, so this load fails; the line comes before it.
+    logos_core_load_module("app", LOGOS_LOAD_REQUIRED_AND_OPTIONAL);
+    const std::string first = captured.str();
+
+    captured.str("");
+    logos_core_mark_module_loaded("app");
+    EXPECT_EQ(logos_core_load_module("app", LOGOS_LOAD_REQUIRED_AND_OPTIONAL), 1);
+    const std::string repeat = captured.str();
+
+    spdlog::set_default_logger(previous);
+
+    const std::string line =
+        "info Optional dependency 'ghost' of 'app' is not installed; loading without it\n";
+    EXPECT_NE(first.find(line), std::string::npos) << first;
+    EXPECT_EQ(first.find("ghost"), first.rfind("ghost")) << "one line, not one per round: " << first;
+    EXPECT_EQ(repeat.find("ghost"), std::string::npos)
+        << "an already-loaded module's skip is not news: " << repeat;
 }
 
 // =============================================================================

@@ -177,10 +177,10 @@ LOGOS_CORE_EXPORT char** logos_core_get_module_dependencies(const char* module_n
 LOGOS_CORE_EXPORT char** logos_core_get_module_dependents(const char* module_name, bool recursive);
 
 // Return the modules `module_name` declares as OPTIONAL dependencies: concrete
-// modules it can call but does not require. They are never auto-loaded, their
-// absence is not a load failure, and unloading one does not take its dependents
-// down — so unlike the two accessors above there is no `recursive` form. An
-// optional edge says nothing about what lies beyond it.
+// modules it can call but does not require. Only LOGOS_LOAD_REQUIRED_AND_OPTIONAL
+// loads them, their absence is not a load failure, and unloading one does not
+// take its dependents down — so unlike the two accessors above there is no
+// `recursive` form. An optional edge says nothing about what lies beyond it.
 // Unknown names yield a zero-length array (just a trailing NULL).
 // Returns a null-terminated array of module names that must be freed by the caller.
 LOGOS_CORE_EXPORT char** logos_core_get_module_optional_dependencies(const char* module_name);
