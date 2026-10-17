@@ -1,9 +1,13 @@
 #include "logos_core.h"
 #include "logging/logos_log.h"
 #include "module_manager.h"
-#include <logos_instance.h>
 #include <process_stats/process_stats.h>
-#include "token_manager.h"
+#include "logos_protocol.h"
+#include <atomic>
+#include <chrono>
+#include <random>
+#include <cstdint>
+#include <cstdio>
 #include <cstdlib>
 #include <cstring>
 #include <string>
@@ -20,10 +24,32 @@ void logos_core_add_modules_dir(const char* modules_dir) {
     ModuleManager::addModulesDir(modules_dir);
 }
 
+namespace {
+void ensureInstanceId() {
+    if (const char* current = std::getenv("LOGOS_INSTANCE_ID"); current && *current)
+        return;
+    // Twelve hex digits, as the Qt runtime's LogosInstance::id() made them:
+    // the id is in every socket path, and macOS caps those at 104 bytes.
+    std::random_device random;
+    const std::uint64_t bits = (static_cast<std::uint64_t>(random()) << 32 | random())
+        ^ static_cast<std::uint64_t>(std::chrono::steady_clock::now().time_since_epoch().count());
+    char text[13];
+    std::snprintf(text, sizeof text, "%012llx",
+                  static_cast<unsigned long long>(bits & 0xffffffffffffULL));
+    const std::string value = text;
+#ifdef _WIN32
+    _putenv_s("LOGOS_INSTANCE_ID", value.c_str());
+#else
+    ::setenv("LOGOS_INSTANCE_ID", value.c_str(), 1);
+#endif
+}
+}
+
 void logos_core_start() {
     logos::initLogging();
-    LogosInstance::id();
-    // Before anything dials: this thread becomes the owner of every client.
+    // Hosts inherit this value and therefore publish at the endpoint the
+    // parent-side plain clients derive independently.
+    ensureInstanceId();
     ModuleManager::anchorCoreApi();
     ModuleManager::discoverInstalledModules();
     ModuleManager::initializeCapabilityModule();
@@ -108,12 +134,18 @@ char* logos_core_process_module(const char* module_path) {
 char* logos_core_get_token(const char* key) {
     if (!key) { logos::logger("core").critical("logos_core_get_token: key must not be null"); std::abort(); }
 
-    std::string token = TokenManager::instance().getToken(std::string(key));
+    char* stored = lp_token_get(key);
+    std::string token = stored ? stored : "";
+    lp_string_free(stored);
     if (token.empty()) return nullptr;
 
     char* result = new char[token.size() + 1];
     memcpy(result, token.c_str(), token.size() + 1);
     return result;
+}
+
+void logos_core_set_token_listener(LogosCoreTokenListener listener, void* user_data) {
+    ModuleManager::setTokenListener(listener, user_data);
 }
 
 char* logos_core_get_module_stats() {

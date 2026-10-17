@@ -121,22 +121,12 @@ typedef enum {
 // waits and is then answered by the "already loaded" no-op above, so it never
 // starts a second host.
 //
-// A load may NOT be started from inside one, even on the same thread: it is
-// refused and answers 0 (or 1 if that module is already up). This is reachable
-// without threads — a call out to capability_module spins a nested Qt event
-// loop, so a load posted with a queued connection can be delivered inside one
-// already running. Proceeding would take the fleet lock recursively, which is
-// undefined behaviour; the single lock this replaced deadlocked outright.
+// A load may NOT be started recursively from inside one on the same thread: it
+// is refused and answers 0 (or 1 if that module is already up). Proceeding
+// would take the fleet lock recursively, which is undefined behaviour.
 //
-// Which thread. Core's outbound calls all run on the thread that called
-// logos_core_start() — inline when you are that thread, posted to it when you
-// are not — so a load off it neither strands Qt objects on a dying worker nor
-// deadlocks against the owner. Two consequences for an off-thread caller:
-// the capability-module registration and the readiness watch complete
-// ASYNCHRONOUSLY after the call returns, and they need the owner thread to be
-// running its event loop. A caller that needs the registration to have
-// happened before it proceeds should load from the owner thread, where it
-// still runs inline and in order.
+// Core's Qt-free clients own their I/O threads. Calls from different threads
+// are safe; policy and token updates are serialized internally.
 LOGOS_CORE_EXPORT int logos_core_load_module(const char* module_name, LogosLoadDeps deps);
 
 // Which optional dependencies LOGOS_LOAD_REQUIRED_AND_OPTIONAL would leave out
@@ -210,6 +200,15 @@ LOGOS_CORE_EXPORT char* logos_core_process_module(const char* module_path);
 // Returns the token value if found, NULL if not found
 // The returned string must be freed by the caller
 LOGOS_CORE_EXPORT char* logos_core_get_token(const char* key);
+
+// Reports every token core saves (one per loaded module) and replays the ones
+// already saved when installed. Core is Qt-free and no longer shares a Qt
+// embedder's TokenManager, so an embedder that calls modules through its own
+// LogosAPI mirrors them there. Calls are serialized and must not call back
+// into core; once NULL is installed, none is running or will run.
+typedef void (*LogosCoreTokenListener)(const char* key, const char* token, void* user_data);
+LOGOS_CORE_EXPORT void logos_core_set_token_listener(LogosCoreTokenListener listener,
+                                                     void* user_data);
 
 // Get module statistics (CPU and memory usage) for all loaded modules
 // Returns a JSON string containing array of module stats, NULL on error

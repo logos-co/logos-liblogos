@@ -6,9 +6,8 @@
 #include <vector>
 
 // Dependency version-range load gate: the decision only. Its inputs are
-// decoded by logos-module (ModuleLib::ModuleMetadata) and mapped onto the
-// types below in module_registry.cpp, the Qt-aware TU -- this header stays
-// std-only.
+// decoded from the module metadata sidecar (or by the compatibility host for a
+// current Qt plugin) and mapped onto the types below in module_registry.cpp.
 //
 // Like the protocol gate this is a COMPATIBILITY control, not a security one:
 // range and installed version are both self-asserted plugin metadata. The
