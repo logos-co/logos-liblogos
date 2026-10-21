@@ -4,32 +4,30 @@ release: ""
 
 intro: |
   `logos-liblogos` is the core of the Logos platform — `logos_host` and the
-  `liblogos_core` C API that every frontend (the `logoscore` CLI, the basecamp
+  `liblogos_core` C API that every frontend (the `logosctl` CLI, the basecamp
   desktop app) builds on. This doc-test exercises **this** liblogos commit
-  end-to-end through the headless `logoscore` runtime:
+  end-to-end through the headless `logosctl` runtime:
 
-  1. Build the `logoscore` CLI, **overriding its `logos-liblogos` input with the
+  1. Build the `logosctl` CLI, **overriding its `logos-liblogos` input with the
      commit under test** — so the runtime you exercise is built against the code
      in this repository, not the latest published release.
-  2. Build the `lgpm` local package manager.
-  3. Build [`test_basic_module`](https://github.com/logos-co/logos-test-modules)
-     as an `.lgx` package straight from its own flake, and install it into a
-     `./modules` directory with `lgpm`.
-  4. Start `logoscore` in daemon mode (`-D`), load `test_basic_module`, introspect
-     it, and call two of its methods — verifying the module actually runs on top
+  2. Build [`test_basic_module`](https://github.com/logos-co/logos-test-modules)
+     as an `.lgx` package straight from its own flake.
+  3. Start a `logosctl` daemon and install the `.lgx` into its session.
+  4. Load `test_basic_module`, introspect it, and call two of its methods — verifying the module actually runs on top
      of this liblogos.
 
   Because every layer (host, module loader, IPC) comes from the liblogos commit
   under test, a green run is real evidence that this change keeps the module
   runtime working.
 
-what_you_build: "A real module — `test_basic_module` — installed with `lgpm` and called through a `logoscore` daemon running on this liblogos commit."
+what_you_build: "A real module — `test_basic_module` — installed into a `logosctl` session and called through its daemon, running on this liblogos commit."
 
 what_you_learn:
-  - How to build `logoscore` against a specific `logos-liblogos` commit via `--override-input`
+  - How to build `logosctl` against a specific `logos-liblogos` commit via `--override-input`
   - How to build a real module's `.lgx` from its own flake
-  - How to install an `.lgx` into a modules directory with `lgpm`
-  - How to start the `logoscore` daemon, load a module, and call its methods
+  - How to install an `.lgx` into a `logosctl` session
+  - How to start the `logosctl` daemon, load a module, and call its methods
 
 prerequisites:
   - |
@@ -44,10 +42,10 @@ prerequisites:
   - "A Linux or macOS machine."
 
 sections:
-  - title: "Build logoscore against this liblogos"
+  - title: "Build logosctl against this liblogos"
     step: true
     text: |
-      Build the `logoscore` CLI from its published flake, but **override its
+      Build the `logosctl` CLI from its published flake, but **override its
       `logos-liblogos` input** so it links against the commit under test rather
       than the latest release. The result is symlinked to `./logos/`.
 
@@ -63,39 +61,27 @@ sections:
       > this CLI, and an older CLI rev pinned here silently reintroduces a second
       > copy of the runtime in the process.
     steps:
-      - title: "Build the CLI with the liblogos override"
-        run: "nix build 'github:logos-co/logos-logoscore-cli' --override-input logos-liblogos 'github:logos-co/logos-liblogos{release}' --out-link ./logos"
+      - title: "Build logosctl with the liblogos override"
+        run: "nix build 'github:logos-co/logos-logoscore-cli#ctl' --override-input logos-liblogos 'github:logos-co/logos-liblogos{release}' --out-link ./logos"
         code_block: |
-          nix build 'github:logos-co/logos-logoscore-cli' \
+          nix build 'github:logos-co/logos-logoscore-cli#ctl' \
             --override-input logos-liblogos 'github:logos-co/logos-liblogos' \
             --out-link ./logos
-        check_file: "logos/bin/logoscore"
+        check_file: "logos/bin/logosctl"
         post_text: |
-          The build produces `logos/bin/logoscore` plus bundled runtime libraries
+          The build produces `logos/bin/logosctl` plus bundled runtime libraries
           and a `logos/modules/` directory containing the built-in
           `capability_module` (required for the auth handshake when loading
           modules). Because `follows` propagates the override, the whole
           dependency closure — `logos_host`, `liblogos_core`, every module — is
           rebuilt against this liblogos.
 
-  - title: "Build the lgpm package manager"
-    step: true
-    text: |
-      `lgpm` installs `.lgx` packages into a modules directory and scans what is
-      installed. Build it from `logos-liblogos`' own `logos-package-manager`
-      input and link it as `./lgpm`.
-    steps:
-      - title: "Build lgpm"
-        run: "nix build 'github:logos-co/logos-package-manager#cli' -o lgpm"
-        check_file: "lgpm/bin/lgpm"
-        post_text: "The executable is at `./lgpm/bin/lgpm`."
-
   - title: "Build and install a module"
     step: true
     text: |
       Build [`test_basic_module`](https://github.com/logos-co/logos-test-modules)'s
-      `.lgx` straight from its flake and install it into a local `./modules`
-      directory with `lgpm`. Every module built with
+      `.lgx` straight from its flake, start a daemon, and install the package into
+      its session. Every module built with
       [`logos-module-builder`](https://github.com/logos-co/logos-module-builder)
       exposes a ready-to-install `lgx` output.
     steps:
@@ -116,90 +102,81 @@ sections:
         extra_run:
           run: "ls module-lgx/*.lgx"
 
-      - title: "Seed the modules directory with the bundled capability module"
-        text: |
-          Modules are loaded through the host's capability layer, so the modules
-          directory also needs the `capability_module` that ships with
-          `logoscore`. Copy it across first.
-        run: |
-          mkdir -p modules
-          cp -RL ./logos/modules/. ./modules/
-        check_file: "modules/capability_module/manifest.json"
-
-      - title: "Install the .lgx with lgpm"
-        text: |
-          Install the freshly-built package into `./modules`. `test_basic_module`
-          is a `core` module, so it goes to `--modules-dir`. The package is
-          unsigned (a local dev build), so we pass `--allow-unsigned`.
-        run: "./lgpm/bin/lgpm --modules-dir ./modules --allow-unsigned install --file module-lgx/*.lgx"
-        expect_contains:
-          - "Installed to:"
-
-      - title: "Confirm the install"
-        text: "Scan the directory and confirm the module landed:"
-        run: "./lgpm/bin/lgpm --modules-dir ./modules list"
-        expect_contains:
-          - "test_basic_module"
-        check_file: "modules/test_basic_module/manifest.json"
-
-  - title: "Run the daemon and call the module"
-    step: true
-    text: |
-      Start `logoscore` in daemon mode pointed at `./modules`, then use the client
-      subcommands to load `test_basic_module`, introspect it, and call two of its
-      methods. Daemon output is captured in `logs.txt`.
-    steps:
       - title: "Start the daemon"
         text: |
-          Start logoscore in daemon mode in the background, capturing output to
-          `logs.txt`:
-        run: "sh -c './logos/bin/logoscore -D -m ./modules > logs.txt 2>&1 &'"
-        code_block: "logoscore -D -m ./modules > logs.txt &"
-        post_text: |
-          The `-D` flag starts the daemon. The client subcommands below connect to
-          this running process via the config written under `~/.logoscore/`.
+          Start a `logosctl` daemon. Its session directory, `./session`, holds the
+          daemon's config, its installed modules and their data. `--detach`
+          returns once the daemon accepts commands.
+        # The bundled package downloader starts a storage node in $HOME; keep it
+        # out of the real one.
+        run: "mkdir -p home && HOME=\"$PWD/home\" ./logos/bin/logosctl --config-dir ./session daemon start --detach"
+        code_block: "logosctl daemon start --detach"
+        expect_contains:
+          - "Daemon started"
 
-      - run: "sleep 3"
+      - title: "Install the .lgx"
+        text: |
+          A path ending in `.lgx` installs from disk, with no catalog involved. A
+          local build is unsigned, which the session's default policy accepts with
+          a warning. `-y` confirms, since there is no terminal to ask on.
+        run: "./logos/bin/logosctl --config-dir ./session install module-lgx/*.lgx -y"
+        code_block: "logosctl install module-lgx/*.lgx -y"
+        expect_contains:
+          - '"installed":["test_basic_module"]'
 
+      - title: "Confirm the install"
+        text: "List the session's packages and confirm the module landed:"
+        run: "./logos/bin/logosctl --config-dir ./session package ls"
+        code_block: "logosctl package ls"
+        expect_contains:
+          - "test_basic_module"
+        check_file: "session/modules/test_basic_module/manifest.json"
+
+  - title: "Call the module"
+    step: true
+    text: |
+      Load `test_basic_module`, introspect it, and call two of its methods with the
+      client subcommands. The daemon logs to `session/logs/daemon.log`.
+    steps:
       - title: "Inspect the startup log"
         text: "Review the daemon's startup output:"
-        run: "cat logs.txt"
+        run: "cat session/logs/daemon.log"
 
       - title: "Check daemon status"
         text: "Verify the daemon is running:"
-        run: "./logos/bin/logoscore status"
-        code_block: "logoscore status"
+        run: "./logos/bin/logosctl --config-dir ./session daemon status"
+        code_block: "logosctl daemon status"
 
       - title: "List discovered modules"
         text: "`test_basic_module` should be visible in the scan directory:"
-        run: "./logos/bin/logoscore list-modules"
-        code_block: "logoscore list-modules"
+        run: "./logos/bin/logosctl --config-dir ./session module ls"
+        code_block: "logosctl module ls"
         expect_contains:
           - "test_basic_module"
 
       - title: "Load the module"
         text: "Load `test_basic_module` into the running daemon:"
-        run: "./logos/bin/logoscore load-module test_basic_module"
-        code_block: "logoscore load-module test_basic_module"
+        run: "./logos/bin/logosctl --config-dir ./session module load test_basic_module"
+        code_block: "logosctl module load test_basic_module"
         expect_contains:
           - "test_basic_module"
 
       - title: "Confirm the module is loaded"
         text: |
-          Re-run `status`; the module that was `not_loaded` before now reports
+          Re-run `daemon status`; the module that was `not_loaded` before now reports
           `loaded`:
-        run: "./logos/bin/logoscore status"
-        code_block: "logoscore status"
+        run: "./logos/bin/logosctl --config-dir ./session daemon status"
+        code_block: "logosctl daemon status"
         expect_contains:
           - "test_basic_module"
           - '"status":"loaded"'
 
-      - title: "Introspect the module with module-info"
+      - title: "Introspect the module with module show"
         text: |
-          `module-info` lists the methods and events the module exposes — the
+          `module show` lists the methods and events the module exposes — the
           same methods you can `call`:
-        run: "./logos/bin/logoscore module-info test_basic_module"
-        code_block: "logoscore module-info test_basic_module"
+        run: "./logos/bin/logosctl --config-dir ./session module show test_basic_module"
+        code_block: "logosctl module show test_basic_module"
         expect_contains:
           - "addInts"
           - "echo"
@@ -208,8 +185,8 @@ sections:
         text: |
           `echo` returns its argument unchanged — a string round-trip out to the
           module subprocess and back over liblogos' IPC:
-        run: "./logos/bin/logoscore call test_basic_module echo hello"
-        code_block: "logoscore call test_basic_module echo hello"
+        run: "./logos/bin/logosctl --config-dir ./session call test_basic_module echo hello"
+        code_block: "logosctl call test_basic_module echo hello"
         expect_contains:
           - '"result":"hello"'
 
@@ -217,25 +194,23 @@ sections:
         text: |
           `addInts` adds its two arguments. This exercises an `int` round-trip,
           where `echo` exercised a string:
-        run: "./logos/bin/logoscore call test_basic_module addInts 40 2"
-        code_block: "logoscore call test_basic_module addInts 40 2"
+        run: "./logos/bin/logosctl --config-dir ./session call test_basic_module addInts 40 2"
+        code_block: "logosctl call test_basic_module addInts 40 2"
         expect_contains:
           - '"result":42'
 
       - title: "Stop the daemon"
         text: "Shut the daemon down cleanly:"
-        run: "./logos/bin/logoscore stop"
-        code_block: "logoscore stop"
+        run: "./logos/bin/logosctl --config-dir ./session daemon stop"
+        code_block: "logosctl daemon stop"
         post_text: |
           The daemon removes its state file and exits.
-
-      - run: "sleep 2"
 
       - title: "Confirm the daemon has stopped"
         text: |
           With no daemon running, the client reports `not_running` and exits
           non-zero, so we add `|| true` to let the doc-test assert on the output:
-        run: "./logos/bin/logoscore status || true"
-        code_block: "logoscore status"
+        run: "./logos/bin/logosctl --config-dir ./session daemon status || true"
+        code_block: "logosctl daemon status"
         expect_contains:
           - '"status":"not_running"'

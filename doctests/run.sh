@@ -4,7 +4,7 @@
 #
 # Two specs run, each exercising THIS liblogos commit a different way:
 #   - liblogos-module-runtime.test.yaml — drives liblogos through the headless
-#     `logoscore` CLI frontend (build logoscore against this liblogos, install
+#     `logosctl` CLI frontend (build logosctl against this liblogos, install
 #     test_basic_module, start the daemon, call methods).
 #   - liblogos-as-a-library.test.yaml — embeds liblogos directly: builds
 #     liblogos_core from this commit, compiles a small C++ program that links it,
@@ -35,7 +35,7 @@ SPECS=(
 )
 
 # Build the doc-test against THIS repo's current commit rather than the latest
-# published flake. The spec overrides logoscore's `logos-liblogos` input with
+# published flake. The spec overrides logosctl's `logos-liblogos` input with
 # `github:logos-co/logos-liblogos{release}`, and the pin below makes {release}
 # expand to $COMMIT — so the runtime is built against exactly what's checked out
 # here. Override by exporting COMMIT (e.g. a tag), or set COMMIT="" to fall back

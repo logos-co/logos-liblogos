@@ -3,7 +3,7 @@ name: liblogos Doc-Tests
 # Runs the executable liblogos doc-tests end-to-end via the shared doctest CLI,
 # both pinned to the commit of logos-liblogos under test (via --release-for):
 #   - doctests/liblogos-module-runtime.test.yaml — drives liblogos through the
-#     logoscore CLI frontend (build logoscore against this commit, install
+#     logosctl CLI frontend (build logosctl against this commit, install
 #     test_basic_module, start the daemon, load + call methods).
 #   - doctests/liblogos-as-a-library.test.yaml — embeds liblogos directly:
 #     builds liblogos_core from this commit, compiles a C++ program that links
@@ -67,7 +67,7 @@ jobs:
 
       # Resolve the commit under test. For pull requests this is the PR's head
       # commit (not the synthetic merge commit); for pushes it's the pushed
-      # commit. Passed to --release-for below so the doc-test builds logoscore
+      # commit. Passed to --release-for below so the doc-test builds logosctl
       # against THIS commit of logos-liblogos instead of the latest release.
       #
       # Fork PRs are the exception: their head commit lives in the fork, not in
@@ -94,7 +94,7 @@ jobs:
       # --release-for pins the {release} placeholder for logos-liblogos to the
       # commit under test, so the override URL in each spec
       # (`github:logos-co/logos-liblogos{release}`) becomes `.../<sha>` — the
-      # logoscore runtime and the embedded liblogos_core are both rebuilt against
+      # logosctl runtime and the embedded liblogos_core are both rebuilt against
       # this PR/push rather than master. Every other repo URL still resolves to
       # latest. Passing both specs to one `run` produces a single combined report
       # with a per-spec dropdown.
@@ -155,7 +155,7 @@ jobs:
   # shared harness cross-builds `logos-liblogos-bin` on ubuntu, stages it, and
   # runs the generated script from that spec on a real windows-latest runner.
   # Only the host-verdict spec has a Windows half: the other two drive liblogos
-  # through the logoscore CLI and through a compiled C++ program, and neither is
+  # through the logosctl CLI and through a compiled C++ program, and neither is
   # reachable from a staged tree of THIS repo's targets alone.
   windows:
     name: liblogos host verdict (windows-latest)
@@ -255,7 +255,7 @@ jobs:
             const body =
               `${marker}\n` +
               `### 📊 liblogos doc-test report\n\n` +
-              `A real module, run through a logoscore daemon built against ` +
+              `A real module, run through a logosctl daemon built against ` +
               `this commit of liblogos — rendered alongside the commands actually run ` +
               `and their output (updated each run, commit \`${context.sha.slice(0,7)}\`):\n\n` +
               `${links}\n\n` +

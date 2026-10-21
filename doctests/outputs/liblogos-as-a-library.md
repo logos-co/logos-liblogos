@@ -4,7 +4,7 @@
   ** IMPORTANT **
   This doctest is for internal dev purposes and should not be used. It displays important flaws that will be corrected, specifically that QCoreApplication should no longer be needed but it's pending some changes still at which point this doctest will be updated to reflect that
   ** IMPORTANT **
-`logos-liblogos` is a **library**. The headless `logoscore` CLI and the
+`logos-liblogos` is a **library**. The headless `logosctl` CLI and the
 basecamp desktop app are just frontends for it — each one links
 `liblogos_core` and drives its C API (`logos_core.h`) to discover, load, and
 manage modules. This doc-test shows how to do the same thing in **your own
@@ -24,13 +24,13 @@ program**, built against **this** liblogos commit:
 
 Because the library, the host binary, and the headers all come from the commit
 under test, a green run is direct evidence that **this** liblogos is usable as
-an embeddable library, not just through the `logoscore` frontend.
+an embeddable library, not just through the `logosctl` frontend.
 
 > **Why C++ and not pure C?** The API in `logos_core.h` is plain C, but the
 > runtime is built on Qt internally (it uses `QPluginLoader` to read module
 > metadata and Qt's IPC stack to talk to modules). So an embedding program must
 > construct a `QCoreApplication` before it calls `logos_core_start()` — exactly
-> as `logoscore` and basecamp do. You do **not** need to run Qt's event loop;
+> as `logosctl` and basecamp do. You do **not** need to run Qt's event loop;
 > the load calls are synchronous.
 
 **What you'll build:** A standalone C++ program that links `liblogos_core` from this commit and loads a real module — `test_basic_module` — through the C API.
@@ -352,7 +352,7 @@ Loaded modules:
   - test_basic_module
 ```
 
-That is your own program — not the `logoscore` CLI — running a real
+That is your own program — not the `logosctl` CLI — running a real
 module on top of this liblogos.
 
 ---
