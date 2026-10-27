@@ -26,6 +26,9 @@ bool isValidModuleName(const std::string& name);
 
 struct ModuleInfo {
     std::string path;
+    // The package directory the package manager installed this module into,
+    // from discovery. Empty for a module processed from a bare plugin path.
+    std::string installDir;
     // The module's full embedded metadata as a compact JSON string, read once
     // at discovery time via ModuleLib::LogosModule (no plugin instantiation).
     // Empty when the plugin exposes no readable metadata.
@@ -82,6 +85,8 @@ public:
 
     bool isKnown(const std::string& name) const;
     std::string modulePath(const std::string& name) const;
+    std::string moduleInstallDir(const std::string& name) const;
+    void setModuleInstallDir(const std::string& name, const std::string& installDir);
     // A JSON array describing every known module: one object per module with
     // its name, path, loaded flag, load timestamp (loaded_at, unix seconds; 0
     // when not loaded), direct dependencies, direct dependents, and full

@@ -35,6 +35,7 @@
 #include "logos_module.h"
 #include "logos_protocol.h"
 #include "dependency_gate.h"
+#include "integrity_gate.h"
 #include "protocol_gate.h"
 #include "logos_transport_config_json.h"
 #include "token_manager.h"
@@ -93,11 +94,14 @@ namespace {
 
     // "Already loaded" stays a truthful yes even here — the registry has its own
     // lock, so answering it needs none of ours.
+    void setLastLoadError(const std::string& name, const std::string& reason);
+
     bool refuseReentrantLoad(const std::string& name) {
         if (registryInstance().isLoaded(name))
             return true;
         spdlog::error("Refusing a re-entrant load of {}: this thread is already "
                       "inside a load or unload", name);
+        setLastLoadError(name, "refused: requested from inside another load or unload");
         return false;
     }
 
@@ -148,6 +152,58 @@ namespace {
     std::string& persistenceBasePath() {
         static std::string path;
         return path;
+    }
+
+    // Directories the package manager installs into. A module installed under
+    // one is integrity-checked before every load. Guarded by configMutex().
+    std::vector<std::string>& verifiedModulesDirs() {
+        static std::vector<std::string> dirs;
+        return dirs;
+    }
+
+    // Why each module's most recent load failed; erased when it loads.
+    std::mutex& lastLoadErrorMutex() {
+        static std::mutex m;
+        return m;
+    }
+
+    std::unordered_map<std::string, std::string>& lastLoadErrors() {
+        static std::unordered_map<std::string, std::string> m;
+        return m;
+    }
+
+    void setLastLoadError(const std::string& name, const std::string& reason) {
+        std::lock_guard<std::mutex> g(lastLoadErrorMutex());
+        if (reason.empty())
+            lastLoadErrors().erase(name);
+        else
+            lastLoadErrors()[name] = reason;
+    }
+
+    std::string lastLoadErrorFor(const std::string& name) {
+        std::lock_guard<std::mutex> g(lastLoadErrorMutex());
+        auto it = lastLoadErrors().find(name);
+        return it != lastLoadErrors().end() ? it->second : std::string{};
+    }
+
+    // A load refused before any attempt (its dependencies cannot be resolved,
+    // or one it requires failed): the module never enters `loading`, but the
+    // caller and the feed still get a verdict and a reason.
+    void recordRefusedLoad(const std::string& name, const std::string& reason) {
+        setLastLoadError(name, reason);
+        logos::ModuleStateObserver::instance().record(
+            name, logos::module_state::kUnloaded, logos::module_state::kError,
+            std::nullopt, std::nullopt, reason);
+    }
+
+    // Every way a load attempt fails goes through here, so its reason reaches
+    // both the lifecycle feed and logos_core_get_last_load_error.
+    void recordLoadFailure(const std::string& name, std::optional<std::string> instanceId,
+                           std::optional<int64_t> pid, const std::string& reason) {
+        setLastLoadError(name, reason);
+        logos::ModuleStateObserver::instance().record(
+            name, logos::module_state::kLoading, logos::module_state::kError,
+            std::move(instanceId), pid, reason);
     }
 
     // ── Orderly teardown vs. death ───────────────────────────────────────────
@@ -770,6 +826,7 @@ namespace {
 
         if (!registryInstance().isKnown(name)) {
             spdlog::warn("Cannot load unknown module: {}", name);
+            setLastLoadError(name, "module is not installed");
             return false;
         }
 
@@ -823,6 +880,24 @@ namespace {
             name, logos::module_state::kUnloaded, logos::module_state::kLoading,
             instanceId);
 
+        // ── Installed-module integrity gate ────────────────────────────
+        // First, so nothing below reads a binary that was changed after
+        // install. See integrity_gate.h for what is and isn't checked.
+        {
+            std::vector<std::string> verifiedDirs;
+            {
+                std::shared_lock<std::shared_mutex> g(configMutex());
+                verifiedDirs = verifiedModulesDirs();
+            }
+            const auto integrity = LogosCore::evaluateIntegrityGate(
+                registryInstance().moduleInstallDir(name), verifiedDirs);
+            if (integrity.decision == LogosCore::IntegrityGateDecision::Refuse) {
+                spdlog::error("Refusing to load module {}: {}", name, integrity.reason);
+                recordLoadFailure(name, instanceId, std::nullopt, integrity.reason);
+                return false;
+            }
+        }
+
         // Per-module transport set, if the daemon registered one before
         // calling load. The loader threads it through to the child via
         // a CLI argument so the child's LogosAPIProvider binds the right
@@ -861,10 +936,7 @@ namespace {
                 "protocol majors",
                 name, moduleProtocolVersion, gate.moduleMajor,
                 LOGOS_PROTOCOL_VERSION_MAJOR, LOGOS_PROTOCOL_VERSION_STRING);
-            logos::ModuleStateObserver::instance().record(
-                name, logos::module_state::kLoading, logos::module_state::kError,
-                instanceId, std::nullopt,
-                "incompatible logos-protocol major: module " + moduleProtocolVersion);
+            recordLoadFailure(name, instanceId, std::nullopt, "incompatible logos-protocol major: module " + moduleProtocolVersion);
             return false;
         case LogosCore::ProtocolGateDecision::AllowLegacy:
             spdlog::warn(
@@ -882,15 +954,11 @@ namespace {
         // ── Dependency version-range gate ──────────────────────────────
         // Direct edges only: every module is gated as it loads, so a chain is
         // covered edge by edge. The signer pin each entry may also carry is
-        // NOT checked — lgpm verifies a package's signature at install time
-        // (PackageManagerLib::verifyPackageSignature) and keeps no evidence on
-        // disk afterwards, so there is nothing here to check it against.
+        // NOT checked here.
         const auto depGate = ModuleManager::dependencyGateFor(name);
         if (depGate.decision == LogosCore::DependencyGateDecision::Refuse) {
             spdlog::error("Refusing to load module {}: {}", name, depGate.reason);
-            logos::ModuleStateObserver::instance().record(
-                name, logos::module_state::kLoading, logos::module_state::kError,
-                instanceId, std::nullopt, depGate.reason);
+            recordLoadFailure(name, instanceId, std::nullopt, depGate.reason);
             return false;
         }
         if (depGate.decision == LogosCore::DependencyGateDecision::Allow) {
@@ -900,9 +968,7 @@ namespace {
         auto loader = loaderRegistry().select(desc);
         if (!loader) {
             spdlog::warn("No loader available to load module: {}", name);
-            logos::ModuleStateObserver::instance().record(
-                name, logos::module_state::kLoading, logos::module_state::kError,
-                instanceId, std::nullopt, "no loader available for this module format");
+            recordLoadFailure(name, instanceId, std::nullopt, "no loader available for this module format");
             return false;
         }
 
@@ -944,9 +1010,7 @@ namespace {
         }
         if (!started) {
             abandonLoadAttempt(name);
-            logos::ModuleStateObserver::instance().record(
-                name, logos::module_state::kLoading, logos::module_state::kError,
-                instanceId, std::nullopt, "loader failed to start the module");
+            recordLoadFailure(name, instanceId, std::nullopt, "loader failed to start the module");
             return false;
         }
 
@@ -980,9 +1044,7 @@ namespace {
             consumeExpectedExit(name);
             abandonLoadAttempt(name);
             retractCallerRights();
-            logos::ModuleStateObserver::instance().record(
-                name, logos::module_state::kLoading, logos::module_state::kError,
-                instanceId, pid, "failed to deliver the module's auth token");
+            recordLoadFailure(name, instanceId, pid, "failed to deliver the module's auth token");
             return false;
         }
 
@@ -998,9 +1060,7 @@ namespace {
             loader->terminate(name);   // no-op when the child is already gone
             abandonLoadAttempt(name);
             retractCallerRights();
-            logos::ModuleStateObserver::instance().record(
-                name, logos::module_state::kLoading, logos::module_state::kError,
-                instanceId, pid, outcome.reason);
+            recordLoadFailure(name, instanceId, pid, outcome.reason);
             return false;
         }
 
@@ -1018,13 +1078,12 @@ namespace {
             retractCallerRights();
             const char* reason = "the module process exited while it was loading";
             spdlog::error("Failed to load module {}: {}", name, reason);
-            logos::ModuleStateObserver::instance().record(
-                name, logos::module_state::kLoading, logos::module_state::kError,
-                instanceId, pid, reason);
+            recordLoadFailure(name, instanceId, pid, reason);
             return false;
         }
 
         TokenManager::instance().saveToken(name, authToken);
+        setLastLoadError(name, {});
 
         spdlog::info("Module loaded: {}", name);
         logos::ModuleStateObserver::instance().record(
@@ -1142,6 +1201,24 @@ namespace ModuleManager {
     void setPersistenceBasePath(const char* path) {
         assert(path != nullptr);
         persistenceBasePath() = std::string(path);
+    }
+
+    char* verifyInstalledModuleCStr(const char* install_dir) {
+        assert(install_dir != nullptr);
+        const auto r = LogosCore::checkInstalledTree(install_dir);
+        if (r.decision == LogosCore::IntegrityGateDecision::Allow)
+            return nullptr;
+        char* out = new char[r.reason.size() + 1];
+        strcpy(out, r.reason.c_str());
+        return out;
+    }
+
+    void addVerifiedModulesDir(const char* modules_dir) {
+        assert(modules_dir != nullptr);
+        std::unique_lock<std::shared_mutex> g(configMutex());
+        auto& dirs = verifiedModulesDirs();
+        if (std::find(dirs.begin(), dirs.end(), modules_dir) == dirs.end())
+            dirs.emplace_back(modules_dir);
     }
 
     void setModuleTransports(const std::string& moduleName,
@@ -1265,7 +1342,21 @@ namespace ModuleManager {
         // dependency resolution fails", so we must not proceed with a
         // partial order that silently dropped unknown deps or cycled.
         if (!resolved.ok()) {
-            spdlog::warn("Cannot resolve dependencies for: {}", name);
+            std::string reason;
+            if (std::find(resolved.missing.begin(), resolved.missing.end(), name)
+                    != resolved.missing.end()) {
+                reason = "module is not installed";
+            } else if (!resolved.missing.empty()) {
+                std::string names;
+                for (const std::string& m : resolved.missing)
+                    names += (names.empty() ? "" : ", ") + m;
+                reason = "requires " + names + ", which " +
+                         (resolved.missing.size() == 1 ? "is" : "are") + " not installed";
+            } else {
+                reason = "its dependencies form a cycle";
+            }
+            spdlog::warn("Cannot resolve dependencies for {}: {}", name, reason);
+            recordRefusedLoad(name, reason);
             return false;
         }
 
@@ -1276,6 +1367,7 @@ namespace ModuleManager {
 
         if (resolved.order.empty() || !nameFound) {
             spdlog::warn("Cannot resolve dependencies for: {}", name);
+            recordRefusedLoad(name, "its dependencies could not be resolved");
             return false;
         }
 
@@ -1292,10 +1384,30 @@ namespace ModuleManager {
                              "loading without it", skipped.module, skipped.namedBy, skipped.detail);
         }
 
+        // A module whose required dependency failed is not started without
+        // it. `order` puts dependencies first, so one pass carries a failure
+        // down every chain.
+        std::unordered_set<std::string> failed;
         bool allSucceeded = true;
         for (const std::string& moduleName : resolved.order) {
-            if (loadModuleInternal(moduleName.c_str()))
+            std::string blockedBy;
+            for (const std::string& dep : registryInstance().moduleDependencies(moduleName)) {
+                if (failed.count(dep)) {
+                    blockedBy = dep;
+                    break;
+                }
+            }
+            if (blockedBy.empty() && loadModuleInternal(moduleName.c_str()))
                 continue;
+            failed.insert(moduleName);
+
+            if (!blockedBy.empty()) {
+                std::string reason = "requires " + blockedBy + ", which failed to load";
+                if (const std::string why = lastLoadErrorFor(blockedBy); !why.empty())
+                    reason += ": " + why;
+                spdlog::warn("Not loading module {}: {}", moduleName, reason);
+                recordRefusedLoad(moduleName, reason);
+            }
 
             // A best-effort optional dependency is in this order because it was
             // INSTALLED, not because anything needs it. Its failure is the case
@@ -1505,11 +1617,16 @@ namespace ModuleManager {
         {
             std::unique_lock<std::shared_mutex> cfg(configMutex());
             moduleTransportsMap().clear();
+            verifiedModulesDirs().clear();
             accessPolicyJson().clear();  // same rationale — don't leak across restarts
             parsedEnforcePolicy().reset();
         }
         // Same rationale again: the next run may have a host that does report.
         hostStaysSilent().store(false);
+        {
+            std::lock_guard<std::mutex> g(lastLoadErrorMutex());
+            lastLoadErrors().clear();
+        }
     }
 
     char** getLoadedModulesCStr() {
@@ -1578,6 +1695,19 @@ namespace ModuleManager {
         std::string json = optionalLoadReportJson(std::string(moduleName));
         char* result = new char[json.size() + 1];
         strcpy(result, json.c_str());
+        return result;
+    }
+
+    std::string lastLoadError(const std::string& moduleName) {
+        return lastLoadErrorFor(moduleName);
+    }
+
+    char* lastLoadErrorCStr(const char* moduleName) {
+        const std::string reason = lastLoadErrorFor(std::string(moduleName));
+        if (reason.empty())
+            return nullptr;
+        char* result = new char[reason.size() + 1];
+        strcpy(result, reason.c_str());
         return result;
     }
 

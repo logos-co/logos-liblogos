@@ -41,6 +41,22 @@ LOGOS_CORE_EXPORT void logos_core_init(int argc, char *argv[]);
 // Duplicate paths are silently ignored.
 LOGOS_CORE_EXPORT void logos_core_add_modules_dir(const char* modules_dir);
 
+// Mark a directory the package manager installs modules into. Every module
+// installed under it is integrity-checked before each load: its files are
+// re-hashed against the manifest.json written at install, and a module whose
+// files changed, or whose manifest is missing or carries no hashes, is refused
+// (logos_core_get_last_load_error says why). Modules in other directories --
+// bundled with the app, or from a directory a developer passes in -- are not
+// checked. The directory must also be added with logos_core_add_modules_dir.
+LOGOS_CORE_EXPORT void logos_core_add_verified_modules_dir(const char* modules_dir);
+
+// The same check, on demand, for one package directory the package manager
+// installed (a frontend's UI plugin, which it loads itself). Returns NULL when
+// the directory is intact, else why it is not -- the reasons a refused load
+// reports. The string must be freed by the caller. Aborts the process if
+// `install_dir` is NULL.
+LOGOS_CORE_EXPORT char* logos_core_verify_installed_module(const char* install_dir);
+
 // Start the logos core functionality
 LOGOS_CORE_EXPORT void logos_core_start();
 
@@ -155,6 +171,13 @@ LOGOS_CORE_EXPORT int logos_core_load_module(const char* module_name, LogosLoadD
 // "nobody ever asked for it". Deterministic given what is installed, so calling
 // it before a load predicts, and calling it after explains.
 LOGOS_CORE_EXPORT char* logos_core_optional_load_report(const char* module_name);
+
+// Why the most recent attempt to load `module_name` failed, e.g. "installed
+// module has been modified or damaged since install: ..." or "requires X,
+// which failed to load: ...". NULL when its last load succeeded or it was
+// never attempted. The string must be freed by the caller. Aborts the process
+// if `module_name` is NULL.
+LOGOS_CORE_EXPORT char* logos_core_get_last_load_error(const char* module_name);
 
 // Unload a specific module by name.
 // When with_dependents is true, also unloads every loaded module that

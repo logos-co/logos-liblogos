@@ -31,6 +31,10 @@ namespace ModuleManager {
     void setModulesDir(const char* modules_dir);
     void addModulesDir(const char* modules_dir);
     void setPersistenceBasePath(const char* path);
+    // See logos_core_add_verified_modules_dir.
+    void addVerifiedModulesDir(const char* modules_dir);
+    // See logos_core_verify_installed_module: NULL when intact.
+    char* verifyInstalledModuleCStr(const char* install_dir);
 
     // Register a per-module transport set (serialized JSON, see
     // logos-cpp-sdk/cpp/logos_transport_config_json.h for the wire
@@ -108,6 +112,11 @@ namespace ModuleManager {
     // `moduleName`, as a JSON array. Empty array when it would decline none.
     std::string optionalLoadReportJson(const std::string& moduleName);
     char* optionalLoadReportCStr(const char* moduleName);
+
+    // Why the module's most recent load failed; empty if it didn't, or was
+    // never attempted. See logos_core_get_last_load_error.
+    std::string lastLoadError(const std::string& moduleName);
+    char* lastLoadErrorCStr(const char* moduleName);
 
     // Resolve with OptionalLoad::BestEffort, reporting BOTH the order and the
     // subset whose load failure a caller must tolerate. One call rather than

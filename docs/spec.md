@@ -171,19 +171,20 @@ boundary: during processing (`ModuleRegistry::processModuleInternal`) a module w
 #### Loading
 
 1. Core locates the module file for the requested module name
-2. Core resolves dependencies and loads them first (topological sort with circular dependency detection)
-3. If a persistence base path is configured, core resolves an instance ID and persistence directory for the module (reusing an existing instance or creating a new one)
-4. Core builds a `ModuleDescriptor` (name, path, format, module dirs, persistence path, transport-set JSON if registered via `logos_core_set_module_transports`)
-5. Core asks the `ModuleLoaderRegistry` to `select()` a loader for the descriptor (the default `CompositeModuleLoader` handles `"qt-plugin"` format and modules with no explicit format)
-6. The selected loader's `load()` is called:
+2. Core resolves dependencies and loads them first (topological sort with circular dependency detection). A module whose required dependency failed to load is not started: its load fails with "requires X, which failed to load: <X's reason>"
+3. If the module was installed under a verified modules directory, its installed files are re-hashed before anything else reads them (see *Installed-module integrity*); a mismatch refuses the load
+4. If a persistence base path is configured, core resolves an instance ID and persistence directory for the module (reusing an existing instance or creating a new one)
+5. Core builds a `ModuleDescriptor` (name, path, format, module dirs, persistence path, transport-set JSON if registered via `logos_core_set_module_transports`)
+6. Core asks the `ModuleLoaderRegistry` to `select()` a loader for the descriptor (the default `CompositeModuleLoader` handles `"qt-plugin"` format and modules with no explicit format)
+7. The selected loader's `load()` is called:
    a. The `ModuleFormatLoader` resolves the host binary (e.g. `logos_host_qt`) and builds CLI arguments (including `--transport-set` if configured)
    b. The `ModuleContainer` launches the process with the resolved binary and arguments, appending its own `--token-source` so the child knows where to read its token (the subprocess container appends `--token-source stdin`)
-7. Core generates a UUID authentication token
-8. Core sends the token to the module via the loader's `sendToken()` (delegates to the container; the subprocess container writes it to the child's stdin pipe — see Token-Based Authentication)
-9. Host process reads the token from the designated channel (`TokenSource`, default stdin — a container concern, but resolved generically with no container dependency), then loads the module plugin and calls `initLogos(LogosAPI*)` (loader concern). As a defense-in-depth identity check, the host **refuses to initialize** the plugin if its `name()` does not match the name it was loaded as (the trusted registry key passed by the core) — a binary cannot run, or receive tokens, under a name it does not implement
-10. The `LogosAPI` instance exposes `modulePath`, `instanceId`, and `instancePersistencePath` as properties
-11. Host process registers the module with the remote object registry
-12. Core waits for registration and records the module as loaded (along with the loader and handle)
+8. Core generates a UUID authentication token
+9. Core sends the token to the module via the loader's `sendToken()` (delegates to the container; the subprocess container writes it to the child's stdin pipe — see Token-Based Authentication)
+10. Host process reads the token from the designated channel (`TokenSource`, default stdin — a container concern, but resolved generically with no container dependency), then loads the module plugin and calls `initLogos(LogosAPI*)` (loader concern). As a defense-in-depth identity check, the host **refuses to initialize** the plugin if its `name()` does not match the name it was loaded as (the trusted registry key passed by the core) — a binary cannot run, or receive tokens, under a name it does not implement
+11. The `LogosAPI` instance exposes `modulePath`, `instanceId`, and `instancePersistencePath` as properties
+12. Host process registers the module with the remote object registry
+13. Core waits for registration and records the module as loaded (along with the loader and handle)
 
 #### Unloading
 
@@ -194,6 +195,14 @@ boundary: during processing (`ModuleRegistry::processModuleInternal`) a module w
 #### Cascade Unloading
 
 `logos_core_unload_module(name, true)` unloads the named module together with every currently loaded module that transitively depends on it. Teardown order is leaves-first (dependents before dependencies) so no process is left briefly pointing at a terminated parent. The call is serialised with ordinary load/unload operations under a single lock span — a late-arriving load cannot interleave between tearing down the dependents and the target.
+
+#### Installed-module integrity
+
+A frontend marks the directory the package manager installs into with `logos_core_add_verified_modules_dir`. Before each load of a module installed under one, core re-hashes its directory against the `manifest.json` lgpm wrote there (liblgx's installed-tree check; installer sidecars such as `variant` and `.lgpm-source` are skipped). The load is refused, without starting a host, when files were added, removed or changed, or when `manifest.json`, the `variant` file or the manifest's hashes are missing. Modules outside every verified directory (bundled with the app, or from a directory a developer passes in) are not checked. The reason is on the lifecycle feed and from `logos_core_get_last_load_error`.
+
+This catches corruption and edits made after install. It is not a defence against an attacker who can write the user's files: they can rewrite the manifest too.
+
+`logos_core_verify_installed_module(dir)` runs the same check on one package directory, for modules a frontend loads itself (UI plugins).
 
 ### Dependency Resolution
 
@@ -254,6 +263,7 @@ The platform supports two build variants:
 |----------|---------|
 | `logos_core_init(argc, argv)` | Initialize global state, optionally set module directory. Creates a QCoreApplication if one does not exist. |
 | `logos_core_add_modules_dir(path)` | Add a module directory to scan (duplicates ignored). |
+| `logos_core_add_verified_modules_dir(path)` | Mark a directory the package manager installs into: every module installed under it is integrity-checked before each load. Must also be added with `logos_core_add_modules_dir`. |
 | `logos_core_start()` | Scan module directories, process metadata, create Core Manager, load built-in modules, start remote object registry. |
 | `logos_core_cleanup()` | Unload all modules, stop processes, clean up global state. |
 
@@ -264,6 +274,8 @@ The platform supports two build variants:
 | `logos_core_get_loaded_modules() → char**` | Return null-terminated array of loaded module names. Caller must free. |
 | `logos_core_get_known_modules() → char**` | Return null-terminated array of all discovered modules. Caller must free. |
 | `logos_core_load_module(name, deps) → int` | Load a module by name. `deps` is a `LogosLoadDeps`: `LOGOS_LOAD_MODULE_ONLY` (0) loads the module alone and requires its dependencies to be up already; `LOGOS_LOAD_REQUIRED_DEPS` (1) resolves the required tree and loads in topological order; `LOGOS_LOAD_REQUIRED_AND_OPTIONAL` (2) additionally brings up every installed optional dependency, best effort. Returns 1 on success, 0 on failure. |
+| `logos_core_get_last_load_error(name) → char*` | Why the most recent load of `name` failed (e.g. modified since install, or a required dependency failed). NULL when it succeeded or was never attempted. Caller must free. |
+| `logos_core_verify_installed_module(dir) → char*` | Integrity-check one installed package directory. NULL when intact, else the reason. Caller must free. |
 | `logos_core_unload_module(name, with_dependents) → int` | Terminate the module's process and remove it. When `with_dependents` is true, cascade unloads every loaded transitive dependent leaves-first. Returns 1 only if every step succeeded. |
 | `logos_core_get_module_dependencies(name, recursive) → char**` | Return null-terminated array of modules that `name` depends on (forward edges). With `recursive=true`, walks the forward dependency graph transitively via BFS. Unknown names yield an empty array. Caller must free. |
 | `logos_core_get_module_dependents(name, recursive) → char**` | Return null-terminated array of modules that depend on `name` (reverse edges). With `recursive=true`, walks the reverse dependency graph transitively via BFS. Unknown names yield an empty array. Caller must free. |

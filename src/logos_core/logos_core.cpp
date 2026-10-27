@@ -74,6 +74,11 @@ char* logos_core_optional_load_report(const char* module_name) {
     return ModuleManager::optionalLoadReportCStr(module_name);
 }
 
+char* logos_core_get_last_load_error(const char* module_name) {
+    if (!module_name) { logos::logger("core").critical("logos_core_get_last_load_error: module_name must not be null"); std::abort(); }
+    return ModuleManager::lastLoadErrorCStr(module_name);
+}
+
 int logos_core_unload_module(const char* module_name, bool with_dependents) {
     if (!module_name) { logos::logger("core").critical("logos_core_unload_module: module_name must not be null"); std::abort(); }
     if (with_dependents)
@@ -118,6 +123,16 @@ char* logos_core_get_token(const char* key) {
 
 char* logos_core_get_module_stats() {
     return ProcessStats::getModuleStats(ModuleManager::getModuleProcessIds());
+}
+
+void logos_core_add_verified_modules_dir(const char* modules_dir) {
+    if (!modules_dir) { logos::logger("core").critical("logos_core_add_verified_modules_dir: modules_dir must not be null"); std::abort(); }
+    ModuleManager::addVerifiedModulesDir(modules_dir);
+}
+
+char* logos_core_verify_installed_module(const char* install_dir) {
+    if (!install_dir) { logos::logger("core").critical("logos_core_verify_installed_module: install_dir must not be null"); std::abort(); }
+    return ModuleManager::verifyInstalledModuleCStr(install_dir);
 }
 
 void logos_core_set_persistence_base_path(const char* path) {

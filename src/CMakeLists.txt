@@ -183,6 +183,8 @@ set(LOGOS_CORE_SOURCES
     logos_core/dependency_resolver.h
     logos_core/dependency_gate.cpp
     logos_core/dependency_gate.h
+    logos_core/integrity_gate.cpp
+    logos_core/integrity_gate.h
     logos_core/access_policy.cpp
     logos_core/access_policy.h
     logos_core/module_state_observer.cpp

@@ -133,6 +133,9 @@ void logos_core_cleanup();
 
 // Module directory management
 void logos_core_add_modules_dir(const char* dir);
+// Modules installed under a verified dir are re-hashed before each load
+void logos_core_add_verified_modules_dir(const char* dir);
+char* logos_core_verify_installed_module(const char* install_dir);  // NULL when intact
 
 // Instance persistence
 void logos_core_set_persistence_base_path(const char* path);
@@ -152,6 +155,7 @@ void logos_core_set_access_policy(const char* policy_json);
 // Module management
 int  logos_core_load_module(const char* name, bool with_dependencies);
 int  logos_core_unload_module(const char* name, bool with_dependents);
+char* logos_core_get_last_load_error(const char* name);  // NULL when the last load succeeded
 char* logos_core_process_module(const char* path);
 void logos_core_refresh_modules();
 

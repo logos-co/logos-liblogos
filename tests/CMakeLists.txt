@@ -20,6 +20,8 @@ add_executable(logos_core_tests
     test_module_loader_abstraction.cpp
     test_protocol_gate.cpp
     test_dependency_gate.cpp
+    test_integrity_gate.cpp
+    test_integrity_load.cpp
     test_module_state_observer.cpp
     test_expected_exit_marks.cpp
     test_load_verdict.cpp

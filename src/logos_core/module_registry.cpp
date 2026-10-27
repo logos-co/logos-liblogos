@@ -148,6 +148,7 @@ void ModuleRegistry::discoverInstalledModules() {
             spdlog::warn("Failed to process module: {}", mod.mainFilePath);
             continue;
         }
+        m_modules[moduleName].installDir = mod.installDir;
         scannedNames.insert(moduleName);
     }
 
@@ -280,6 +281,19 @@ std::string ModuleRegistry::modulePath(const std::string& name) const {
     std::shared_lock lock(m_mutex);
     auto it = m_modules.find(name);
     return it != m_modules.end() ? it->second.path : std::string{};
+}
+
+std::string ModuleRegistry::moduleInstallDir(const std::string& name) const {
+    std::shared_lock lock(m_mutex);
+    auto it = m_modules.find(name);
+    return it != m_modules.end() ? it->second.installDir : std::string{};
+}
+
+void ModuleRegistry::setModuleInstallDir(const std::string& name, const std::string& installDir) {
+    std::unique_lock lock(m_mutex);
+    auto it = m_modules.find(name);
+    if (it != m_modules.end())
+        it->second.installDir = installDir;
 }
 
 nlohmann::json ModuleRegistry::allModulesInfo() const {
