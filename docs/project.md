@@ -292,7 +292,7 @@ Takes callback functions (`IsKnownFn`, `GetDependenciesFn`) so it has no couplin
 - Uses `boost::process::v2::process` for subprocess spawning and `boost::asio::io_context` for async I/O
 - Background `io_context` thread with work guard for non-blocking async read and wait callbacks
 - Async read loop for stdout/stderr with line buffering
-- Synchronous kill with graceful SIGTERM → SIGKILL escalation (5s timeout)
+- Synchronous kill with graceful SIGTERM → SIGKILL escalation (12s timeout)
 - **Token delivery over stdin.** `launch()` wires a stdin pipe the child inherits as fd 0 and appends `--token-source stdin` to the host's args; `sendToken()` writes the token (newline-framed) to the parent end and closes it. The pipe is private to the parent/child pair and has no filesystem name, so there is no predictable path for a co-tenant to squat and no peer to authenticate — this removes the CWE-940 / F-012 attack surface that the old predictable-socket handoff had to guard with `0600` nodes and `SO_PEERCRED`/`getpeereid` peer-credential gates (all now deleted).
 - A `std::mutex` (`s_processesMutex`) protects the `s_processes` map against concurrent access
 
